@@ -8,7 +8,8 @@ Key modifications from standard EC2:
 - Shear reinforcement efficiency factors λ1 (closed links) and λ2 (spirals)
 - Equivalent web width for V_Rd_max (concrete strut crushing)
 - Uncracked V_Rd_c using principal stress approach (Eq.17)
-- Lever arm from first-principles (not capped to 0.9d)
+- Lever arm from distance between resultant opposing force centroids
+- (but z capped to 0.9d)
 - Optional k_f factor for cast-in-place piles (EC2 §2.4.2.5(2))
 
 Reference:
@@ -158,6 +159,10 @@ class CircularSectionCheck(BaseModel):
         ),
     )
 
+    # TODO this field is really a policy decision to enhance nu_1
+    # (thereby increasing V_Rd,max) at the cost of a reduction in V_Rd,s
+    # Option include, making the wording more explicit or changing to policy
+    # approach with 'check_only' or 'cap_stress'
     use_increased_nu_1: bool = Field(
         default=False,
         description=(
@@ -338,6 +343,29 @@ class CircularSectionCheck(BaseModel):
 
         return self
 
+    # TODO is correct to have two model_validator functions or put all into one?
+    # if two, does order matter? prefer to fail fast.
+    @model_validator(mode="after")
+    def _validate_geometry(self) -> "CircularSectionCheck":
+        r = self.diameter / 2
+        if self.cover >= r:
+            raise ValueError("cover must be < D/2")
+
+        if self.shear_reinforcement is not None:
+            if self.shear_reinforcement.diameter <= 0:
+                raise ValueError("ShearRebar.diameter must be > 0")
+            if self.shear_reinforcement.spacing <= 0:
+                raise ValueError("ShearRebar.spacing must be > 0")
+
+            r_sv = self.diameter / 2 - self.cover - self.shear_reinforcement.diameter / 2
+            if self.r_sv_override is None and r_sv <= 0:
+                raise ValueError(
+                    "Computed r_sv <= 0. Check cover and shear link diameter "
+                    "(expected cover to outer face of links)."
+                )
+        return self
+
+
     # ===========================
     # Computed properties
     # ===========================
@@ -394,7 +422,7 @@ class CircularSectionCheck(BaseModel):
     # Circular-specific methods
     # ===========================
 
-    def calculate_lambda_1(self, z_0: float, z: float) -> float:
+    def calculate_lambda_1(self, z_0: float, z: float, integration_points: int = 100) -> float:
         """
         Link efficiency factor λ1 for circular sections (Orr 2012, Eq.6).
 
@@ -405,6 +433,7 @@ class CircularSectionCheck(BaseModel):
             z_0: Distance from section centre to tension centroid (mm),
                  typically d - D/2.
             z: Lever arm (mm).
+            integration_points: The number of steps to integrate over
 
         Returns:
             λ1 efficiency factor (0 to 1). Typically ≈ 0.85 for common geometries.
@@ -416,8 +445,7 @@ class CircularSectionCheck(BaseModel):
         if r_sv <= 0:
             return 0.85  # Fallback
 
-        n_points = 1000
-        X = np.linspace(0, 1, n_points)
+        X = np.linspace(0, 1, integration_points)
         y = z_0 - z * X  # distance from section centre at each integration point
 
         # Clip to avoid sqrt of negative (point outside link circle)
@@ -471,6 +499,9 @@ class CircularSectionCheck(BaseModel):
         Returns:
             (b_w, b_wc, b_wt) all in mm
         """
+        # TODO if no shear_reinforcement then r_sv is a bit meaningless. What to take? 
+        # probably should just return the width of the compression chord
+        # (likely smallest and is an early return)
         r = self.diameter / 2  # radius to extreme fibre
         r_sv = self.r_sv
 
@@ -502,9 +533,9 @@ class CircularSectionCheck(BaseModel):
         Returns:
             rho_l, capped at 0.02
         """
-        # TODO tension bars may be above the centroid, it depends on the moment sign
-        # additionally some bars may be in tension above the centroid
-        # need to update this
+        # TODO tension bars may be above the centroid, it depends on the moment sign.
+        # Should determine tension bars based on strains top and bottom.
+        # need to update this. Can it use ShearChecks implementation? this uses strains.
         _, centroid_y = self.section.get_centroid()
         A_sl = 0.0
         for group in self.section.rebar_groups:
@@ -704,6 +735,15 @@ class CircularSectionCheck(BaseModel):
         is_cracked = force_cracked
         M_cr: Optional[float] = None
         if not force_cracked:
+            # TODO big correctness bug here find_cracking_moment is a SLS check
+            # so should take characteristic axial force but then a ULS bending
+            # force is being compared to it. Also the function uses E,c,Eff always
+            # (no current arg to toggle or override this on the function).
+            # Finally even if the section isn't cracked in this loadcase, there is
+            # no certainty it won't be cracked from another loadcase.
+            # Once cracked it stays cracked so this branch is invalid.
+            # Perhaps better to let the user derive first if the section remains
+            # uncracked and then instead allow the user to force a use_uncracked mode?
             M_cr = self._cracking_check.find_cracking_moment(N_Ed=N_Ed)
             is_cracked = abs(M_Ed) > abs(M_cr)
 
@@ -912,7 +952,7 @@ class CircularSectionCheck(BaseModel):
         # --- Iteration 2: Note 2 (increased ν₁, reduced f_ywd) ---
         nu_1_n2 = find_nu_1_factor_note_2(f_ck, link_angle_degrees=90.0)
         K_n2 = alpha_cw * b_w * z * nu_1_n2 * f_cd
-        f_ywd_n2 = 0.8 * f_yk  # Reduced per Note 2
+        f_ywd_n2 = 0.8 * f_yk  # Reduced per Note under expression (6.8)
 
         cot_theta_n2 = find_cot_theta_for_V_Ed(
             V_Ed=V_Ed, K=K_n2, link_angle_degrees=90.0,
