@@ -9,7 +9,7 @@ This enables checking multiple load cases against the same section efficiently.
 """
 
 from typing import Optional
-from math import atan, degrees, radians, sin
+from math import atan, degrees, radians, sin, sqrt
 import warnings
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
@@ -339,6 +339,11 @@ class ShearCheck(BaseCodeCheck):
         return self.concrete.f_cd_accidental if self.use_accidental else self.concrete.f_cd
 
     @property
+    def f_ctd_design(self) -> float:
+        """Design concrete tensile strength (accidental or persistent) in MPa."""
+        return self.concrete.f_ctd_accidental if self.use_accidental else self.concrete.f_ctd
+
+    @property
     def gamma_c_design(self) -> float:
         """Partial factor for concrete (accidental or persistent)."""
         return self.concrete.gamma_c_accidental if self.use_accidental else self.concrete.gamma_c
@@ -647,6 +652,60 @@ class ShearCheck(BaseCodeCheck):
             b_w=self.breadth, d=d, rho_l=rho_l, sigma_cp=sigma_cp,
             f_ck=self.concrete.f_ck, gamma_c=self.gamma_c_design,
         )
+
+    def find_V_Rd_c_uncracked(self, sigma_cp: float, alpha_I: float = 1.0) -> float:
+        """
+        Uncracked shear resistance based on principal tensile stress (§6.2.2(2)).
+
+        V_Rd,c,uncracked = (I * b_w / S) * sqrt(f_ctd^2 + alpha_I * sigma_cp * f_ctd)
+
+        Notes:
+            - This is reported for reference in standard runs.
+            - It should only govern design checks when explicitly requested.
+
+        Args:
+            sigma_cp: Axial stress in concrete (MPa)
+            alpha_I: Coefficient for prestress contribution (default 1.0)
+
+        Returns:
+            V_Rd,c,uncracked in kN
+        """
+        b_w = self.breadth
+        if b_w <= 0.0:
+            return 0.0
+
+        I_xx, _, _ = self.section.get_second_moment_area()
+        if I_xx <= 0.0:
+            return 0.0
+
+        _, cy = self.section.get_centroid()
+        min_x, min_y, max_x, max_y = self.section.outline.bounds
+        span = max(max_x - min_x, max_y - min_y, 1.0)
+        pad = span
+
+        # First moment S of area above centroidal axis about that axis.
+        # For centroidal axes, top/bottom first moments have equal magnitude.
+        from shapely.geometry import box
+
+        top_region = self.section.outline.intersection(
+            box(min_x - pad, cy, max_x + pad, max_y + pad)
+        )
+        A_top = float(top_region.area)
+        if A_top <= 0.0:
+            return 0.0
+
+        y_top = float(top_region.centroid.y)
+        S = A_top * (y_top - cy)
+        if S <= 0.0:
+            return 0.0
+
+        f_ctd = self.f_ctd_design
+        inner = f_ctd**2 + alpha_I * sigma_cp * f_ctd
+        if inner <= 0.0:
+            return 0.0
+
+        V_Rd_c_N = (I_xx * b_w / S) * sqrt(inner)
+        return to_kn(V_Rd_c_N, ForceUnit.N)
 
 
     def find_V_Rd_c_max_unreinforced(self, d: float) -> float:
@@ -975,6 +1034,7 @@ class ShearCheck(BaseCodeCheck):
         load_case: ShearLoadCase,
         cot_theta_override: Optional[float] = None,
         use_v_rd_s_for_cot_theta: bool = False,
+        use_uncracked_V_Rd_c: bool = False,
         warning_threshold: float = 0.95,
         suppress_warnings: bool = False,
         ignore_compression_steel: bool = False,
@@ -1001,6 +1061,9 @@ class ShearCheck(BaseCodeCheck):
             use_v_rd_s_for_cot_theta: If True, solve cot(θ) from rearranged EC2
                 Eq. 6.13 (V_Rd,s = V_Ed). If False (default), solve cot(θ) from
                 rearranged EC2 Eq. 6.14 / V_Rd,max.
+            use_uncracked_V_Rd_c:
+                If True, use V_Rd,c,uncracked (§6.2.2(2)) in place of the cracked
+                Eq. 6.2 V_Rd,c for design checks. Default False (recommended).
 
         Returns:
             CheckResult with status, utilization, and details
@@ -1023,6 +1086,7 @@ class ShearCheck(BaseCodeCheck):
             N_Ed=load_case.N_Ed,
             cot_theta_override=cot_theta_override,
             use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
+            use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
             warning_threshold=warning_threshold,
             suppress_warnings=suppress_warnings,
             ignore_compression_steel=ignore_compression_steel,
@@ -1036,13 +1100,13 @@ class ShearCheck(BaseCodeCheck):
         N_Ed: float,
         cot_theta_override: Optional[float],
         use_v_rd_s_for_cot_theta: bool,
+        use_uncracked_V_Rd_c: bool,
         warning_threshold: float,
         suppress_warnings: bool = False,
         ignore_compression_steel: bool = False,
     ) -> CheckResult:
         """Perform check for single load case (internal)."""
         # TODO need to add force_cracked arg to this.
-        # TODO support uncracked shear check
         
         # Treat shear as magnitude (absolute value)
         # Negative shear from FEA sign conventions should not give negative utilization
@@ -1074,37 +1138,38 @@ class ShearCheck(BaseCodeCheck):
         link_spacing_satisfied: Optional[bool] = None
         leg_spacing_max_allowable: Optional[float] = None
         leg_spacing_satisfied: Optional[bool] = None
+        governing_component: Optional[str] = None
 
         # Compute capacities (use z_ec2 for design checks per EC2)
 
-        # TODO  this is the cracked formula, consider adding an uncracked function too.
-        # However unlike for piles (CircularSectionCheck -which can be considered
-        # heavily axially loaded and not cracked) ensuring the section remains uncracked
-        # for all load combinations in ULS is risky, so even if this load combination
-        # doesn't crack the section 6.2.2(10 formula (cracked) should always be used).
-        #
-        # 6.2.2(2) applies to prestressed members and says where the concrete extreme
-        # fibre tensile stress < f_ctk_005 / gamma_c the shear resistance should be
-        # limited by the tensile strength of the concrete.
-        # In these regions the shear resistance is given by:
-        # 
-        # V_Rd_c_uncracked = (I * b_w / S) * sqrt((f_ctd)^2 + alpha_I * sigma_cp * f_ctd)
-        #
-        # Where:
-        # I = second moment of area (uncracked)
-        # S = is the first moment of area above and about the centroidal axis
-        # alpha_I  = 1.0 (for without pretensioned tendons)
-        #
-        # Need to run a comparison of V_Rd_c_cracked vs V_Rd_c_uncracked capacities.
-
-
-        V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
+        # Compute both V_Rd,c variants and choose the one used for design.
+        V_Rd_c_cracked = self.find_V_Rd_c(d, rho_l, sigma_cp)
+        V_Rd_c_uncracked = self.find_V_Rd_c_uncracked(sigma_cp=sigma_cp)
+        V_Rd_c = V_Rd_c_uncracked if use_uncracked_V_Rd_c else V_Rd_c_cracked
 
         reinforcement = self.shear_reinforcement
 
+        # Determine governing capacity
+        if reinforcement is None:  # only unreinforced checks reported
+            # For unreinforced members, also check V_Ed limit from Eq. 6.5
+            V_Rd_c_max = self.find_V_Rd_c_max_unreinforced(d)
 
-        if reinforcement:  # the section contains shear reinforcement
-
+            if V_Rd_c <= V_Rd_c_max:
+                V_Rd = V_Rd_c
+                if use_uncracked_V_Rd_c:
+                    governing_mode = "concrete shear (V_Rd,c,uncracked; no shear reinforcement)"
+                    governing_component = "V_Rd_c_uncracked"
+                    code_ref = "EC2 §6.2.2(2)"
+                else:
+                    governing_mode = "concrete shear (V_Rd,c,cracked incl. ρ_l; no shear reinforcement)"
+                    governing_component = "V_Rd_c_cracked"
+                    code_ref = "EC2 §6.2.2 (Eq. 6.2)"
+            else:
+                V_Rd = V_Rd_c_max
+                governing_mode = "diagonal compression (V_Rd,c,max; no shear reinforcement)"
+                governing_component = "V_Rd_c_max"
+                code_ref = "EC2 §6.2.2 (Eq. 6.5)"
+        else:
             z_ec2, z_mech = self.find_lever_arm(
                 M_Ed=M_Ed,
                 N_Ed=N_Ed,
@@ -1224,25 +1289,6 @@ class ShearCheck(BaseCodeCheck):
                         stacklevel=2,
                     )
 
-        # TODO would an else work here? why is reinforcement variable used in some places and
-        # self.shear_reinforcement used elsewhere when they are the same thing?
-
-        # Determine governing capacity
-        if self.shear_reinforcement is None:  # only unreinforced checks reported
-            # For unreinforced members, also check V_Ed limit from Eq. 6.5
-            V_Rd_c_max = self.find_V_Rd_c_max_unreinforced(d)
-
-            if V_Rd_c <= V_Rd_c_max:
-                V_Rd = V_Rd_c
-                governing_mode = "concrete (no shear reinforcement)" # TODO expand on this failure mode. What does "concrete" mean? Also doesn't longitudinal steel contribute with rho?
-                code_ref = "EC2 §6.2.2 (Eq. 6.2)"
-            else:
-                V_Rd = V_Rd_c_max
-                governing_mode = "diagonal compression (no shear reinforcement)"
-                code_ref = "EC2 §6.2.2 (Eq. 6.5)"
-        else: # TODO why is this else here? can this not go in the 'if reinforcement:' above ?
-            # V_Rd_c is calculated at the top. and V_Rd_max is reliant on the entering the first conditional
-
             assert V_Rd_s is not None and V_Rd_max is not None
 
             if V_Ed > V_Rd_c:
@@ -1250,35 +1296,65 @@ class ShearCheck(BaseCodeCheck):
                 V_Rd = min(V_Rd_s, V_Rd_max)
 
                 if V_Rd_s < V_Rd_max:
-                    governing_mode = "shear reinforcement"
+                    governing_mode = "shear reinforcement (V_Rd,s)"
+                    governing_component = "V_Rd_s"
                     code_ref = "EC2 §6.2.3 (Eq. 6.8)"
                 else:
-                    governing_mode = "compression strut"
+                    governing_mode = "compression strut (V_Rd,max)"
+                    governing_component = "V_Rd_max"
                     code_ref = "EC2 §6.2.3 (Eq. 6.9)"
             else:
                 V_Rd = min(V_Rd_c, V_Rd_max)
                 if V_Rd_max < V_Rd_c:
-                    governing_mode = "compression strut" # TODO expand on this failure mode. "diagonal compression in concrete strut" ? (This is a reinforced strut)
+                    governing_mode = "compression strut (V_Rd,max)"
+                    governing_component = "V_Rd_max"
                     code_ref = "EC2 §6.2.3 (Eq. 6.9)"
                 else:
-                    governing_mode = "concrete"  # TODO expand on this failure mode. what does "concrete" mean?
-                    code_ref = "EC2 §6.2.2"
+                    if use_uncracked_V_Rd_c:
+                        governing_mode = "concrete shear (V_Rd,c,uncracked)"
+                        governing_component = "V_Rd_c_uncracked"
+                        code_ref = "EC2 §6.2.2(2)"
+                    else:
+                        governing_mode = "concrete shear (V_Rd,c,cracked)"
+                        governing_component = "V_Rd_c_cracked"
+                        code_ref = "EC2 §6.2.2 (Eq. 6.2)"
 
         # Create message
         utilization = V_Ed / V_Rd if V_Rd > 0 else float('inf')
 
         if utilization <= 1.0:
             if utilization >= warning_threshold:
-                message = f"High shear utilization - governed by {governing_mode}"
+                message = f"High shear utilization ({utilization:.1%}) - governed by {governing_mode}"
             else:
-                message = f"Shear capacity adequate - governed by {governing_mode}"
+                message = f"Shear check satisfied - governed by {governing_mode}"
         else:
-            if self.shear_reinforcement is None:
-                message = "Shear capacity exceeded - provide shear reinforcement"
-            elif governing_mode == "compression strut":
-                message = "Compression strut capacity exceeded - increase section size"
+            if governing_component == "V_Rd_c_max":
+                message = (
+                    "Shear capacity exceeded: diagonal compression limit V_Rd,c,max reached "
+                    "(member without shear reinforcement)."
+                )
+            elif governing_component == "V_Rd_c_cracked":
+                if reinforcement is None:
+                    message = (
+                        "Shear capacity exceeded: cracked concrete shear resistance "
+                        "V_Rd,c reached (member without shear reinforcement)."
+                    )
+                else:
+                    message = "Shear capacity exceeded: cracked concrete shear resistance V_Rd,c reached."
+            elif governing_component == "V_Rd_c_uncracked":
+                if reinforcement is None:
+                    message = (
+                        "Shear capacity exceeded: uncracked concrete shear resistance "
+                        "V_Rd,c reached (member without shear reinforcement)."
+                    )
+                else:
+                    message = "Shear capacity exceeded: uncracked concrete shear resistance V_Rd,c reached."
+            elif governing_component == "V_Rd_max":
+                message = "Shear capacity exceeded: compression strut limit V_Rd,max reached."
+            elif governing_component == "V_Rd_s":
+                message = "Shear capacity exceeded: shear reinforcement limit V_Rd,s reached."
             else:
-                message = "Shear reinforcement capacity exceeded - reduce spacing or increase diameter"
+                message = "Shear capacity exceeded."
 
         # Details — common keys match CircularSectionCheck for consistency
         details = {
@@ -1287,10 +1363,14 @@ class ShearCheck(BaseCodeCheck):
             "N_Ed": N_Ed,
             "V_Rd": V_Rd,
             "V_Rd_c": V_Rd_c,
+            "V_Rd_c_cracked": V_Rd_c_cracked,
+            "V_Rd_c_uncracked": V_Rd_c_uncracked,
+            "use_uncracked_V_Rd_c": use_uncracked_V_Rd_c,
             "V_Rd_c_max_unreinforced": V_Rd_c_max if not reinforcement else None,
             "V_Rd_s": V_Rd_s if reinforcement else None,
             "V_Rd_max": V_Rd_max if reinforcement else None,
             "governing_mode": governing_mode,
+            "governing_component": governing_component,
             "cot_theta": cot_theta if reinforcement else None,
             "theta_deg": degrees(atan(1 / cot_theta)) if cot_theta else None,
             "section_name": self.section.section_name or "unnamed",

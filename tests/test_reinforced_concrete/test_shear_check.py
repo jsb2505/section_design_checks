@@ -431,3 +431,57 @@ class TestShearSpacingNDP:
         assert result_warn.details["leg_spacing_provided"] > result_warn.details["leg_spacing_max_allowable"]
         assert result_suppressed.details["leg_spacing_satisfied"] is False
 
+
+class TestShearUncrackedVrdc:
+    """Tests for optional use of uncracked V_Rd,c in ShearCheck."""
+
+    def test_reports_both_cracked_and_uncracked_vrdc_by_default(self):
+        section = create_test_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        check = ShearCheck(section=section, concrete=concrete)
+        load_case = ShearLoadCase(V_Ed=80, M_Ed=40, N_Ed=100)
+
+        result = check.perform_check(load_case=load_case, suppress_warnings=True)
+
+        assert result.details["use_uncracked_V_Rd_c"] is False
+        assert result.details["V_Rd_c"] == pytest.approx(result.details["V_Rd_c_cracked"], rel=1e-12)
+        assert result.details["V_Rd_c_uncracked"] is not None
+
+    def test_uses_uncracked_vrdc_when_requested(self):
+        section = create_test_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        check = ShearCheck(section=section, concrete=concrete)
+        load_case = ShearLoadCase(V_Ed=80, M_Ed=40, N_Ed=100)
+
+        result = check.perform_check(
+            load_case=load_case,
+            use_uncracked_V_Rd_c=True,
+            suppress_warnings=True,
+        )
+
+        assert result.details["use_uncracked_V_Rd_c"] is True
+        assert result.details["V_Rd_c"] == pytest.approx(result.details["V_Rd_c_uncracked"], rel=1e-12)
+
+    def test_reinforced_flow_continues_when_uncracked_vrdc_is_exceeded(self):
+        section = create_test_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
+        check = ShearCheck(
+            section=section,
+            concrete=concrete,
+            shear_reinforcement=shear_rebar,
+            use_increased_nu_1=False,
+        )
+        load_case = ShearLoadCase(V_Ed=300, M_Ed=50, N_Ed=100)
+
+        result = check.perform_check(
+            load_case=load_case,
+            use_uncracked_V_Rd_c=True,
+            suppress_warnings=True,
+        )
+
+        assert result.details["V_Ed"] > result.details["V_Rd_c_uncracked"]
+        assert result.details["V_Rd_s"] is not None
+        assert result.details["V_Rd_max"] is not None
+        assert result.details["governing_component"] in {"V_Rd_s", "V_Rd_max"}
+

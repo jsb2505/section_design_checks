@@ -329,37 +329,6 @@ class CrackingCheck(BaseCodeCheck):
         """
         return self.concrete.get_elastic_modulus() / self.effective_modulus_ratio
 
-    @property
-    def alpha_e(self) -> float:
-        """
-        Modular ratio E_s / E_cm (EC2 §7.3.4(2)).
-
-        Uses area-weighted average E_s when multiple rebar groups have different
-        elastic moduli. This is appropriate since alpha_e multiplies rho_p_eff
-        (which sums tension steel areas).
-
-        Returns:
-            Modular ratio (dimensionless)
-        """
-        # TODO strictly speaking it is only the bars that are in tension
-        # that should be considered in the weighting.
-        # Can remove need for heavy compute by first checking if E_s in bars differ or not.
-        if not self.section.rebar_groups:
-            E_s = 200000.0  # Default E_s = 200 GPa
-        else:
-            # Area-weighted average E_s across all rebar groups
-            total_area = 0.0
-            weighted_E_s = 0.0
-            for group in self.section.rebar_groups:
-                group_area = group.rebar.area * len(group.positions)
-                total_area += group_area
-                weighted_E_s += group.rebar.E_s * group_area
-
-            E_s = weighted_E_s / total_area if total_area > 0 else 200000.0
-
-        return E_s / self.concrete.get_elastic_modulus()
-
-
     # ===============================================
     # Cracking moment calculation
     # ===============================================
@@ -655,7 +624,7 @@ class CrackingCheck(BaseCodeCheck):
         - σ_s = stress in tension reinforcement (MPa, positive for tension)
         - k_t = load duration factor (0.6 short, 0.4 long)
         - f_ct,eff = mean tensile strength of concrete (MPa)
-        - α_e = E_s / E_cm
+        - α_e = E_s / E_cm (using the passed E_s for the tension zone)
         - ρ_p,eff = effective reinforcement ratio
 
         Args:
@@ -670,10 +639,14 @@ class CrackingCheck(BaseCodeCheck):
             return 0.0  # No tension, no cracking
 
         f_ct_eff = self.concrete.f_ctm  # Could be f_ctm(t) for early age
+        alpha_e = flexure_utils.calculate_modular_ratio(
+            E_s=E_s,
+            E_cm=self.concrete.get_elastic_modulus(),
+        )
 
         # Full formula
         if rho_p_eff > 0:
-            tension_stiffening = self.k_t * f_ct_eff * (1 + self.alpha_e * rho_p_eff) / rho_p_eff
+            tension_stiffening = self.k_t * f_ct_eff * (1 + alpha_e * rho_p_eff) / rho_p_eff
             eps_diff = (sigma_s - tension_stiffening) / E_s
         else:
             eps_diff = sigma_s / E_s

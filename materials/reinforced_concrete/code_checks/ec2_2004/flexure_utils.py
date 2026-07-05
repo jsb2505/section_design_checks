@@ -44,6 +44,22 @@ def calculate_section_breadth(section: "RCSection") -> float:
     return bounds[2] - bounds[0]
 
 
+def calculate_modular_ratio(E_s: float, E_cm: float) -> float:
+    """
+    Modular ratio alpha_e = E_s / E_cm.
+
+    Args:
+        E_s: Steel elastic modulus in MPa.
+        E_cm: Concrete elastic modulus in MPa.
+
+    Returns:
+        Modular ratio (dimensionless).
+    """
+    if E_cm <= 0:
+        raise ValueError("E_cm must be > 0 to compute modular ratio.")
+    return E_s / E_cm
+
+
 def calculate_neutral_axis_depth_from_strains(
     eps_top: float,
     eps_bottom: float,
