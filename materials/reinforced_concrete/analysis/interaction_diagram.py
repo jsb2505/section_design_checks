@@ -879,8 +879,9 @@ class MNInteractionDiagram:
         if len(pts) < 4:
             return pts
 
-        # Ensure closed
-        if (pts[0].M != pts[-1].M) or (pts[0].N != pts[-1].N):
+        # Ensure closed (tolerance-based so float drift between independently
+        # computed endpoints isn't mistaken for an open loop)
+        if not (np.isclose(pts[0].M, pts[-1].M) and np.isclose(pts[0].N, pts[-1].N)):
             pts.append(pts[0])
 
         M = np.array([p.M for p in pts], dtype=float)
@@ -1074,8 +1075,8 @@ class MNInteractionDiagram:
         for t in top_D:
             pairs.append((float(t), eps_cu))
 
-        # Ensure closed loop (start point repeated at end)
-        if pairs[0] != pairs[-1]:
+        # Ensure closed loop (start point repeated at end; tolerance-based)
+        if not np.allclose(pairs[0], pairs[-1]):
             pairs.append(pairs[0])
 
         # Remove any consecutive duplicates (floating noise / shared endpoints)
@@ -2286,8 +2287,8 @@ class MNInteractionDiagram:
 
         ray_dir = (float(M_Ed), float(N_Ed))  # IMPORTANT: do NOT normalize
 
-        # Ensure closed (duplicate endpoint convention)
-        if pts[0] != pts[-1]:
+        # Ensure closed (duplicate endpoint convention; tolerance-based)
+        if not np.allclose(pts[0], pts[-1]):
             pts = pts + [pts[0]]
 
         # Find all ray-segment intersections
@@ -2466,8 +2467,8 @@ class MNInteractionDiagram:
 
         pts = [(float(p.M), float(p.N)) for p in diagram_points]
 
-        # Ensure closed
-        if pts[0] != pts[-1]:
+        # Ensure closed (tolerance-based)
+        if not np.allclose(pts[0], pts[-1]):
             pts = pts + [pts[0]]
 
         N_vals = [N for _, N in pts]
