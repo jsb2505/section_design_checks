@@ -5,7 +5,7 @@ This is a CODIFIED check with business logic - uses EC2 formulas directly
 rather than first principles. Implements §6.2 Variable Strut Inclination Method.
 """
 
-from typing import Optional
+from typing import Optional, ClassVar
 from math import sqrt, atan, degrees
 from pydantic import Field, computed_field
 
@@ -34,8 +34,10 @@ class ShearCheck(BaseCodeCheck):
         section: RC section geometry
         concrete: Concrete material
         shear_reinforcement: Shear links/stirrups (optional)
+        use_accidental: Use accidental limit state partial factors (default: False)
         N_Ed: Design axial force in kN (compression positive)
-        d: Effective depth in mm (if None, uses section.get_effective_depth())
+        is_tension_bottom: If True, bottom face is in tension (default: True)
+        z: Lever arm in mm (uses 0.9*d if None)
 
     Example:
         >>> from materials.reinforced_concrete.geometry import create_rectangular_section
@@ -72,28 +74,74 @@ class ShearCheck(BaseCodeCheck):
         description="Shear links/stirrups (None if unreinforced)",
     )
 
-    N_Ed: float = Field(
-        default=0.0,
-        description="Design axial force in kN (compression positive)",
+    use_accidental: bool = Field(
+        default=False,
+        description="Use accidental limit state partial factors (gamma_c_accidental, gamma_s_accidental)",
     )
 
-    d: Optional[float] = Field(
+    N_Ed: float = Field(
+        default=0.0,
+        description="Design axial force in kN (compression positive). Only compression used.",
+    )
+
+    is_tension_bottom: bool = Field(
+        default=True,
+        description=(
+            "If True, the bottom face is considered in tension and the effective "
+            "depth is found from the top. If False, the effective depth is found "
+            "from the bottom and the top is considered in tension."
+        ),
+    )
+
+    z: Optional[float] = Field(
         default=None,
-        description="Effective depth in mm (uses section.get_effective_depth() if None)",
+        description="Lever arm in mm (uses 0.9*d if None)",
     )
 
     # Constants from EC2
-    MIN_COT_THETA: float = 1.0  # θ = 45°
-    MAX_COT_THETA: float = 2.5  # θ = 21.8°
+    MIN_COT_THETA: ClassVar[float] = 1.0  # θ = 45°
+    MAX_COT_THETA: ClassVar[float] = 2.5  # θ = 21.8°
 
     @computed_field
     @property
     def effective_depth(self) -> float:
         """Effective depth in mm."""
-        if self.d is not None:
-            return self.d
+        if self.is_tension_bottom:
+            compression_face = "top"
         else:
-            return self.section.get_effective_depth(compression_face="top")
+            compression_face = "bottom"
+        return self.section.get_effective_depth(compression_face=compression_face)
+    
+    @computed_field
+    @property
+    def lever_arm(self) -> float:
+        """Lever arm in mm."""
+        if self.z is not None:
+            return self.z
+        else:
+            # (simplified as 0.9d per §6.2.3)
+            return 0.9 * self.effective_depth
+
+    @property
+    def f_cd_design(self) -> float:
+        """Design concrete strength (accidental or persistent) in MPa."""
+        return self.concrete.f_cd_accidental if self.use_accidental else self.concrete.f_cd
+
+    @property
+    def gamma_c_design(self) -> float:
+        """Partial factor for concrete (accidental or persistent)."""
+        return self.concrete.gamma_c_accidental if self.use_accidental else self.concrete.gamma_c
+
+    @property
+    def f_ywd_design(self) -> float:
+        """Design yield strength of shear reinforcement (accidental or persistent) in MPa."""
+        if self.shear_reinforcement is None:
+            return 0.0
+        return (
+            self.shear_reinforcement.f_yd_accidental
+            if self.use_accidental
+            else self.shear_reinforcement.f_yd
+        )
 
     @computed_field
     @property
@@ -112,20 +160,46 @@ class ShearCheck(BaseCodeCheck):
 
         σ_cp = N_Ed / A_c, limited to 0.2·f_cd
 
+        Uses transformed area (concrete + n·steel) for more conservative/accurate
+        stress calculation, as steel has higher modulus and carries more force.
+
         Returns:
             Stress in MPa
         """
         if self.N_Ed <= 0:
             return 0.0
 
-        # A_c = b·d (simplified - could use full section area)
-        A_c = self.breadth * self.effective_depth  # mm²
+        # Transformed area: A_c,tr = A_concrete + n·A_steel
+        # where n = E_s / E_c (modular ratio)
+        A_concrete = self.section.get_area()  # mm² (gross concrete area)
+
+        # Calculate weighted average E_s for all steel in section
+        # (handles edge case where different rebar groups have different grades/E_s)
+        total_steel_stiffness = 0.0  # Sum of (A_i * E_s,i)
+        total_steel_area = 0.0
+
+        for group in self.section.rebar_groups:
+            group_area = len(group.positions) * group.rebar.area  # mm²
+            group_E_s = group.rebar.E_s  # MPa
+            total_steel_stiffness += group_area * group_E_s
+            total_steel_area += group_area
+
+        # Weighted average modular ratio
+        if total_steel_area > 0:
+            E_s_avg = total_steel_stiffness / total_steel_area  # Weighted average E_s
+            E_c = self.concrete.E_cm  # MPa
+            n = E_s_avg / E_c
+            # Transformed area
+            A_c_transformed = A_concrete + n * total_steel_area  # mm²
+        else:
+            # No steel - use concrete area only
+            A_c_transformed = A_concrete
 
         # Convert N_Ed from kN to N, stress to MPa
-        sigma_cp_uncapped = (self.N_Ed * 1000) / A_c
+        sigma_cp_uncapped = (self.N_Ed * 1000) / A_c_transformed
 
         # Limit to 0.2·f_cd per §6.2.2(1)
-        return min(sigma_cp_uncapped, 0.2 * self.concrete.f_cd)
+        return min(sigma_cp_uncapped, 0.2 * self.f_cd_design)
 
     def find_k_factor(self) -> float:
         """
@@ -137,6 +211,8 @@ class ShearCheck(BaseCodeCheck):
             k factor (dimensionless)
         """
         d_mm = self.effective_depth
+        if d_mm <= 0:
+            raise ValueError(f"Effective depth must be > 0, got {d_mm} mm")
         return min(2.0, 1.0 + sqrt(200 / d_mm))
 
     def find_v_min(self) -> float:
@@ -158,11 +234,35 @@ class ShearCheck(BaseCodeCheck):
 
         ρ_l = A_sl / (b_w·d) ≤ 0.02
 
+        Uses only steel in the tension zone (conservative approximation based on
+        which half of the section is in tension).
+
         Returns:
             ρ_l (dimensionless)
         """
-        # Get tension reinforcement area
-        A_sl = self.section.total_steel_area  # mm²
+        # Get centroid to determine tension zone
+        centroid_y = self.section.get_centroid()[1]
+
+        # Determine tension zone threshold
+        if self.is_tension_bottom:
+            # Bottom in tension - bars below centroid
+            tension_threshold = centroid_y
+            tension_below = True
+        else:
+            # Top in tension - bars above centroid
+            tension_threshold = centroid_y
+            tension_below = False
+
+        # Sum area of bars in tension zone
+        A_sl = 0.0
+        for group in self.section.rebar_groups:
+            for pos in group.positions:
+                if tension_below and pos.y < tension_threshold:
+                    # Bar is below centroid (tension zone for sagging)
+                    A_sl += group.rebar.area
+                elif not tension_below and pos.y > tension_threshold:
+                    # Bar is above centroid (tension zone for hogging)
+                    A_sl += group.rebar.area
 
         if A_sl == 0:
             return 0.0
@@ -187,7 +287,7 @@ class ShearCheck(BaseCodeCheck):
             V_Rd,c in kN
         """
         # Parameters
-        C_Rd_c = 0.18 / self.concrete.gamma_c
+        C_Rd_c = 0.18 / self.gamma_c_design
         k = self.find_k_factor()
         rho_l = self.find_rho_l()
         f_ck = self.concrete.f_ck
@@ -226,7 +326,7 @@ class ShearCheck(BaseCodeCheck):
         V_Rd,s = (A_sw/s)·z·f_ywd·cot(θ)
 
         Args:
-            cot_theta: Cotangent of strut angle (1.0 to 2.5)
+            cot_theta: Cotangent of strut angle (should be pre-clamped to 1.0-2.5)
 
         Returns:
             V_Rd,s in kN (0 if no shear reinforcement)
@@ -237,17 +337,14 @@ class ShearCheck(BaseCodeCheck):
         # Shear reinforcement ratio (mm²/mm)
         A_sw_over_s = self.shear_reinforcement.area_per_unit_length  # mm
 
-        # Lever arm (simplified as 0.9d per §6.2.3)
-        z = 0.9 * self.effective_depth
+        # Lever arm
+        z = self.lever_arm
 
-        # Design yield strength
-        f_ywd = self.shear_reinforcement.f_yd
+        # Design yield strength (accidental or persistent)
+        f_ywd = self.f_ywd_design
 
-        # Limit cot(θ)
-        cot_theta_limited = max(self.MIN_COT_THETA, min(self.MAX_COT_THETA, cot_theta))
-
-        # V_Rd,s (N)
-        V_Rd_s = A_sw_over_s * z * f_ywd * cot_theta_limited
+        # V_Rd,s (N) - assumes cot_theta is already validated/clamped by caller
+        V_Rd_s = A_sw_over_s * z * f_ywd * cot_theta
 
         # Convert to kN
         return V_Rd_s / 1000
@@ -259,14 +356,14 @@ class ShearCheck(BaseCodeCheck):
         V_Rd,max = α_cw·b_w·z·ν·f_cd / (cot(θ) + tan(θ))
 
         Args:
-            cot_theta: Cotangent of strut angle (1.0 to 2.5)
+            cot_theta: Cotangent of strut angle (should be pre-clamped to 1.0-2.5)
 
         Returns:
             V_Rd,max in kN
         """
         # Coefficient α_cw (§6.2.3(3))
         sigma_cp = self.sigma_cp
-        f_cd = self.concrete.f_cd
+        f_cd = self.f_cd_design
 
         if sigma_cp == 0:
             alpha_cw = 1.0
@@ -279,17 +376,14 @@ class ShearCheck(BaseCodeCheck):
 
         # Parameters
         b_w = self.breadth
-        z = 0.9 * self.effective_depth
+        z = self.lever_arm
         nu = self.find_nu_factor()
 
-        # Limit cot(θ)
-        cot_theta_limited = max(self.MIN_COT_THETA, min(self.MAX_COT_THETA, cot_theta))
-
-        # tan(θ) = 1/cot(θ)
-        tan_theta = 1 / cot_theta_limited
+        # tan(θ) = 1/cot(θ) - assumes cot_theta is already validated/clamped by caller
+        tan_theta = 1 / cot_theta
 
         # V_Rd,max (N)
-        V_Rd_max = (alpha_cw * b_w * z * nu * f_cd) / (cot_theta_limited + tan_theta)
+        V_Rd_max = (alpha_cw * b_w * z * nu * f_cd) / (cot_theta + tan_theta)
 
         # Convert to kN
         return V_Rd_max / 1000
@@ -318,10 +412,15 @@ class ShearCheck(BaseCodeCheck):
         Returns:
             CheckResult with pass/fail status
         """
-        # Calculate capacities
+        # Validate and clamp cot_theta (centralized for consistency)
+        if cot_theta <= 0:
+            raise ValueError(f"cot_theta must be > 0, got {cot_theta}")
+        cot_theta_used = max(self.MIN_COT_THETA, min(self.MAX_COT_THETA, cot_theta))
+
+        # Calculate capacities using clamped value
         V_Rd_c = self.find_V_Rd_c()
-        V_Rd_s = self.find_V_Rd_s(cot_theta=cot_theta)
-        V_Rd_max = self.find_V_Rd_max(cot_theta=cot_theta)
+        V_Rd_s = self.find_V_Rd_s(cot_theta=cot_theta_used)
+        V_Rd_max = self.find_V_Rd_max(cot_theta=cot_theta_used)
 
         # Determine governing capacity
         if self.shear_reinforcement is None:
@@ -331,7 +430,7 @@ class ShearCheck(BaseCodeCheck):
             code_ref = "EC2 §6.2.2"
         else:
             # Shear reinforcement provided
-            # Need to satisfy both V_Rd,s and V_Rd,max
+            # Always check both V_Rd,s and V_Rd,max for robustness
             if V_Ed > V_Rd_c:
                 # Shear reinforcement is engaged
                 V_Rd = min(V_Rd_s, V_Rd_max)
@@ -343,10 +442,15 @@ class ShearCheck(BaseCodeCheck):
                     governing_mode = "compression strut"
                     code_ref = "EC2 §6.2.3 (Eq. 6.9)"
             else:
-                # Concrete alone is sufficient
-                V_Rd = V_Rd_c
-                governing_mode = "concrete"
-                code_ref = "EC2 §6.2.2"
+                # Concrete alone is sufficient, but still check V_Rd,max
+                # (rare case where concrete capacity governs but strut could crush)
+                V_Rd = min(V_Rd_c, V_Rd_max)
+                if V_Rd_max < V_Rd_c:
+                    governing_mode = "compression strut (unlikely)"
+                    code_ref = "EC2 §6.2.3 (Eq. 6.9)"
+                else:
+                    governing_mode = "concrete"
+                    code_ref = "EC2 §6.2.2"
 
         # Create message
         utilization = V_Ed / V_Rd if V_Rd > 0 else float('inf')
@@ -373,8 +477,8 @@ class ShearCheck(BaseCodeCheck):
             "V_Rd_s": V_Rd_s if self.shear_reinforcement else None,
             "V_Rd_max": V_Rd_max if self.shear_reinforcement else None,
             "governing_mode": governing_mode,
-            "cot_theta": cot_theta,
-            "theta_deg": degrees(atan(1 / cot_theta)),
+            "cot_theta": cot_theta_used,  # Use clamped value for consistency
+            "theta_deg": degrees(atan(1 / cot_theta_used)),
             "section_name": self.section.section_name or "unnamed",
             "d": self.effective_depth,
             "b_w": self.breadth,
@@ -415,13 +519,17 @@ class ShearCheck(BaseCodeCheck):
             return 0.0  # Concrete alone is sufficient
 
         # Required shear reinforcement
-        z = 0.9 * self.effective_depth
+        z = self.lever_arm
 
         if f_ywd is None and self.shear_reinforcement is not None:
-            f_ywd = self.shear_reinforcement.f_yd
+            f_ywd = self.f_ywd_design
         elif f_ywd is None:
-            # Default to B500B
-            f_ywd = 434.8  # MPa
+            # Default to B500B (design or accidental based on use_accidental flag)
+            # This is a fallback - ideally shear_reinforcement should be provided
+            if self.use_accidental:
+                f_ywd = 500.0  # MPa (f_yk / gamma_s_accidental = 500.0 / 1.0)
+            else:
+                f_ywd = 434.8  # MPa (f_yk / gamma_s = 500.0 / 1.15)
 
         cot_theta_limited = max(self.MIN_COT_THETA, min(self.MAX_COT_THETA, cot_theta))
 
