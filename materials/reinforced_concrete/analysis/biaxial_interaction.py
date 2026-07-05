@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 from pydantic import BaseModel, Field, ConfigDict
 from scipy.optimize import brentq
+from scipy.spatial import ConvexHull
 
 from materials.reinforced_concrete.geometry import RCSection, FiberMesh
 from materials.reinforced_concrete.constitutive import (
@@ -138,6 +139,48 @@ class BiaxialMNInteractionSurface:
         min_x, min_y, max_x, max_y = section.get_bounding_box()
         self.section_width = max_x - min_x
         self.section_height = max_y - min_y
+        # Cache for generated surfaces and convex hulls to reuse across load checks
+        self._surface_cache: Optional[Dict[str, Any]] = None
+
+    def _build_convex_hull(self, surface_points: List["BiaxialInteractionPoint"]) -> ConvexHull:
+        """Build a convex hull in (N, My, Mz) space from surface points."""
+        pts = np.array([[p.N, p.My, p.Mz] for p in surface_points], dtype=float)
+        if pts.shape[0] < 4:
+            raise ValueError("At least 4 points are required to build a convex hull")
+        return ConvexHull(pts)
+
+    def _get_surface_and_hull(
+        self,
+        surface_points: Optional[List["BiaxialInteractionPoint"]],
+        hull: Optional[ConvexHull],
+        n_angles: int,
+        n_axial_levels: int,
+    ) -> tuple[List["BiaxialInteractionPoint"], ConvexHull]:
+        """
+        Return a tuple of (surface_points, convex_hull), caching both together.
+
+        - If caller supplies points (and optionally a hull), reuse them, building the hull once.
+        - Otherwise, reuse cached points/hull if generation parameters match.
+        - If cache is absent or stale, regenerate points and hull and refresh the cache.
+        """
+        if surface_points is not None:
+            pts = surface_points
+            hull_obj = hull or self._build_convex_hull(pts)
+            return pts, hull_obj
+
+        params = (n_angles, n_axial_levels)
+        if self._surface_cache and self._surface_cache.get("params") == params:
+            cached_pts = self._surface_cache["points"]
+            cached_hull = self._surface_cache["hull"]
+            return cached_pts, cached_hull
+
+        pts = self.generate_surface_pivot(
+            n_angles=n_angles,
+            n_axial_levels=n_axial_levels,
+        )
+        hull_obj = self._build_convex_hull(pts)
+        self._surface_cache = {"params": params, "points": pts, "hull": hull_obj}
+        return pts, hull_obj
 
     def get_utilization_vector(
         self,
@@ -145,140 +188,90 @@ class BiaxialMNInteractionSurface:
         My_Ed: float,
         Mz_Ed: float,
         surface_points: Optional[List] = None,
+        hull: Optional[ConvexHull] = None,
         n_angles: int = 72,
         n_axial_levels: int = 30,
     ) -> Tuple[bool, float]:
         """
-        Check capacity using vector projection method for biaxial bending.
+        Check capacity using exact ray-to-surface intersection via convex hull.
 
-        Projects a vector from the origin through the applied load point (N_Ed, My_Ed, Mz_Ed)
-        in 3D space and finds where it intersects the M-M-N interaction surface. The
-        utilization ratio is the ratio of the distance to the applied load vs. distance
-        to the capacity boundary.
+        Projects a ray from origin through (N_Ed, My_Ed, Mz_Ed) and intersects it with
+        the convex hull of the generated surface points.
+        """
+        _, _, _, is_safe, utilization = self.get_capacity_vector_exact(
+            N_Ed=N_Ed,
+            My_Ed=My_Ed,
+            Mz_Ed=Mz_Ed,
+            surface_points=surface_points,
+            hull=hull,
+            n_angles=n_angles,
+            n_axial_levels=n_axial_levels,
+        )
+        return (bool(is_safe), float(utilization))
 
-        This is the geometrically correct method for biaxial M-M-N interaction checking
-        as it properly accounts for the interaction between axial force and both moments.
-
-        Method: Projects a ray from origin through (N_Ed, My_Ed, Mz_Ed) to find the
-        intersection with the surface boundary (N_Rd, My_Rd, Mz_Rd).
-
-        Args:
-            N_Ed: Applied axial force in kN (positive = compression)
-            My_Ed: Applied moment about y-axis (major axis) in kN·m
-            Mz_Ed: Applied moment about z-axis (minor axis) in kN·m
-            surface_points: Pre-generated surface points (optional). If provided, uses these
-                           instead of regenerating the surface. Pass the result from
-                           generate_surface() to avoid recomputation when checking multiple
-                           load cases. If None, generates surface with n_angles and n_axial_levels.
-            n_angles: Number of angles for surface generation (default: 72, ignored if surface_points provided)
-            n_axial_levels: Number of N levels for surface generation (default: 30, ignored if surface_points provided)
-
-        Returns:
-            Tuple of (is_safe, utilization)
-            - is_safe: True if utilization <= 1.0
-            - utilization: ||(N_Ed, My_Ed, Mz_Ed)|| / ||(N_Rd, My_Rd, Mz_Rd)||
-                          where (N_Rd, My_Rd, Mz_Rd) is the intersection point
-
-        Example:
-            >>> # Single load case (surface generated automatically)
-            >>> surface = create_biaxial_interaction_surface(section, concrete)
-            >>> is_safe, util = surface.get_utilization_vector(
-            ...     N_Ed=1500,  # kN
-            ...     My_Ed=100,  # kN·m
-            ...     Mz_Ed=50    # kN·m
-            ... )
-            >>> print(f"Safe: {is_safe}, Utilization: {util:.1%}")
-
-            >>> # Multiple load cases (reuse surface for efficiency)
-            >>> surface_pts = surface.generate_surface_pivot(n_angles=72, n_axial_levels=30)
-            >>> for load_case in load_cases:
-            ...     is_safe, util = surface.get_utilization_vector(
-            ...         N_Ed=load_case.N,
-            ...         My_Ed=load_case.My,
-            ...         Mz_Ed=load_case.Mz,
-            ...         surface_points=surface_pts  # Reuse pre-generated surface
-            ...     )
+    def get_capacity_vector_exact(
+        self,
+        N_Ed: float,
+        My_Ed: float,
+        Mz_Ed: float,
+        surface_points: Optional[List] = None,
+        hull: Optional[ConvexHull] = None,
+        n_angles: int = 72,
+        n_axial_levels: int = 30,
+    ) -> Tuple[Optional[float], Optional[float], Optional[float], bool, float]:
+        """
+        Get exact capacity point using convex hull intersection (ray-plane with triangles).
         """
         # Special case: origin point (no load)
         if abs(N_Ed) < 1e-6 and abs(My_Ed) < 1e-6 and abs(Mz_Ed) < 1e-6:
-            return (True, 0.0)
+            return (0.0, 0.0, 0.0, True, 0.0)
 
-        # Use provided surface or generate new one
-        if surface_points is None:
-            points = self.generate_surface_pivot(
+        # Use provided surface/hull or generate/cached pair
+        try:
+            points, hull_obj = self._get_surface_and_hull(
+                surface_points=surface_points,
+                hull=hull,
                 n_angles=n_angles,
                 n_axial_levels=n_axial_levels,
-                include_tension=True,
             )
-        else:
-            points = surface_points
+        except Exception:
+            return (None, None, None, False, float("inf"))
 
-        # Extract coordinates
-        N_values = np.array([p.N for p in points])
-        My_values = np.array([p.My for p in points])
-        Mz_values = np.array([p.Mz for p in points])
+        load_vec = np.array([N_Ed, My_Ed, Mz_Ed], dtype=float)
+        load_mag = np.linalg.norm(load_vec)
 
-        # Direction vector of the applied load
-        load_direction = np.array([N_Ed, My_Ed, Mz_Ed])
-        load_magnitude = np.linalg.norm(load_direction)
+        if load_mag < 1e-12:
+            return (0.0, 0.0, 0.0, True, 0.0)
 
-        if load_magnitude < 1e-10:
-            return (True, 0.0)
+        ray_dir = load_vec / load_mag
 
-        load_direction_unit = load_direction / load_magnitude
+        equations = hull_obj.equations  # shape (n_facets, 4) -> normals | offsets
+        normals = equations[:, :3]
+        offsets = equations[:, 3]
+        denom = normals @ ray_dir
 
-        # Find the maximum scaling factor alpha such that
-        # alpha * (N_Ed, My_Ed, Mz_Ed) is still on the boundary surface
-        #
-        # We check all points on the surface and find which ones are roughly
-        # aligned with the load direction, then find the maximum alpha
+        forward_mask = denom > 1e-12
+        if not np.any(forward_mask):
+            return (None, None, None, False, float("inf"))
 
-        max_alpha = 0.0
+        t_candidates = -offsets[forward_mask] / denom[forward_mask]
+        t_candidates = t_candidates[t_candidates > 1e-12]
 
-        # For each point on the surface, check if it's aligned with load direction
-        for i in range(len(points)):
-            surface_point = np.array([N_values[i], My_values[i], Mz_values[i]])
-            surface_magnitude = np.linalg.norm(surface_point)
+        if t_candidates.size == 0:
+            return (None, None, None, False, float("inf"))
 
-            if surface_magnitude < 1e-10:
-                continue
+        t_min = float(np.min(t_candidates))
 
-            surface_direction_unit = surface_point / surface_magnitude
+        capacity_vec = t_min * ray_dir
+        utilization = load_mag / t_min
 
-            # Check if directions are aligned (dot product close to 1)
-            dot_product = np.dot(load_direction_unit, surface_direction_unit)
-
-            # If aligned (within tolerance), calculate scaling factor
-            if dot_product > 0.999:  # ~2.5 degree tolerance
-                # Calculate alpha: surface_point = alpha * load_direction
-                # alpha = ||surface_point|| / ||load_direction||
-                alpha = surface_magnitude / load_magnitude
-                max_alpha = max(max_alpha, alpha)
-
-        # If we didn't find any aligned points, use a more robust search
-        # by checking the nearest neighbor approach
-        if max_alpha < 1e-10:
-            # Project all surface points onto the load direction
-            # and find the one with maximum projection
-            projections = (
-                N_values * N_Ed + My_values * My_Ed + Mz_values * Mz_Ed
-            ) / (load_magnitude ** 2)
-
-            # Filter to positive projections (same direction as load)
-            positive_mask = projections > 0
-            if np.any(positive_mask):
-                max_alpha = np.max(projections[positive_mask])
-
-        # If still no intersection found, point is likely outside
-        if max_alpha < 1e-10:
-            return (False, float('inf'))
-
-        # Utilization ratio
-        utilization = 1.0 / max_alpha
-        is_safe = utilization <= 1.0
-
-        # Convert to Python types (numpy operations may return numpy scalars)
-        return (bool(is_safe), float(utilization))
+        return (
+            float(capacity_vec[0]),
+            float(capacity_vec[1]),
+            float(capacity_vec[2]),
+            bool(utilization <= 1.0 + 1e-6),
+            float(utilization),
+        )
 
     def get_capacity_vector(
         self,
@@ -286,113 +279,22 @@ class BiaxialMNInteractionSurface:
         My_Ed: float,
         Mz_Ed: float,
         surface_points: Optional[List] = None,
+        hull: Optional[ConvexHull] = None,
         n_angles: int = 72,
         n_axial_levels: int = 30,
     ) -> Tuple[Optional[float], Optional[float], Optional[float], bool, float]:
         """
-        Get capacity point (N_Rd, My_Rd, Mz_Rd) on the M-M-N surface using vector projection.
-
-        This method finds where the ray from origin through (N_Ed, My_Ed, Mz_Ed) intersects
-        the M-M-N interaction surface boundary, returning the capacity coordinates.
-
-        Args:
-            N_Ed: Applied axial force in kN (positive = compression)
-            My_Ed: Applied moment about y-axis (major axis) in kN·m
-            Mz_Ed: Applied moment about z-axis (minor axis) in kN·m
-            surface_points: Pre-generated surface points (optional)
-            n_angles: Number of angles for surface generation (if surface_points not provided)
-            n_axial_levels: Number of N levels for surface generation (if surface_points not provided)
-
-        Returns:
-            Tuple of (N_Rd, My_Rd, Mz_Rd, is_safe, utilization)
-            - N_Rd: Design axial capacity at intersection (kN) or None if no intersection
-            - My_Rd: Design moment capacity about y-axis (kN·m) or None if no intersection
-            - Mz_Rd: Design moment capacity about z-axis (kN·m) or None if no intersection
-            - is_safe: True if utilization <= 1.0
-            - utilization: ||(N_Ed, My_Ed, Mz_Ed)|| / ||(N_Rd, My_Rd, Mz_Rd)||
-
-        Example:
-            >>> surface = create_biaxial_interaction_surface(section, concrete)
-            >>> N_Rd, My_Rd, Mz_Rd, is_safe, util = surface.get_capacity_vector(
-            ...     N_Ed=1000, My_Ed=150, Mz_Ed=100
-            ... )
-            >>> print(f"Capacity: N_Rd={N_Rd:.1f} kN, My_Rd={My_Rd:.1f} kN·m, Mz_Rd={Mz_Rd:.1f} kN·m")
-            >>> print(f"Utilization: {util:.1%}")
+        Backwards-compatible wrapper for get_capacity_vector_exact.
         """
-        # Special case: origin point (no load)
-        if abs(N_Ed) < 1e-6 and abs(My_Ed) < 1e-6 and abs(Mz_Ed) < 1e-6:
-            return (0.0, 0.0, 0.0, True, 0.0)
-
-        # Use provided surface or generate new one
-        if surface_points is None:
-            points = self.generate_surface_pivot(
-                n_angles=n_angles,
-                n_axial_levels=n_axial_levels,
-                include_tension=True,
-            )
-        else:
-            points = surface_points
-
-        # Extract coordinates
-        N_values = np.array([p.N for p in points])
-        My_values = np.array([p.My for p in points])
-        Mz_values = np.array([p.Mz for p in points])
-
-        # Direction vector of the applied load
-        load_direction = np.array([N_Ed, My_Ed, Mz_Ed])
-        load_magnitude = np.linalg.norm(load_direction)
-
-        if load_magnitude < 1e-10:
-            return (0.0, 0.0, 0.0, True, 0.0)
-
-        load_direction_unit = load_direction / load_magnitude
-
-        # Find the maximum scaling factor alpha
-        max_alpha = 0.0
-
-        # For each point on the surface, check if it's aligned with load direction
-        for i in range(len(points)):
-            surface_point = np.array([N_values[i], My_values[i], Mz_values[i]])
-            surface_magnitude = np.linalg.norm(surface_point)
-
-            if surface_magnitude < 1e-10:
-                continue
-
-            surface_direction_unit = surface_point / surface_magnitude
-
-            # Check if directions are aligned (dot product close to 1)
-            dot_product = np.dot(load_direction_unit, surface_direction_unit)
-
-            # If aligned (within tolerance), calculate scaling factor
-            if dot_product > 0.999:  # ~2.5 degree tolerance
-                alpha = surface_magnitude / load_magnitude
-                max_alpha = max(max_alpha, alpha)
-
-        # If we didn't find any aligned points, use projection approach
-        if max_alpha < 1e-10:
-            projections = (
-                N_values * N_Ed + My_values * My_Ed + Mz_values * Mz_Ed
-            ) / (load_magnitude ** 2)
-
-            positive_mask = projections > 0
-            if np.any(positive_mask):
-                max_alpha = np.max(projections[positive_mask])
-
-        # If still no intersection found
-        if max_alpha < 1e-10:
-            return (None, None, None, False, float('inf'))
-
-        # Calculate capacity point coordinates
-        N_Rd = max_alpha * N_Ed
-        My_Rd = max_alpha * My_Ed
-        Mz_Rd = max_alpha * Mz_Ed
-
-        # Utilization ratio
-        utilization = 1.0 / max_alpha
-        is_safe = utilization <= 1.0
-
-        # Convert to Python types
-        return (float(N_Rd), float(My_Rd), float(Mz_Rd), bool(is_safe), float(utilization))
+        return self.get_capacity_vector_exact(
+            N_Ed=N_Ed,
+            My_Ed=My_Ed,
+            Mz_Ed=Mz_Ed,
+            surface_points=surface_points,
+            hull=hull,
+            n_angles=n_angles,
+            n_axial_levels=n_axial_levels,
+        )
 
     # ========================================================================
     # NEW SURFACE GENERATION - EC2 Pivot Method (code review Fixes)
@@ -413,8 +315,8 @@ class BiaxialMNInteractionSurface:
         _, _, area, mat_type, mat_idx = self.mesh.get_fiber_arrays()
 
         # EC2 strain limits
-        eps_c2 = self.concrete.epsilon_c2  # 0.002
-        eps_ud = 0.02  # Design ultimate tension strain
+        eps_cu2 = self.concrete.epsilon_cu2  # Use ultimate compression strain for pole
+        eps_ud = 0.02  # Design ultimate tension strain (assumed design limit for reinforcement)
 
         # 1. PURE TENSION (N_min)
         # Concrete contributes 0, all steel at -eps_ud
@@ -442,7 +344,7 @@ class BiaxialMNInteractionSurface:
         # Concrete contribution
         conc_mask = (mat_type == 'concrete')
         if np.any(conc_mask):
-            stress_c = self.concrete_model.get_stress(eps_c2)
+            stress_c = self.concrete_model.get_stress(eps_cu2)
             n_max += stress_c * np.sum(area[conc_mask]) / 1000.0
 
         # Steel contribution at eps_c2 compression
@@ -452,7 +354,7 @@ class BiaxialMNInteractionSurface:
 
             for g_idx in unique_steel_groups:
                 group_mask = steel_mask & (mat_idx == g_idx)
-                stress_comp = self.steel_models[int(g_idx)].get_stress(eps_c2)
+                stress_comp = self.steel_models[int(g_idx)].get_stress(eps_cu2)
                 n_steel_compression += stress_comp * np.sum(area[group_mask])
 
             n_max += n_steel_compression / 1000.0
@@ -620,14 +522,14 @@ class BiaxialMNInteractionSurface:
                 stresses[group_mask] = self.steel_models[group_idx].get_stress_array(strains[group_mask])
 
         # Calculate forces
-        # Axial force (N = Σ(σ · A))
+        # Axial force (N = sum(stress * A))
         N = np.sum(stresses * area) / 1000.0  # kN
 
-        # Moments about centroid
-        # My (about y-axis): M = Σ(σ · A · x_offset)
+        # Moments about centroid (axis convention: x along member, My from z-forces, Mz from y-forces)
+        # My (about y-axis): M = sum(stress * A * x_offset)
         My = np.sum(stresses * area * x_rel) / 1e6  # kN·m
 
-        # Mz (about z-axis): M = Σ(σ · A · y_offset)
+        # Mz (about z-axis): M = sum(stress * A * y_offset)
         Mz = np.sum(stresses * area * y_rel) / 1e6  # kN·m
 
         # Track maximum strains
@@ -648,7 +550,6 @@ class BiaxialMNInteractionSurface:
         self,
         n_angles: int = 36,
         n_axial_levels: int = 20,
-        include_tension: bool = True,
     ) -> List[BiaxialInteractionPoint]:
         """
         Generate M-M-N surface using PIVOT METHOD with uniform N-level spacing.
@@ -663,7 +564,6 @@ class BiaxialMNInteractionSurface:
         Args:
             n_angles: Number of neutral axis angles (longitude lines)
             n_axial_levels: Number of uniform N levels (latitude rings)
-            include_tension: Include tension region
 
         Returns:
             List of points forming the interaction surface
@@ -680,11 +580,8 @@ class BiaxialMNInteractionSurface:
         # Get section dimensions for solver bounds
         max_dim = max(self.section_width, self.section_height)
 
-        # Step 2: Create uniform N levels
-        if not include_tension:
-            N_levels = np.linspace(0.0, N_max * 0.98, n_axial_levels)
-        else:
-            N_levels = np.linspace(N_min * 0.98, N_max * 0.98, n_axial_levels)
+        # Step 2: Create uniform N levels (always include full range, tension to compression)
+        N_levels = np.linspace(N_min * 0.98, N_max * 0.98, n_axial_levels)
 
         # Step 3: Create uniform angles
         angles = np.linspace(0, 360, n_angles, endpoint=False)
@@ -706,13 +603,21 @@ class BiaxialMNInteractionSurface:
 
                 try:
                     # Search in finite bounds [-1.5, 1.5] which covers most of [-∞, ∞]
-                    # when mapped through tan()
-                    f_min = objective_tangent(-1.5)
-                    f_max = objective_tangent(1.5)
+                    # when mapped through tan(). Expand slightly if not bracketed.
+                    phi_bound = 1.5
+                    f_min = objective_tangent(-phi_bound)
+                    f_max = objective_tangent(phi_bound)
+
+                    if f_min * f_max > 0:
+                        for phi_bound in (1.55, 1.56, 1.569):
+                            f_min = objective_tangent(-phi_bound)
+                            f_max = objective_tangent(phi_bound)
+                            if f_min * f_max <= 0:
+                                break
 
                     if f_min * f_max <= 0:
                         # Target is bracketed, solve for phi
-                        phi_solution = brentq(objective_tangent, -1.5, 1.5, xtol=1e-5)
+                        phi_solution = brentq(objective_tangent, -phi_bound, phi_bound, xtol=1e-5)
 
                         # Convert back to na_depth
                         na_depth_solution = max_dim * np.tan(phi_solution)
@@ -782,9 +687,6 @@ class BiaxialMNInteractionSurface:
             Tuple of (My_matrix, Mz_matrix, N_matrix) shaped (n_axial_levels+2, n_angles+1)
             The +2 is for pole points, +1 is for closing the angular seam
         """
-        # Get theoretical pole values
-        N_min_theo, N_max_theo = self.calculate_axial_limits()
-
         # Extract arrays and reshape to grid
         # Assumes points were generated as: for N in N_levels: for ang in angles
         N_raw = np.array([p.N for p in surface_pts]).reshape((n_axial_levels, n_angles))
@@ -797,24 +699,26 @@ class BiaxialMNInteractionSurface:
         My_grid = np.hstack([My_raw, My_raw[:, :1]])
         Mz_grid = np.hstack([Mz_raw, Mz_raw[:, :1]])
 
-        # Add pole points to close the tips
-        # At theoretical poles (N_min, N_max), the section is in UNIFORM strain
-        # (all fibers at eps_ud or eps_c2), so moments about centroid are ZERO
-        # This is true for ANY section geometry, symmetric or asymmetric
+        # Add pole points to close the tips using actual fiber integration (non-zero for asymmetric sections)
         n_cols = n_angles + 1
+        angles = np.linspace(0, 360, n_angles, endpoint=False)
+        max_dim = max(self.section_width, self.section_height)
 
-        # Bottom pole (pure tension at -eps_ud) - uniform strain → M = 0
-        bot_pole_N = np.full((1, n_cols), N_min_theo)
-        bot_pole_M = np.zeros((1, n_cols))
+        tension_poles = [self.calculate_point_pivot(-max_dim * 2, ang) for ang in angles]
+        compression_poles = [self.calculate_point_pivot(max_dim * 10, ang) for ang in angles]
 
-        # Top pole (pure compression at eps_c2) - uniform strain → M = 0
-        top_pole_N = np.full((1, n_cols), N_max_theo)
-        top_pole_M = np.zeros((1, n_cols))
+        bot_pole_N = np.array([p.N for p in tension_poles] + [tension_poles[0].N]).reshape(1, n_cols)
+        bot_pole_My = np.array([p.My for p in tension_poles] + [tension_poles[0].My]).reshape(1, n_cols)
+        bot_pole_Mz = np.array([p.Mz for p in tension_poles] + [tension_poles[0].Mz]).reshape(1, n_cols)
+
+        top_pole_N = np.array([p.N for p in compression_poles] + [compression_poles[0].N]).reshape(1, n_cols)
+        top_pole_My = np.array([p.My for p in compression_poles] + [compression_poles[0].My]).reshape(1, n_cols)
+        top_pole_Mz = np.array([p.Mz for p in compression_poles] + [compression_poles[0].Mz]).reshape(1, n_cols)
 
         # Stack: [Bottom Pole] -> [Surface Grid] -> [Top Pole]
         N_final = np.vstack([bot_pole_N, N_grid, top_pole_N])
-        My_final = np.vstack([bot_pole_M, My_grid, top_pole_M])
-        Mz_final = np.vstack([bot_pole_M, Mz_grid, top_pole_M])
+        My_final = np.vstack([bot_pole_My, My_grid, top_pole_My])
+        Mz_final = np.vstack([bot_pole_Mz, Mz_grid, top_pole_Mz])
 
         return My_final, Mz_final, N_final
 
@@ -881,7 +785,6 @@ class BiaxialMNInteractionSurface:
         surface_pts = self.generate_surface_pivot(
             n_angles=n_angles,
             n_axial_levels=n_axial_levels,
-            include_tension=True
         )
 
         # Prepare matrices for go.Surface (eliminates interior lines)

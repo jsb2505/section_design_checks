@@ -30,8 +30,8 @@ class BaseMaterial(BaseModel, ABC):
         min_length=1,
     )
 
-    density: Optional[float] = Field(
-        None,
+    density: float = Field(
+        ...,
         description="Material density in kg/m³",
         gt=0,
     )
