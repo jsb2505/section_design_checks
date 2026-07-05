@@ -2,7 +2,6 @@
 Quick test to verify the inverse solver works with round-trip verification.
 """
 
-import pytest
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup

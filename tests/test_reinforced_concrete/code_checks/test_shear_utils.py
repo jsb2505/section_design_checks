@@ -4,7 +4,7 @@ Unit tests for EC2 shear utility helpers.
 
 from __future__ import annotations
 
-from math import exp, sqrt
+from math import sqrt
 from types import SimpleNamespace
 
 import pytest

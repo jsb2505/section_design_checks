@@ -18,7 +18,6 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import (
     LoadCase,
 )
 from materials.reinforced_concrete.constitutive import ConcreteModelType
-from materials.reinforced_concrete.materials import ShearRebar
 
 
 def _make_stub_shear_check() -> ShearCheck:

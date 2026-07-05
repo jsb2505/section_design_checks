@@ -76,7 +76,7 @@ class SectionViewer:
 
         # Build hover text for concrete
         concrete_hover_parts = [
-            f"<b>Concrete Section</b>",
+            "<b>Concrete Section</b>",
             f"Section Name: {self.section.section_name or 'unnamed'}",
         ]
 
@@ -173,7 +173,7 @@ class SectionViewer:
 
                 # Build detailed hover text
                 hover_parts = [
-                    f"<b>Rebar</b>",
+                    "<b>Rebar</b>",
                     f"Diameter: ϕ{group.rebar.diameter} mm",
                     f"Grade: {group.rebar.grade}",
                     f"Area: {group.rebar.area:.1f} mm²",

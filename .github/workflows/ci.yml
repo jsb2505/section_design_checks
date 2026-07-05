@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      # Blocking gate: pyflakes (real bugs — undefined names, unused imports) on
+      # production code. The full ruff ruleset and mypy are advisory for now
+      # (there is a pre-existing style/type backlog); tighten as it is cleared.
+      - name: ruff (pyflakes, blocking)
+        run: ruff check --select F materials
+      - name: ruff (full, advisory)
+        run: ruff check materials tests
+        continue-on-error: true
+      - name: mypy (advisory)
+        run: mypy materials
+        continue-on-error: true
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,viz]"
+      - name: pytest (fast lane + coverage)
+        run: pytest
+
+  test-slow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,viz]"
+      - name: pytest (slow lane — biaxial surface regression)
+        run: pytest -m slow --no-cov

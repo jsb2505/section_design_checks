@@ -14,7 +14,6 @@ import numpy as np
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.analysis.interaction_diagram import (
     MNInteractionDiagram,
-    create_interaction_diagram,
 )
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar

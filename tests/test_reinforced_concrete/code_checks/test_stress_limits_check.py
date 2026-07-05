@@ -24,7 +24,7 @@ from materials.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from materials.reinforced_concrete.materials import Rebar
 from materials.reinforced_concrete.ndp import get_ndp
 
 

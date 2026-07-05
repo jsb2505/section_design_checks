@@ -67,7 +67,7 @@ def test_tension_stiffening_tangent_modulus():
     print(f"  f_ctm = {f_ctm:.2f} MPa")
     print(f"  E_cm = {E_cm:.0f} MPa")
     print(f"  eps_cr = {eps_cr:.6f}")
-    print(f"\n  Strain          E_t (MPa)   Region")
+    print("\n  Strain          E_t (MPa)   Region")
     print(f"  {'='*50}")
 
     for i, (eps, Et) in enumerate(zip(strains, E_t)):
@@ -207,9 +207,9 @@ def test_performance_vs_numerical():
     print(f"  {'='*70}")
     print(f"  {'Average':<20} {avg_analytical:10.1f}         {avg_numerical:10.1f}         {avg_speedup:5.2f}x")
 
-    print(f"\n  [OK] Performance comparison complete")
-    print(f"      Note: Speedup may vary - analytical Jacobian eliminates numerical")
-    print(f"      differentiation overhead but adds tangent modulus calculation cost.")
+    print("\n  [OK] Performance comparison complete")
+    print("      Note: Speedup may vary - analytical Jacobian eliminates numerical")
+    print("      differentiation overhead but adds tangent modulus calculation cost.")
 
     # Main goal is correctness, not necessarily speed
     # Speedup depends on section complexity and material models
@@ -261,7 +261,7 @@ def test_solution_accuracy():
         assert error_M < 0.1, f"M error too large: {error_M}"
         assert error_N < 0.1, f"N error too large: {error_N}"
 
-    print(f"\n  [OK] All solutions accurate to < 0.1 kN")
+    print("\n  [OK] All solutions accurate to < 0.1 kN")
 
 
 if __name__ == "__main__":

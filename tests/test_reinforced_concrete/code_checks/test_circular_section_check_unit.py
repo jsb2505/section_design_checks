@@ -4,7 +4,7 @@ Deterministic unit tests for CircularSectionCheck helper and wrapper logic.
 
 from __future__ import annotations
 
-from math import atan, degrees, isclose, pi, sqrt
+from math import atan, degrees, pi, sqrt
 from types import SimpleNamespace
 
 import pytest

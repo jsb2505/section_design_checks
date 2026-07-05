@@ -9,7 +9,6 @@ These are quick unit tests that catch critical bugs in:
 Based on code review suggestions (Review #4).
 """
 
-import numpy as np
 import pytest
 from materials.reinforced_concrete.geometry import create_rectangular_section
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
@@ -83,7 +82,7 @@ def test_ray_method_boundary_consistency():
 
     print("="*75)
     print(f"\nMaximum error: {max_error:.4f}%")
-    print(f"[OK] All boundary points have utilization ~= 1.0 (within 3%)")
+    print("[OK] All boundary points have utilization ~= 1.0 (within 3%)")
     print("     This confirms ray-curve intersection is geometrically correct.")
 
 
@@ -137,7 +136,7 @@ def test_scaling_property():
 
     print("="*80)
     print(f"\nMaximum error: {max_error:.6f}%")
-    print(f"[OK] Scaling property confirmed: util(k*M, k*N) = k * util(M, N)")
+    print("[OK] Scaling property confirmed: util(k*M, k*N) = k * util(M, N)")
     print("     This validates homogeneity of the capacity method.")
 
 
@@ -198,7 +197,7 @@ def test_jacobian_convergence_with_options():
 
     print("="*95)
     print(f"\nMaximum error: {max_error:.6f} kN")
-    print(f"[OK] Analytical Jacobian converges reliably for all test cases")
+    print("[OK] Analytical Jacobian converges reliably for all test cases")
     print("     Maximum error < 0.1 kN confirms correct implementation.")
 
 
@@ -249,7 +248,7 @@ def test_confined_concrete_convergence():
             pytest.fail(f"Confined concrete solver failed: {e}")
 
     print("="*60)
-    print(f"[OK] Numerical Jacobian (confined concrete) converges correctly")
+    print("[OK] Numerical Jacobian (confined concrete) converges correctly")
 
 
 def test_tension_stiffening_branch_selection_regression():
@@ -312,7 +311,7 @@ def test_inside_outside_consistency():
     print(f"  utilization: {util_inside:.4f}")
     assert is_inside_flag == True, "Inside point should have is_inside=True"
     assert util_inside < 1.0, f"Inside point should have util < 1.0, got {util_inside:.4f}"
-    print(f"  [OK] Correctly identified as inside (util < 1.0)")
+    print("  [OK] Correctly identified as inside (util < 1.0)")
 
     # Known outside point (large loads that exceed capacity)
     M_outside = 500.0
@@ -326,9 +325,9 @@ def test_inside_outside_consistency():
     print(f"  utilization: {util_outside:.4f}")
     assert is_outside_flag == False, "Outside point should have is_inside=False"
     assert util_outside > 1.0, f"Outside point should have util > 1.0, got {util_outside:.4f}"
-    print(f"  [OK] Correctly identified as outside (util > 1.0)")
+    print("  [OK] Correctly identified as outside (util > 1.0)")
 
-    print(f"\n[OK] Inside/outside classification is consistent")
+    print("\n[OK] Inside/outside classification is consistent")
 
 
 if __name__ == "__main__":

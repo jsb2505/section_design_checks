@@ -64,7 +64,21 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
-ignore = []
+# This is a structural-engineering library: variable/argument/function names
+# deliberately follow Eurocode notation (N_Ed, V_Rd, M_cap, A_s, f_cd, ...),
+# so the pep8-naming rules that forbid non-lowercase identifiers are disabled.
+# They are domain-correct, not debt.
+ignore = [
+    "N802",  # function name not lowercase (e.g. find_V_Rd_c)
+    "N803",  # argument name not lowercase (e.g. N_Ed, My_Ed)
+    "N806",  # local variable not lowercase (e.g. M_cap, A_s)
+    "N815",  # mixedCase class variable
+    "N816",  # mixedCase global
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests favour readability over import hygiene/line length.
+"tests/**" = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -73,8 +87,6 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = "test_*.py"
-python_functions = "test_*"
-addopts = "--cov=materials --cov-report=html --cov-report=term-missing"
+# pytest configuration lives in pytest.ini (the single source of truth).
+# A [tool.pytest.ini_options] block here is silently ignored by pytest whenever
+# pytest.ini exists, so it must not be reintroduced.

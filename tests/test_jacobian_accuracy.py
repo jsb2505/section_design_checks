@@ -101,11 +101,11 @@ def test_jacobian_accuracy_at_points():
         print(f"{label:<25} {max_error:11.6f}  {frobenius_error:17.6f}  {status:<10}")
 
         if relative_error > 0.01:
-            print(f"  Analytical Jacobian:")
+            print("  Analytical Jacobian:")
             print(f"    {jac_analytical}")
-            print(f"  Numerical Jacobian:")
+            print("  Numerical Jacobian:")
             print(f"    {jac_numerical}")
-            print(f"  Error matrix:")
+            print("  Error matrix:")
             print(f"    {error_matrix}")
             print()
 

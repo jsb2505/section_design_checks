@@ -9,7 +9,6 @@ Verifies that:
 
 import time
 import numpy as np
-import pytest
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
@@ -140,7 +139,7 @@ def test_analytical_jacobian_iteration_count():
     assert abs(point.M - M_target) < 0.01
     assert abs(point.N - N_target) < 0.01
 
-    print(f"\n[PASS] Analytical Jacobian solved within max_nfev=50 iterations")
+    print("\n[PASS] Analytical Jacobian solved within max_nfev=50 iterations")
 
 
 def test_analytical_jacobian_performance():
@@ -162,10 +161,10 @@ def test_analytical_jacobian_performance():
         eps_top, eps_bottom = diagram.find_strains_for_MN(M, N)
     analytical_time = time.time() - t0
 
-    print(f"\n=== Analytical Jacobian Performance ===")
+    print("\n=== Analytical Jacobian Performance ===")
     print(f"Total time for {len(test_cases)} cases: {analytical_time:.3f}s")
     print(f"Time per case: {analytical_time*1000/len(test_cases):.1f}ms")
-    print(f"[PASS] Analytical Jacobian performance measured")
+    print("[PASS] Analytical Jacobian performance measured")
 
 
 def test_tangent_modulus_concrete():
@@ -196,7 +195,7 @@ def test_tangent_modulus_concrete():
             # Should be less than typical E_c (~30-40 GPa)
             assert E_t < 50000.0, f"E_t too large at strain={strain}: {E_t}"
 
-    print(f"\n[PASS] Concrete tangent modulus computed correctly")
+    print("\n[PASS] Concrete tangent modulus computed correctly")
 
 
 def test_tangent_modulus_steel():
@@ -235,7 +234,7 @@ def test_tangent_modulus_steel():
                 # Inclined: expect positive hardening modulus < E_s
                 assert 0 < E_t < E_s * 0.1
 
-    print(f"\n[PASS] Steel tangent modulus computed correctly")
+    print("\n[PASS] Steel tangent modulus computed correctly")
 
 
 def test_jacobian_at_rectangular_region():
@@ -254,7 +253,7 @@ def test_jacobian_at_rectangular_region():
     assert not np.any(np.isnan(J)), "Jacobian contains NaN"
     assert not np.any(np.isinf(J)), "Jacobian contains Inf"
 
-    print(f"\n[PASS] Jacobian computed correctly with concrete in rectangular region")
+    print("\n[PASS] Jacobian computed correctly with concrete in rectangular region")
 
 
 if __name__ == "__main__":

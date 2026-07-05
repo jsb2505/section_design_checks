@@ -105,11 +105,11 @@ def test_initial_guess_produces_correct_quadrant():
         # Check that signs match (correct quadrant)
         if abs(N_target) > 1e-6:
             assert (point.N > 0) == (N_target > 0), f"N sign mismatch: {point.N} vs {N_target}"
-            print(f"  [OK] N sign correct")
+            print("  [OK] N sign correct")
 
         if abs(M_target) > 1e-6:
             assert (point.M > 0) == (M_target > 0), f"M sign mismatch: {point.M} vs {M_target}"
-            print(f"  [OK] M sign correct")
+            print("  [OK] M sign correct")
 
     print("\n[OK] All initial guesses produce correct quadrant!")
 
@@ -146,7 +146,7 @@ def test_solver_convergence_with_correct_guess():
         assert abs(point.N - N_target) < 1.0, f"N error: {abs(point.N - N_target):.2f}"
         assert abs(point.M - M_target) < 1.0, f"M error: {abs(point.M - M_target):.2f}"
 
-        print(f"  [OK] Converged successfully")
+        print("  [OK] Converged successfully")
 
     print("\n[OK] All cases converged with correct initial guesses!")
 

@@ -80,7 +80,7 @@ def test_tangent_modulus_vs_finite_difference():
         (0.0015, "Compression (parabolic)"),  # Avoid eps_c2 transition
     ]
 
-    print(f"Material: C30/37")
+    print("Material: C30/37")
     print(f"  f_ctm = {f_ctm:.3f} MPa")
     print(f"  E_cm = {E_cm:.0f} MPa")
     print(f"  eps_cr = {eps_cr:.6f}\n")
@@ -158,9 +158,9 @@ def test_specific_post_cracking_sign():
     strains = np.array([eps_post_crack - 0.0001, eps_post_crack, eps_post_crack + 0.0001])
     stresses = diagram._concrete_stress_with_options(strains)
 
-    print(f"Post-cracking behavior check:")
+    print("Post-cracking behavior check:")
     print(f"  eps_cr = {eps_cr:.6f}\n")
-    print(f"  Strain       Stress (MPa)   Physical Meaning")
+    print("  Strain       Stress (MPa)   Physical Meaning")
     print(f"  {strains[0]:.6f}   {stresses[0]:10.4f}   <- More tension")
     print(f"  {strains[1]:.6f}   {stresses[1]:10.4f}   <- Middle")
     print(f"  {strains[2]:.6f}   {stresses[2]:10.4f}   <- Less tension")
@@ -174,7 +174,7 @@ def test_specific_post_cracking_sign():
     # All should be negative (tension)
     assert all(s < 0 for s in stresses), "Tension stresses should be negative"
 
-    print(f"\n  [OK] Stress correctly weakens as tension increases")
+    print("\n  [OK] Stress correctly weakens as tension increases")
 
     # Analytical tangent
     Et = diagram._concrete_tangent_modulus_with_options(np.array([eps_post_crack]))[0]
@@ -184,7 +184,7 @@ def test_specific_post_cracking_sign():
     # Should be NEGATIVE (softening behavior)
     assert Et < 0, f"Post-cracking tangent must be negative! Got {Et}"
 
-    print(f"  [OK] Tangent modulus is negative (softening)")
+    print("  [OK] Tangent modulus is negative (softening)")
 
     # Verify formula matches expected value
     beta = 0.6
@@ -194,7 +194,7 @@ def test_specific_post_cracking_sign():
 
     print(f"  [OK] Matches formula: -f_ctm * beta / (5*eps_cr) = {Et_expected:.2f}")
 
-    print(f"\n[OK] Post-cracking sign is correct (negative tangent = softening)")
+    print("\n[OK] Post-cracking sign is correct (negative tangent = softening)")
 
 
 if __name__ == "__main__":
