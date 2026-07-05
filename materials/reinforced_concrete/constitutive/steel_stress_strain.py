@@ -142,16 +142,23 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
 
         Returns:
             array of stresses in MPa
+
+        Note:
+            Supports complex input for complex-step differentiation (preserves imaginary part).
+            For branch selection (comparisons), uses real part only.
         """
-        strains = np.asarray(strains, dtype=float)
+        # Accept complex input for complex-step differentiation
+        strains = np.asarray(strains)
         stresses = np.zeros_like(strains)
 
-        abs_strains = np.abs(strains)
+        # Use real part for comparisons and branch selection
+        strains_real = np.real(strains)
+        abs_strains_real = np.abs(strains_real)
         # Use sign like scalar path (treat 0 as +)
-        signs = np.where(strains >= 0.0, 1.0, -1.0)
+        signs = np.where(strains_real >= 0.0, 1.0, -1.0)
 
-        # Elastic region
-        elastic = abs_strains <= self.epsilon_y
+        # Elastic region (use real for comparison)
+        elastic = abs_strains_real <= self.epsilon_y
         stresses[elastic] = self.steel.E_s * strains[elastic]
 
         # Plastic region
@@ -164,10 +171,18 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
             return stresses
 
         # Inclined branch
-        clipped = np.minimum(abs_strains[plastic], self.steel.epsilon_ud)
-        strain_ratio = (clipped - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
-        stress_mag = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
-        stresses[plastic] = signs[plastic] * stress_mag
+        # For complex-step: skip clipping to preserve derivatives (discontinuity breaks complex-step)
+        if np.iscomplexobj(strains):
+            abs_strains_complex = np.abs(strains[plastic])
+            strain_ratio = (abs_strains_complex - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
+            stress_mag = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
+            stresses[plastic] = signs[plastic] * stress_mag
+        else:
+            # Real case: clip at ultimate strain
+            abs_strains_clipped = np.minimum(abs_strains_real[plastic], self.steel.epsilon_ud)
+            strain_ratio = (abs_strains_clipped - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
+            stress_mag = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
+            stresses[plastic] = signs[plastic] * stress_mag
 
         return stresses
 

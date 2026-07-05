@@ -66,7 +66,13 @@ SteelBranchType = Literal["inclined", "horizontal"]
 
 
 def _as_float(x: Any) -> float:
-    """Convert numpy scalars cleanly to Python float."""
+    """
+    Convert numpy scalars cleanly to Python float.
+
+    For complex-step differentiation, extracts real part.
+    """
+    if np.iscomplexobj(x):
+        return float(np.real(x))
     return float(x)  # raises if not convertible (good)
 
 
@@ -388,7 +394,8 @@ class MNInteractionDiagram:
 
         # linear interpolation in y
         t = (y - y_bot) / h
-        return (eps_bottom + (eps_top - eps_bottom) * t).astype(np.float64)
+        # Preserve complex type for complex-step differentiation
+        return eps_bottom + (eps_top - eps_bottom) * t
 
 
     def calculate_point_from_end_strains(
@@ -434,16 +441,21 @@ class MNInteractionDiagram:
         y_bot = float(self.section_bottom)
         h = float(self.section_height)
 
+        # For complex-step: use real part for comparisons
+        eps_top_real = np.real(eps_top) if np.iscomplexobj(eps_top) else eps_top
+        eps_bottom_real = np.real(eps_bottom) if np.iscomplexobj(eps_bottom) else eps_bottom
+
         # If eps_top == eps_bottom => no curvature => NA "at infinity"
-        if abs(eps_top - eps_bottom) < 1e-18:
-            na_depth = (1e6 * h) if eps_top > 0 else (-1e6 * h)
+        if abs(eps_top_real - eps_bottom_real) < 1e-18:
+            na_depth = (1e6 * h) if eps_top_real > 0 else (-1e6 * h)
             comp_from_bottom = False
         else:
             # Solve eps(y)=0 for y in [y_bot, y_top]
             # eps(y)=eps_bottom + (eps_top-eps_bottom)*(y-y_bot)/h
-            y0 = y_bot - h * (eps_bottom / (eps_top - eps_bottom))
+            # Use real part for y0 calculation (geometry should be real)
+            y0 = y_bot - h * (eps_bottom_real / (eps_top_real - eps_bottom_real))
             # "compression face" for metadata: side with larger strain (more compression)
-            comp_from_bottom = (eps_bottom > eps_top)
+            comp_from_bottom = (eps_bottom_real > eps_top_real)
 
             # Convert to "NA depth from compression face" only if inside height
             if y_bot - 1e-9 <= y0 <= y_top + 1e-9:
@@ -454,14 +466,15 @@ class MNInteractionDiagram:
             else:
                 # NA outside section => very small/large surrogate depth
                 # sign indicates which side (outside) in a consistent way
-                na_depth = 1e6 * h if (eps_top > 0 or eps_bottom > 0) else -1e6 * h
+                na_depth = 1e6 * h if (eps_top_real > 0 or eps_bottom_real > 0) else -1e6 * h
 
-        max_conc = float(np.max(strains[conc_mask])) if np.any(conc_mask) else 0.0
-        max_steel = float(np.max(np.abs(strains[steel_mask]))) if np.any(steel_mask) else 0.0
+        # Extract real parts for metadata (strains might be complex during differentiation)
+        max_conc = float(np.real(np.max(strains[conc_mask]))) if np.any(conc_mask) else 0.0
+        max_steel = float(np.real(np.max(np.abs(strains[steel_mask])))) if np.any(steel_mask) else 0.0
 
         return InteractionPoint(
-            N=float(N),
-            M=float(M),
+            N=_as_float(N),
+            M=_as_float(M),
             neutral_axis_depth=float(na_depth),
             compression_from_bottom=bool(comp_from_bottom),
             max_concrete_strain=max_conc,
@@ -730,13 +743,27 @@ class MNInteractionDiagram:
         if initial_guess is None:
             initial_guess = self._estimate_initial_strains(M_target, N_target)
 
-        # Solve using least squares (handles singular Jacobians better than root)
+        # Define strain bounds to prevent solver wandering into absurd strain space
+        # This prevents numerical artifacts where extreme strains "match" forces via clipping
+        eps_cu = self.concrete_model.get_ultimate_strain()  # Compression limit (~0.0035)
+        eps_t = self._eps_tension_limit()  # Tension limit (steel-controlled, ~0.01-0.05)
+
+        # Bounds: (eps_top, eps_bottom) each in [-eps_t, +eps_cu]
+        lower_bounds = np.array([-eps_t, -eps_t])  # Maximum tension (negative)
+        upper_bounds = np.array([+eps_cu, +eps_cu])  # Maximum compression (positive)
+
+        # Solve using least squares with 2-point numerical Jacobian
+        # Note: Complex-step Jacobian is faster but incompatible with piecewise constitutive models
+        # (see docs/COMPLEX_STEP_INVESTIGATION.md for details)
         result = least_squares(
             residual,
             x0=np.array(initial_guess),
+            bounds=(lower_bounds, upper_bounds),  # Prevent absurd strains
+            jac='2-point',  # Numerical Jacobian (reliable, handles piecewise functions)
             ftol=tol,
             xtol=tol,
-            max_nfev=50,  # Limit function evaluations
+            gtol=tol,  # Gradient tolerance (helps convergence for awkward load points)
+            max_nfev=200,  # Increased from 50 for complex sections/awkward load combos
         )
 
         if not result.success:
@@ -760,7 +787,7 @@ class MNInteractionDiagram:
         Strategy:
         - Use sign of M and N to determine likely loading condition
         - Place strains in range that satisfies sign conventions:
-            * Compression strain > 0 (sign of concrete model)
+            * Compression strain > 0 (concrete model expects positive for compression)
             * Tension strain < 0 (negative for steel in tension)
         - Avoid extreme values that might be outside model validity
 
@@ -771,10 +798,16 @@ class MNInteractionDiagram:
         Returns:
             (ε_top, ε_bottom): Initial guess for strain pair
 
-        Notes:
-            - For pure axial (M ≈ 0): uniform compression or tension
-            - For pure bending (N ≈ 0): balanced with NA near mid-height
-            - For combined loading: adjust strain profile based on eccentricity
+        Sign convention (critical!):
+            - Compression strain = POSITIVE (concrete model)
+            - Tension strain = NEGATIVE (steel in tension)
+            - This matches the fiber-based calculation in calculate_point_from_end_strains
+
+        Loading cases:
+            - Pure compression (N>0, M≈0): Both faces compressed → (+eps, +eps)
+            - Sagging (M>0): Top compressed, bottom in tension → (+eps, -eps)
+            - Hogging (M<0): Bottom compressed, top in tension → (-eps, +eps)
+            - Pure tension (N<0, M≈0): Both faces in tension → (-eps, -eps)
         """
         eps_cu = self.concrete_model.get_ultimate_strain()  # Typical: 0.0035
         eps_y = self.steel_models[0].epsilon_y if self.steel_models else 0.002
@@ -782,33 +815,33 @@ class MNInteractionDiagram:
         # Classify loading condition
         if N > 0:  # Compression dominant
             if abs(M) < 1e-6:  # Pure compression
-                # Uniform compression strain (both negative in our sign convention)
-                return (-eps_cu * 0.8, -eps_cu * 0.8)
+                # Uniform compression strain (both POSITIVE)
+                return (+eps_cu * 0.8, +eps_cu * 0.8)
             elif M > 0:  # Compression + positive moment (sagging)
-                # Bottom more compressed → larger compression strain at bottom
-                return (-eps_cu * 0.5, -eps_cu)
+                # Top more compressed, bottom less compressed or in tension
+                return (+eps_cu * 0.8, +eps_cu * 0.2)
             else:  # Compression + negative moment (hogging)
-                # Top more compressed → larger compression strain at top
-                return (-eps_cu, -eps_cu * 0.5)
+                # Bottom more compressed, top less compressed or in tension
+                return (+eps_cu * 0.2, +eps_cu * 0.8)
 
         elif N < 0:  # Tension dominant
             if abs(M) < 1e-6:  # Pure tension
-                # Uniform tension strain (positive in our sign convention for steel)
-                return (eps_y * 2.0, eps_y * 2.0)
+                # Uniform tension strain (both NEGATIVE)
+                return (-eps_y * 2.0, -eps_y * 2.0)
             elif M > 0:  # Tension + positive moment
                 # Bottom in more tension
-                return (eps_y, eps_y * 3.0)
+                return (-eps_y, -eps_y * 3.0)
             else:  # Tension + negative moment
                 # Top in more tension
-                return (eps_y * 3.0, eps_y)
+                return (-eps_y * 3.0, -eps_y)
 
         else:  # N ≈ 0: Pure bending
             if M > 0:  # Positive moment (sagging)
-                # Top compressed, bottom in tension
-                return (-eps_cu * 0.8, eps_y * 2.0)
+                # Top compressed (+), bottom in tension (-)
+                return (+eps_cu * 0.8, -eps_y * 2.0)
             elif M < 0:  # Negative moment (hogging)
-                # Bottom compressed, top in tension
-                return (eps_y * 2.0, -eps_cu * 0.8)
+                # Bottom compressed (+), top in tension (-)
+                return (-eps_y * 2.0, +eps_cu * 0.8)
             else:  # M ≈ 0 and N ≈ 0: Zero force
                 return (0.0, 0.0)
 

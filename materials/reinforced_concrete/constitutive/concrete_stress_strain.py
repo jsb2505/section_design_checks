@@ -42,20 +42,35 @@ def _apply_ultimate_tolerance_clip(
     """
     Apply tolerance-based clipping at ultimate strain.
 
+    For complex-step differentiation: Clipping creates discontinuities that break
+    the complex-step method. When complex input is detected, we skip clipping entirely
+    and let the constitutive model handle strains beyond limits naturally.
+
     Returns:
         strains_clipped: copy of strains with values in (ε_cu, ε_cu+tol] clipped to ε_cu
         killed: boolean mask where strain > ε_cu + tol (these should yield stress=0)
     """
-    strains = np.asarray(strains, dtype=float)
-    if tol <= 0.0:
-        # No tolerance behaviour requested: no clipping, hard cutoff handled by caller
-        killed = strains > epsilon_cu
+    # Accept complex input for complex-step differentiation
+    strains = np.asarray(strains)
+
+    # For complex-step: skip clipping to preserve derivatives
+    # The solver won't actually reach these extreme strains, so this is safe
+    if np.iscomplexobj(strains):
+        killed = np.zeros(strains.shape, dtype=bool)
         return strains, killed
 
-    killed = strains > (epsilon_cu + tol)
+    # Use real part for comparisons
+    strains_real = strains
+
+    if tol <= 0.0:
+        # No tolerance behaviour requested: no clipping, hard cutoff handled by caller
+        killed = strains_real > epsilon_cu
+        return strains, killed
+
+    killed = strains_real > (epsilon_cu + tol)
     strains_clipped = strains.copy()
 
-    near = (strains > epsilon_cu) & (~killed)
+    near = (strains_real > epsilon_cu) & (~killed)
     if np.any(near):
         strains_clipped[near] = epsilon_cu
 
@@ -267,33 +282,48 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         return float(self.f_c * (1.0 - ratio ** self.concrete.n))
 
     def get_stress_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        """Vectorized stress calculation."""
-        strains = np.asarray(strains, dtype=float)
+        """
+        Vectorized stress calculation.
+
+        Supports complex input for complex-step differentiation (preserves imaginary part).
+        For branch selection (comparisons), uses real part only.
+        """
+        # Accept complex input for complex-step differentiation
+        strains = np.asarray(strains)
         stresses = np.zeros_like(strains)
 
-        comp = strains > 0.0
+        # Use real part for comparisons (branch selection)
+        strains_real = np.real(strains)
+        comp = strains_real > 0.0
         if not np.any(comp):
             return stresses
 
         eps_cu = float(self.concrete.epsilon_cu2)
-        strains_clipped, killed = _apply_ultimate_tolerance_clip(
-            strains=strains,
+
+        # Clip using real part, but preserve complex
+        strains_real_clipped, killed = _apply_ultimate_tolerance_clip(
+            strains=strains_real,
             epsilon_cu=eps_cu,
             tol=float(self.ultimate_strain_tol),
         )
+        # Reconstruct complex with clipped real part
+        if np.iscomplexobj(strains):
+            strains_clipped = strains_real_clipped + 1j * np.imag(strains)
+        else:
+            strains_clipped = strains_real_clipped
 
         valid = comp & (~killed)
         if not np.any(valid):
             return stresses
 
-        # Parabolic region: 0 < ε <= ε_c2
-        parabolic = valid & (strains_clipped <= self.concrete.epsilon_c2)
+        # Parabolic region: 0 < ε <= ε_c2 (use real for comparison)
+        parabolic = valid & (strains_real_clipped <= self.concrete.epsilon_c2)
         if np.any(parabolic):
             ratio = 1.0 - strains_clipped[parabolic] / self.concrete.epsilon_c2
             stresses[parabolic] = self.f_c * (1.0 - ratio ** self.concrete.n)
 
-        # Rectangular region: ε_c2 < ε <= ε_cu2
-        rectangular = valid & (strains_clipped > self.concrete.epsilon_c2)
+        # Rectangular region: ε_c2 < ε <= ε_cu2 (use real for comparison)
+        rectangular = valid & (strains_real_clipped > self.concrete.epsilon_c2)
         stresses[rectangular] = self.f_c
 
         return stresses
