@@ -8,8 +8,8 @@ N_Ed, M_Ed, and V_Ed are now parameters to perform_check(),not fields.
 This enables checking multiple load cases against the same section efficiently.
 """
 
-from typing import Optional, ClassVar, cast
-from math import atan, degrees, radians, sin, sqrt
+from typing import Optional, cast
+from math import atan, degrees, radians, sin
 import warnings
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
@@ -215,7 +215,7 @@ class ShearCheck(BaseCodeCheck):
         description=(
             "Use increased ν₁ factor per EC2 §6.2.3(3) Note 2 when shear reinforcement "
             "stress is below 80% of f_yk (σ_s < 0.8·f_yk). This allows higher V_Rd,max "
-            "capacity but requires iterative calculation. Off by default as rarely used in practice."
+            "capacity but requires iterative calculation."
         ),
     )
 
@@ -244,10 +244,6 @@ class ShearCheck(BaseCodeCheck):
     _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
     _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
     _diagram_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
-
-    # NDP cot(θ) limits from National Annex (EC2 §6.2.3(2))
-    MIN_COT_THETA: ClassVar[float] = cast(float, get_ndp("cot_theta_lower_lim"))  # θ = 45°
-    MAX_COT_THETA: ClassVar[float] = cast(float, get_ndp("cot_theta_upper_lim"))  # θ = 21.8°
 
     @model_validator(mode="after")
     def _validate_concrete_model_type(self) -> "ShearCheck":
@@ -647,17 +643,18 @@ class ShearCheck(BaseCodeCheck):
         Returns:
             V_Rd,c in kN
         """
-        C_Rd_c = 0.18 / self.gamma_c_design  # TODO the coefficient is an ndp
+        c_rd_c_coeff = cast(float, get_ndp("c_rd_c_coefficient"))
+        C_Rd_c = c_rd_c_coeff / self.gamma_c_design
         k = find_k_factor(d)
         f_ck = self.concrete.f_ck
-        k_1 = 0.15  # TODO this is an ndp
+        k_1 = cast(float, get_ndp("k_1_shear"))
         b_w = self.breadth
 
         # Main formula (Eq. 6.2a)
         V_Rd_c = (C_Rd_c * k * ((100 * rho_l * f_ck) ** (1/3)) + k_1 * sigma_cp) * b_w * d
 
         # Minimum value (Eq. 6.2b)
-        v_min = find_v_min(f_ck, k)  # TODO this is an ndp
+        v_min = find_v_min(f_ck, k, d, self.gamma_c_design)
         b_w = self.breadth
         V_Rd_c_min = (v_min + k_1 * sigma_cp) * b_w * d
         V_Rd_c_kN = to_kn(max(V_Rd_c, V_Rd_c_min), ForceUnit.N)
@@ -665,7 +662,32 @@ class ShearCheck(BaseCodeCheck):
         return max(V_Rd_c_kN, 0)  # Prevents negative values if sigma_cp is large negative
 
 
-    def find_V_Rd_s(self, cot_theta: float, z: float) -> float:
+    def find_V_Ed_max_unreinforced(self, d: float) -> float:
+        """
+        Maximum shear force for members without shear reinforcement (§6.2.2(6), Eq. 6.5).
+
+        V_Ed,max = 0.5·b_w·d·ν·f_cd
+
+        This limit applies when no shear reinforcement is provided. It ensures
+        diagonal compression failure does not occur.
+
+        Args:
+            d: Effective depth in mm
+
+        Returns:
+            V_Ed,max in kN
+        """
+        b_w = self.breadth
+        f_cd = self.f_cd_design
+        nu = find_nu_factor(self.concrete.f_ck)
+
+        V_Ed_max = 0.5 * b_w * d * nu * f_cd
+        return to_kn(V_Ed_max, ForceUnit.N)
+
+
+    def find_V_Rd_s(
+        self, cot_theta: float, z: float, use_note_2: bool = False
+    ) -> float:
         """
         Shear resistance of shear reinforcement (§6.2.3(3), Eq. 6.8).
 
@@ -674,65 +696,48 @@ class ShearCheck(BaseCodeCheck):
         Args:
             cot_theta: Cotangent of strut angle (pre-clamped)
             z: Lever arm in mm
+            use_note_2: If True, use reduced f_ywd = 0.8·f_ywk per Note 2 requirement
 
         Returns:
             V_Rd,s in kN
+
+        Note:
+            Per EC2 §6.2.3(3) Note 2: If the increased ν₁ from Note 2 is used,
+            f_ywd should be reduced to 0.8·f_ywk for V_Rd,s calculation.
         """
         if self.shear_reinforcement is None:
             raise ValueError("V_Rd_s cannot be found without providing shear reinforcement.")
 
         A_sw_over_s = self.shear_reinforcement.area_per_unit_length
-        f_ywd = self.f_ywd_design
         link_angle_rads = radians(self.shear_reinforcement.angle)
+
+        # Per Note 2: when using increased ν₁, f_ywd is reduced to 0.8·f_ywk
+        if use_note_2:
+            f_ywd = 0.8 * self.shear_reinforcement.f_yk
+        else:
+            f_ywd = self.f_ywd_design
 
         V_Rd_s = A_sw_over_s * z * f_ywd * (cot_theta + cot(link_angle_rads)) * sin(link_angle_rads)
         return to_kn(V_Rd_s, ForceUnit.N)
 
 
-    def find_V_Rd_max(self, cot_theta: float, z: float, sigma_cp: float) -> float:
+    def find_V_Rd_max(
+        self, cot_theta: float, z: float, sigma_cp: float, use_note_2: bool = False
+    ) -> float:
         """
         Maximum shear resistance limited by crushing of compression struts (§6.2.3, Eq. 6.9).
-
-        Public method - takes computed parameters.
 
         Args:
             cot_theta: Cotangent of strut angle (pre-clamped)
             z: Lever arm in mm
             sigma_cp: Compressive stress from axial force in MPa
+            use_note_2: If True, use increased ν₁ from Note 2 (default: False)
 
         Returns:
             V_Rd,max in kN
         """
         if self.shear_reinforcement is None:
             raise ValueError("V_Rd_max cannot be found without providing shear reinforcement.")
-        
-        f_cd = self.f_cd_design
-        alpha_cw = find_alpha_cw(f_cd, sigma_cp)
-
-        b_w = self.breadth
-        nu_1 = find_nu_1_factor(self.concrete.f_ck, self.shear_reinforcement.angle)
-
-        link_angle_rads = radians(self.shear_reinforcement.angle)
-        V_Rd_max = (alpha_cw * b_w * z * nu_1 * f_cd) * (cot_theta + cot(link_angle_rads)) / (1 + cot_theta**2)
-        return to_kn(V_Rd_max, ForceUnit.N)
-
-    def _find_V_Rd_max_with_nu_1(
-        self, cot_theta: float, z: float, sigma_cp: float, use_note_2: bool
-    ) -> float:
-        """
-        Internal helper to calculate V_Rd,max with specified ν₁ formula (Note 1 or Note 2).
-
-        Args:
-            cot_theta: Cotangent of strut angle (pre-clamped)
-            z: Lever arm in mm
-            sigma_cp: Compressive stress from axial force in MPa
-            use_note_2: If True, use Note 2 formula; otherwise use Note 1
-
-        Returns:
-            V_Rd,max in kN
-        """
-        if self.shear_reinforcement is None:
-            raise ValueError("V_Rd,max cannot be found without providing shear reinforcement.")
 
         f_cd = self.f_cd_design
         alpha_cw = find_alpha_cw(f_cd, sigma_cp)
@@ -746,22 +751,103 @@ class ShearCheck(BaseCodeCheck):
 
         link_angle_rads = radians(self.shear_reinforcement.angle)
         V_Rd_max = (alpha_cw * b_w * z * nu_1 * f_cd) * (cot_theta + cot(link_angle_rads)) / (1 + cot_theta**2)
-        return V_Rd_max / 1000  # TODO unit conversion here
+        return to_kn(V_Rd_max, ForceUnit.N)
+
+
+    def _calculate_K(self, z: float, sigma_cp: float, use_note_2: bool = False) -> float:
+        """
+        Calculate K parameter for cot(θ) determination.
+
+        K = α_cw · b_w · z · ν₁ · f_cd
+
+        This value is used in find_cot_theta_for_V_Ed. When using Note 2 iteration,
+        K must be recalculated because ν₁ changes.
+
+        Args:
+            z: Lever arm in mm
+            sigma_cp: Compressive stress from axial force in MPa
+            use_note_2: If True, use increased ν₁ from Note 2
+
+        Returns:
+            K in N (not kN)
+        """
+        if self.shear_reinforcement is None:
+            raise ValueError("K cannot be calculated without shear reinforcement.")
+
+        f_cd = self.f_cd_design
+        alpha_cw = find_alpha_cw(f_cd, sigma_cp)
+        b_w = self.breadth
+
+        if use_note_2:
+            nu_1 = find_nu_1_factor_note_2(self.concrete.f_ck, self.shear_reinforcement.angle)
+        else:
+            nu_1 = find_nu_1_factor(self.concrete.f_ck, self.shear_reinforcement.angle)
+
+        return alpha_cw * b_w * z * nu_1 * f_cd
+
+
+    def _find_cot_theta_limits(
+        self,
+        sigma_cp: float,
+        z: float,
+        V_Ed: float,
+    ) -> tuple[float, float]:
+        """
+        Compute cot(θ) limits for this load case.
+
+        For EU/EU_UK: constants (1.0 to 2.5)
+        For EU_DE: max limit depends on stress state per German NA formula.
+
+        Args:
+            sigma_cp: Axial compressive stress in MPa
+            z: Lever arm in mm
+            V_Ed: Design shear force in kN (absolute value)
+
+        Returns:
+            (cot_theta_min, cot_theta_max)
+        """
+        # Minimum cot(theta) - typically constant
+        min_val = get_ndp("cot_theta_lower_lim")
+        cot_min = float(min_val() if callable(min_val) else min_val)
+
+        # Maximum cot(theta) - may be callable for German NA
+        max_val = get_ndp("cot_theta_upper_lim")
+        if callable(max_val):
+            # German NA formula requires these parameters
+            V_Ed_N = from_kn(V_Ed, ForceUnit.N) if V_Ed > 0 else 1.0  # Avoid div/0
+            cot_max = float(max_val(
+                f_ck=self.concrete.f_ck,
+                f_cd=self.f_cd_design,
+                sigma_cp=sigma_cp,
+                b_w=self.breadth,
+                z=z,
+                V_Ed=V_Ed_N,
+            ))
+        else:
+            cot_max = float(max_val)
+
+        # Ensure valid range (protect against edge cases in formulas)
+        cot_max = max(cot_min, cot_max)
+
+        return cot_min, cot_max
+
 
     def _find_V_Rd_max_with_note_2_iteration(
-        self, V_Ed: float, z: float, sigma_cp: float, K: float
+        self, V_Ed: float, z: float, sigma_cp: float
     ) -> tuple[float, bool]:
         """
-        Calculate V_Rd,max with Note 2 iteration per EC2 §6.2.3(3) Note 2.
+        Calculate V_Rd,max with ν₁ Note 2 iteration per EC2 §6.2.3(3) Note 2.
 
         Iterates to check if σ_s < 0.8·f_yk, allowing increased ν₁ factor.
-        Detects oscillation and reverts to Note 1 if needed.
+        Detects oscillation and reverts to ν₁ Note 1 if needed.
+
+        Note: K is recalculated internally for each iteration because ν₁ changes
+        between Note 1 and Note 2, which affects the cot(θ) determination.
 
         Args:
             V_Ed: Design shear force in kN (for stress calculation)
             z: Lever arm in mm
             sigma_cp: Compressive stress from axial force in MPa
-            K: Shear capacity parameter from V_Rd_s calculation
 
         Returns:
             Tuple of (V_Rd,max in kN, used_note_2: bool)
@@ -770,21 +856,25 @@ class ShearCheck(BaseCodeCheck):
             raise ValueError("Cannot iterate V_Rd,max without shear reinforcement.")
 
         f_yk = self.shear_reinforcement.f_yk
-        threshold = 0.8 * f_yk
+        threshold = 0.8 * f_yk  # as per Note 2
+        f_ywd = self.f_ywd_design
 
-        # Iteration 1: Start with Note 1
+        # Get cot(theta) limits for this load case
+        cot_min, cot_max = self._find_cot_theta_limits(sigma_cp, z, V_Ed)
+
+        # Iteration 1: Calculate with Note 1
+        K_note_1 = self._calculate_K(z, sigma_cp, use_note_2=False)
         cot_theta_1 = find_cot_theta_for_V_Ed(
             V_Ed=V_Ed,
-            K=K,
+            K=K_note_1,
             link_angle_degrees=self.shear_reinforcement.angle,
-            cot_min=self.MIN_COT_THETA,
-            cot_max=self.MAX_COT_THETA,
+            cot_min=cot_min,
+            cot_max=cot_max,
         )
-        V_Rd_max_1 = self._find_V_Rd_max_with_nu_1(self.MIN_COT_THETA, z, sigma_cp, use_note_2=False)
+        V_Rd_max_1 = self.find_V_Rd_max(cot_min, z, sigma_cp, use_note_2=False)
         V_Rd_s_1 = self.find_V_Rd_s(cot_theta_1, z)
 
         # Calculate stress in reinforcement: σ_s = f_ywd · (V_Ed / V_Rd_s)
-        f_ywd = self.f_ywd_design
         sigma_s_1 = f_ywd * (V_Ed / V_Rd_s_1) if V_Rd_s_1 > 0 else f_yk
 
         # Check if Note 2 is applicable
@@ -792,17 +882,20 @@ class ShearCheck(BaseCodeCheck):
             # Stress too high, use Note 1
             return V_Rd_max_1, False
 
-        # Iteration 2: Try Note 2
-        V_Rd_max_2 = self._find_V_Rd_max_with_nu_1(self.MIN_COT_THETA, z, sigma_cp, use_note_2=True)
+        # Iteration 2: Try Note 2 (recalculate K with Note 2's ν₁)
+        # Per Note 2: f_ywd is reduced to 0.8·f_ywk for V_Rd_s calculation
+        K_note_2 = self._calculate_K(z, sigma_cp, use_note_2=True)
         cot_theta_2 = find_cot_theta_for_V_Ed(
             V_Ed=V_Ed,
-            K=K,
+            K=K_note_2,
             link_angle_degrees=self.shear_reinforcement.angle,
-            cot_min=self.MIN_COT_THETA,
-            cot_max=self.MAX_COT_THETA,
+            cot_min=cot_min,
+            cot_max=cot_max,
         )
-        V_Rd_s_2 = self.find_V_Rd_s(cot_theta_2, z)
-        sigma_s_2 = f_ywd * (V_Ed / V_Rd_s_2) if V_Rd_s_2 > 0 else f_yk
+        V_Rd_max_2 = self.find_V_Rd_max(cot_min, z, sigma_cp, use_note_2=True)
+        V_Rd_s_2 = self.find_V_Rd_s(cot_theta_2, z, use_note_2=True)
+        f_ywd_note_2 = 0.8 * f_yk  # Reduced f_ywd per Note 2
+        sigma_s_2 = f_ywd_note_2 * (V_Ed / V_Rd_s_2) if V_Rd_s_2 > 0 else f_yk
 
         # Check for oscillation: Note 2 pushes stress above threshold
         if sigma_s_2 >= threshold:
@@ -905,6 +998,7 @@ class ShearCheck(BaseCodeCheck):
         # 1. Initialize variables that might not be reached
         V_Rd_s: Optional[float] = None
         V_Rd_max: Optional[float] = None
+        V_Ed_max_unreinf: Optional[float] = None
         cot_theta: Optional[float] = None
         z_ec2: Optional[float] = None
         z_mech: Optional[float] = None
@@ -919,24 +1013,41 @@ class ShearCheck(BaseCodeCheck):
 
             z_ec2, z_mech = self.find_lever_arm(M_Ed, N_Ed, d, eps_top, eps_bottom, ignore_compression_steel=ignore_compression_steel)
 
-            # Calculate parameters needed for V_Rd_max (used in both cot_theta calculation and Note 2 iteration)
-            f_cd = self.f_cd_design
-            alpha_cw = find_alpha_cw(f_cd, sigma_cp)
-            b_w = self.breadth
-            nu_1 = find_nu_1_factor(self.concrete.f_ck, reinforcement.angle)
-            K = alpha_cw * b_w * z_ec2 * nu_1 * f_cd
+            # Apply German NA z_cap if applicable: z_cap = max(d - 2·d_2, d - d_2 - 30)
+            z_cap_ndp = get_ndp("z_cap")
+            if z_cap_ndp is not None and callable(z_cap_ndp):
+                # Determine compression face from strains
+                if eps_top is not None and eps_bottom is not None:
+                    compression_face = "top" if eps_top >= eps_bottom else "bottom"
+                else:
+                    # Conservative: assume top compression (typical for sagging)
+                    compression_face = "top"
+
+                d_2 = self.section.get_compression_rebar_depth(compression_face)
+                if d_2 is None:
+                    d_2 = 0.0  # Safe fallback: z_cap = max(d, d - 30) = d
+
+                z_cap = z_cap_ndp(d, d_2)
+                if z_ec2 > z_cap:
+                    z_ec2 = z_cap
+
+            # Get cot(theta) limits for this load case
+            cot_min, cot_max = self._find_cot_theta_limits(sigma_cp, z_ec2, V_Ed)
+
+            # Calculate K for cot_theta determination (uses Note 1 ν₁)
+            K = self._calculate_K(z_ec2, sigma_cp, use_note_2=False)
 
             if cot_theta_override is not None:
                 cot_theta = cot_theta_override
 
-                if cot_theta_override > self.MAX_COT_THETA:
+                if cot_theta_override > cot_max:
                     warnings.warn(
-                        f"Cot theta value provided, cot(θ) = {cot_theta_override}, is greater than stored max value: {self.MAX_COT_THETA}.",
+                        f"Cot theta value provided, cot(θ) = {cot_theta_override}, is greater than max value: {cot_max:.2f}.",
                         stacklevel=2,
                     )
-                elif cot_theta_override < self.MIN_COT_THETA:
+                elif cot_theta_override < cot_min:
                     warnings.warn(
-                        f"Cot theta value provided, cot(θ) = {cot_theta_override}, is smaller than stored min value: {self.MIN_COT_THETA}.",
+                        f"Cot theta value provided, cot(θ) = {cot_theta_override}, is smaller than min value: {cot_min:.2f}.",
                         stacklevel=2,
                     )
             else:
@@ -946,26 +1057,36 @@ class ShearCheck(BaseCodeCheck):
                     V_Ed=V_Ed,
                     K=K,
                     link_angle_degrees=reinforcement.angle,
-                    cot_min=self.MIN_COT_THETA,
-                    cot_max=self.MAX_COT_THETA,
+                    cot_min=cot_min,
+                    cot_max=cot_max,
                 )
 
-            V_Rd_s = self.find_V_Rd_s(cot_theta, z_ec2)
-
             # the maximum capacity of the concrete strut is found using the largest theta (smallest cot_theta)
+            used_note_2 = False
             if self.use_increased_nu_1:
                 # Use EC2 §6.2.3(3) Note 2 iteration to potentially increase nu_1 if stress allows
                 V_Rd_max, used_note_2 = self._find_V_Rd_max_with_note_2_iteration(
-                    V_Ed, z_ec2, sigma_cp, K
+                    V_Ed, z_ec2, sigma_cp
                 )
             else:
-                V_Rd_max = self.find_V_Rd_max(self.MIN_COT_THETA, z_ec2, sigma_cp)
+                V_Rd_max = self.find_V_Rd_max(cot_min, z_ec2, sigma_cp)
+
+            # Calculate V_Rd_s with appropriate f_ywd (reduced if Note 2 is used)
+            V_Rd_s = self.find_V_Rd_s(cot_theta, z_ec2, use_note_2=used_note_2)
 
         # Determine governing capacity
         if self.shear_reinforcement is None:
-            V_Rd = V_Rd_c
-            governing_mode = "concrete (no shear reinforcement)"
-            code_ref = "EC2 §6.2.2"
+            # For unreinforced members, also check V_Ed limit from Eq. 6.5
+            V_Ed_max_unreinf = self.find_V_Ed_max_unreinforced(d)
+
+            if V_Rd_c <= V_Ed_max_unreinf:
+                V_Rd = V_Rd_c
+                governing_mode = "concrete (no shear reinforcement)"
+                code_ref = "EC2 §6.2.2 (Eq. 6.2)"
+            else:
+                V_Rd = V_Ed_max_unreinf
+                governing_mode = "diagonal compression (no shear reinforcement)"
+                code_ref = "EC2 §6.2.2 (Eq. 6.5)"
         else:
 
             assert V_Rd_s is not None and V_Rd_max is not None
@@ -1012,6 +1133,7 @@ class ShearCheck(BaseCodeCheck):
             "N_Ed": N_Ed,
             "V_Rd": V_Rd,
             "V_Rd_c": V_Rd_c,
+            "V_Ed_max_unreinforced": V_Ed_max_unreinf if self.shear_reinforcement is None else None,
             "V_Rd_s": V_Rd_s if self.shear_reinforcement else None,
             "V_Rd_max": V_Rd_max if self.shear_reinforcement else None,
             "governing_mode": governing_mode,
@@ -1088,10 +1210,13 @@ class ShearCheck(BaseCodeCheck):
             else:
                 f_ywd = ShearRebar.f_yd_for()
 
+        # Get cot(theta) limits for this load case
+        cot_min, cot_max = self._find_cot_theta_limits(sigma_cp, z_ec2, V_Ed)
+
         cot_theta_limited = clamp_cot_theta(
             cot_theta=cot_theta,
-            cot_min=self.MIN_COT_THETA,
-            cot_max=self.MAX_COT_THETA
+            cot_min=cot_min,
+            cot_max=cot_max
         )
         
         A_sw_over_s_min = self._find_min_a_sw_over_s()

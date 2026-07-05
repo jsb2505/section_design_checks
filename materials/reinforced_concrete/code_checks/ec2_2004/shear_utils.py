@@ -503,21 +503,31 @@ def find_k_factor(d: float) -> float:
         raise ValueError(f"Effective depth must be > 0, got {d} mm")
     return min(2.0, 1.0 + sqrt(200 / d))
 
-# TODO this is an ndp
-def find_v_min(f_ck: float, k_factor: float) -> float:
+
+def find_v_min(f_ck: float, k_factor: float, d: float, gamma_c: float) -> float:
     """
     Minimum shear strength coefficient (§6.2.2(1), Eq. 6.3N).
 
-    v_min = 0.035·k^(3/2)·√f_ck
+    v_min = coeff·k^(3/2)·√f_ck
+
+    The coefficient is an NDP:
+    - EU: 0.035 (constant)
+    - German NA: varies with d and gamma_c
 
     Args:
         f_ck: Characteristic cylinder strength of concrete in MPa
         k_factor: Size effect factor (§6.2.2(1)) (dimensionless)
+        d: Effective depth in mm (used by some National Annexes)
+        gamma_c: Concrete partial safety factor (used by some National Annexes)
 
     Returns:
         v_min in MPa
     """
-    return 0.035 * (k_factor ** 1.5) * sqrt(f_ck)
+    from materials.reinforced_concrete.ndp import get_ndp_callable
+
+    coeff_fn = get_ndp_callable("v_min_coefficient")
+    coeff = coeff_fn(d, gamma_c)
+    return coeff * (k_factor ** 1.5) * sqrt(f_ck)
 
 
 def sigma_cp_from_N_and_area(N_Ed: float, A_mm2: float) -> float:

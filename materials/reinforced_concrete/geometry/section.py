@@ -1047,8 +1047,72 @@ class RCSection(BaseGeometry):
         d = float(d)
 
         return d
-    
-    
+
+    def get_compression_rebar_depth(
+        self,
+        compression_face: Literal["top", "bottom"] = "top",
+        *,
+        zone_fraction: float = 0.5,
+    ) -> Optional[float]:
+        """
+        Distance d_2 from compression face to centroid of compression reinforcement.
+
+        Used for German NA lever arm cap: z_cap = max(d - 2·d_2, d - d_2 - 30)
+
+        Args:
+            compression_face: "top" or "bottom" compression edge reference.
+            zone_fraction: Fraction of depth considered as compression zone (0 < f <= 1).
+                          0.5 means upper/lower half only.
+
+        Returns:
+            d_2 (mm) or None if no compression reinforcement found.
+        """
+        if not self.rebar_groups:
+            return None
+
+        if compression_face not in ("top", "bottom"):
+            raise ValueError(f"compression_face must be 'top' or 'bottom', got {compression_face}")
+
+        if not (0.0 < zone_fraction <= 1.0):
+            raise ValueError(f"zone_fraction must be in (0, 1], got {zone_fraction}")
+
+        _, min_y, _, max_y = self.get_bounding_box()
+        h = max_y - min_y
+        if h <= 0.0:
+            return None
+
+        # Define the compression zone band
+        if compression_face == "top":
+            y_limit = max_y - zone_fraction * h  # include bars with y >= y_limit
+            def in_zone(y: float) -> bool:
+                return y >= y_limit - _GEOM_TOL_MM
+        else:
+            y_limit = min_y + zone_fraction * h  # include bars with y <= y_limit
+            def in_zone(y: float) -> bool:
+                return y <= y_limit + _GEOM_TOL_MM
+
+        # Collect compression-zone bars (area-weighted)
+        A = 0.0
+        my = 0.0
+
+        for group in self.rebar_groups:
+            a_bar = float(group.rebar.area)
+            for pos in group.positions:
+                y = float(pos.y)
+                if in_zone(y):
+                    A += a_bar
+                    my += a_bar * y
+
+        if A <= 0.0:
+            # No compression reinforcement found
+            return None
+
+        centroid_y = my / A
+
+        # Distance from compression face to compression rebar centroid
+        d_2 = (max_y - centroid_y) if compression_face == "top" else (centroid_y - min_y)
+        return float(d_2)
+
     def __repr__(self) -> str:
         name_str = f"'{self.section_name}'" if self.section_name else "unnamed"
         return (

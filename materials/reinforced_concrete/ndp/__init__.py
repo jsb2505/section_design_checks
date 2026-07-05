@@ -21,7 +21,11 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Callable, Optional, Union
 
-from materials.reinforced_concrete.ndp.ndp import EN1992_1_1_2004
+from materials.reinforced_concrete.ndp.ndp import (
+    EN1992_1_1_2004,
+    EN1992_2_2005,
+    _NDP_METADATA,
+)
 
 # Type alias for NDP values (can be constants or callables)
 NDPValue = Union[float, int, Callable[..., float]]
@@ -30,17 +34,21 @@ NDPValue = Union[float, int, Callable[..., float]]
 class EurocodeVersion(StrEnum):
     """Supported Eurocode code versions."""
     EN1992_1_1_2004 = "EN1992_1_1_2004"
+    EN1992_2_2005 = "EN1992_2_2005"
 
 
 class CountryCode(StrEnum):
     """Supported National Annex country codes."""
     EU = "EU"
     EU_UK = "EU_UK"
+    EU_DE = "EU_DE"  # German
 
 
 # All NDP data keyed by code version
-_NDP_DATA: dict[str, dict[str, dict[str, dict[str, Any]]]] = {
+# Structure: {code_version: {country_code: {param: value}}}
+_NDP_DATA: dict[str, dict[str, dict[str, NDPValue]]] = {
     EurocodeVersion.EN1992_1_1_2004: EN1992_1_1_2004,
+    EurocodeVersion.EN1992_2_2005: EN1992_2_2005,
 }
 
 
@@ -126,19 +134,44 @@ class NDPRegistry:
         return sorted(self._get_country_data().keys())
 
     def _get_country_data(self) -> dict[str, dict[str, Any]]:
+        """
+        Build merged NDP data: EU base + country overrides + metadata.
+
+        Returns dict of {param: {"value": ..., "description": ..., "ref": ...}}
+        """
         code_data = _NDP_DATA.get(self._code)
         if code_data is None:
             raise KeyError(
                 f"Eurocode version '{self._code}' not found. "
                 f"Available: {sorted(_NDP_DATA.keys())}"
             )
-        country_data = code_data.get(self._country)
-        if country_data is None:
+
+        # Get EU base values (must exist)
+        eu_base = code_data.get(CountryCode.EU)
+        if eu_base is None:
             raise KeyError(
-                f"Country code '{self._country}' not found for {self._code}. "
-                f"Available: {sorted(code_data.keys())}"
+                f"EU base data not found for {self._code}. "
+                f"Available country codes: {sorted(code_data.keys())}"
             )
-        return country_data
+
+        # Get country-specific overrides (may be empty if requesting EU)
+        country_overrides = code_data.get(self._country, {})
+
+        # Merge: start with EU base, override with country-specific values
+        merged: dict[str, dict[str, Any]] = {}
+        for param, base_value in eu_base.items():
+            # Use country override if it exists, otherwise use EU base
+            value = country_overrides.get(param, base_value)
+
+            # Combine value with metadata
+            metadata = _NDP_METADATA.get(param, {})
+            merged[param] = {
+                "value": value,
+                "description": metadata.get("description", ""),
+                "ref": metadata.get("ref", ""),
+            }
+
+        return merged
 
 
 # ---------------------------------------------------------------------------
