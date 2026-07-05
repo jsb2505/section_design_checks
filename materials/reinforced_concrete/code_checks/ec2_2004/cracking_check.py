@@ -271,11 +271,15 @@ class CrackingCheck(BaseCodeCheck):
         """Factor for load duration (EC2 §7.3.4(2))."""
         return self.load_duration.k_t
 
-    def _get_k_1(self, k_2: float) -> float:
+    def find_k_1(self, k_2: Optional[float] = None) -> float:
         """Bond coefficient (EC2 §7.3.4(3)), via NDP k_1_crack.
 
         Base EC2: 0.8 for high bond, 1.6 for plain (independent of k_2).
         DIN EN 1992-1-1/NA: 1/k_2 (so that k_1·k_2 = 1.0).
+
+        Args:
+            k_2: Strain distribution coefficient. Required by some National
+                Annexes (e.g. DIN), optional for base EC2.
         """
         k_1_fn = get_ndp_callable("k_1_crack")
         return k_1_fn(self.is_high_bond_bar, k_2)
@@ -369,15 +373,22 @@ class CrackingCheck(BaseCodeCheck):
     # Cracking moment calculation
     # ===============================================
 
-    def find_cracking_moment(self) -> float:
+    def find_cracking_moment(self, N_Ed: float = 0.0) -> float:
         """
         Cracking moment M_cr (kN·m) - moment at which section first cracks.
 
-        M_cr = f_ctm,fl × W_el / 10^6
+        M_cr = (f_ctm,fl + σ_N) × W_el / 10^6
 
         where:
         - f_ctm,fl = mean flexural tensile strength (accounts for size effect)
         - W_el = elastic section modulus to tension face
+        - σ_N = N_Ed / A_transformed (axial stress, compression positive)
+
+        Compressive axial load increases M_cr (delays cracking).
+        Tensile axial load decreases M_cr (promotes cracking).
+
+        Args:
+            N_Ed: Design axial force (kN, compression positive). Default 0.
 
         Returns:
             Cracking moment in kN·m
@@ -393,8 +404,14 @@ class CrackingCheck(BaseCodeCheck):
 
         W_el = I_yy / y_tension if y_tension > 0 else I_yy / (self.height / 2)
 
-        # M_cr in kN·m (W_el in mm³, f_ctm_fl in MPa → result in N·mm)
-        return to_knm(f_ctm_fl * W_el, MomentUnit.NMM)
+        # Axial stress contribution (compression positive increases M_cr)
+        sigma_N = 0.0
+        if N_Ed != 0.0:
+            A_tr = self.section.get_transformed_area(self.E_cm_eff)
+            sigma_N = N_Ed * 1000 / A_tr  # kN → N, then N/mm² = MPa
+
+        # M_cr in kN·m (W_el in mm³, stresses in MPa → result in N·mm)
+        return to_knm((f_ctm_fl + sigma_N) * W_el, MomentUnit.NMM)
 
 
     # ===============================================
@@ -591,7 +608,7 @@ class CrackingCheck(BaseCodeCheck):
         Returns:
             Maximum crack spacing in mm
         """
-        k_1 = self._get_k_1(k_2)
+        k_1 = self.find_k_1(k_2)
 
         # Standard formula (Eq. 7.11)
         if rho_p_eff > 0:
@@ -1076,6 +1093,7 @@ class CrackingCheck(BaseCodeCheck):
         N_Ed: float = 0.0,
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
+        force_cracked: bool = False,
         **kwargs,
     ) -> CheckResult:
         """
@@ -1085,6 +1103,10 @@ class CrackingCheck(BaseCodeCheck):
             M_Ed: Design moment at SLS (kN·m)
             N_Ed: Design axial force at SLS (kN, compression positive)
             warning_threshold: Utilization threshold for warnings
+            ignore_compression_steel: If True, ignore compression reinforcement
+            force_cracked: If True, skip the cracking moment check and proceed
+                directly to cracked analysis. Useful for members with axial load
+                where reinforcement is always provided.
 
         Returns:
             CheckResult with crack width utilization
@@ -1094,6 +1116,7 @@ class CrackingCheck(BaseCodeCheck):
             N_Ed=N_Ed,
             warning_threshold=warning_threshold,
             ignore_compression_steel=ignore_compression_steel,
+            force_cracked=force_cracked,
         )
 
 
@@ -1104,16 +1127,13 @@ class CrackingCheck(BaseCodeCheck):
         N_Ed: float,
         warning_threshold: float,
         ignore_compression_steel: bool = False,
+        force_cracked: bool = False,
     ) -> CheckResult:
         """Internal implementation of crack check."""
 
         # Step 1: Check if section is cracked
-        #TODO this logic doesn't work if N_Ed is provided as the comparison
-        # of moment to cracking moment should consider axial force as well.
-        # Really it is a stress comparison of the most tensile concrete fibre to f_ctm,fl
-        # Provide an override to allow the user to force a crack width check.
-        M_cr = self.find_cracking_moment()
-        is_cracked = abs(M_Ed) > abs(M_cr)
+        M_cr = self.find_cracking_moment(N_Ed=N_Ed)
+        is_cracked = force_cracked or abs(M_Ed) > abs(M_cr)
 
         if not is_cracked:
             # Section uncracked - no crack width to check
@@ -1323,7 +1343,7 @@ class CrackingCheck(BaseCodeCheck):
             "w_k": float(w_k),
             "w_k_limit": float(self.w_k_limit),
             "k_t": float(self.k_t),
-            "k_1": float(self._get_k_1(k_2)),
+            "k_1": float(self.find_k_1(k_2)),
             "k_2": float(k_2),
             "k_3": float(self.k_3),
             "k_4": float(self.k_4),
@@ -1359,6 +1379,7 @@ class CrackingCheck(BaseCodeCheck):
         M_Ed: float,
         N_Ed: float = 0.0,
         ignore_compression_steel: bool = False,
+        force_cracked: bool = False,
     ) -> CrackingResult:
         """
         Calculate detailed cracking results without creating CheckResult.
@@ -1368,17 +1389,16 @@ class CrackingCheck(BaseCodeCheck):
         Args:
             M_Ed: Design moment at SLS (kN·m)
             N_Ed: Design axial force at SLS (kN, compression positive)
+            ignore_compression_steel: If True, ignore compression reinforcement
+            force_cracked: If True, skip the cracking moment check and proceed
+                directly to cracked analysis.
 
         Returns:
             CrackingResult dataclass with all intermediate values
         """
-        # Check if cracked
-        #TODO this logic doesn't work if N_Ed is provided as the comparison
-        # of moment to cracking moment should consider axial force as well.
-        # Really it is a stress comparison of the most tensile concrete fibre to f_ctm,fl
-        # Provide an override to allow the user to force a crack width check
-        M_cr = self.find_cracking_moment()
-        is_cracked = abs(M_Ed) > abs(M_cr)
+        # Check if cracked (axial load now accounted for in M_cr)
+        M_cr = self.find_cracking_moment(N_Ed=N_Ed)
+        is_cracked = force_cracked or abs(M_Ed) > abs(M_cr)
 
         if not is_cracked:
             return CrackingResult(

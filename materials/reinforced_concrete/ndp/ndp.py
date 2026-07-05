@@ -250,11 +250,15 @@ EN1992_2_2005 = {
         "gamma_s": 1.15,
         "gamma_c_accidental": 1.2,
         "gamma_s_accidental": 1.0,
+        "k_f": 1.1,
         "f_ck_max": 90,
         "f_ck_cube_max": 105,
         "alpha_cc": 1.0,
         "alpha_ct": 1.0,
         "k_strain": 0.9,
+        "c_rd_c_coefficient": 0.18,
+        "k_1_shear": 0.15,
+        "v_min_coefficient": 0.035,
         "cot_theta_lower_lim": 1.0,
         "cot_theta_upper_lim": 2.5,
         "nu_shear": lambda f_ck: 0.6 * (1 - f_ck / 250),
@@ -270,12 +274,15 @@ EN1992_2_2005 = {
             else 2.5 * (1 - sigma_cp / f_cd)
         ),
         "nu_torsion": lambda f_ck: 0.6 * (1 - f_ck / 250),
+        "z_cap": None,  # No additional z cap in base EC2
         "k_1_stress": 0.6,
         "k_2_stress": 0.45,
         "k_3_stress": 0.8,
+        "f_ct_eff_min": None,  # No lower bound in base EC2, depends on f_ck
+        "k_1_crack": lambda is_high_bond_bar, k_2: 0.8 if is_high_bond_bar else 1.6,
         "k_3_crack": 3.4,
         "k_4_crack": 0.425,
-        "z_cap": None,  # No additional z cap in base Eurocode
+        "s_r_max_lim": None,  # No additional limit in base EC2
     },
 
     # -------------------------------------------------------------------------
@@ -304,14 +311,30 @@ EN1992_2_2005 = {
         "f_ck_cube_max": 115,
         "alpha_cc": 0.85,
         "alpha_ct": 0.85,
-        "cot_theta_upper_lim": 3.0,  # TODO: intermediate cap formula exists
+        "c_rd_c_coefficient": 0.15,
+        "k_1_shear": 0.12,
+        "v_min_coefficient": lambda d, gamma_c: (
+            0.0525 if d <= 600
+            else 0.0375 if d >= 800
+            else 0.0525 + (d - 600) * (0.0375 - 0.0525) / (800 - 600)
+        ) / gamma_c,
+        "cot_theta_upper_lim": lambda f_ck, f_cd, sigma_cp, b_w, z, V_Ed: (
+            min(
+                3.0,
+                (1.2 + 1.4 * sigma_cp / f_cd)
+                / (1 - (0.24 * f_ck**(1/3) * (1 - 1.2 * sigma_cp / f_cd) * b_w * z) / V_Ed)
+            )
+        ),
         "nu_shear": 0.675,
         "nu_1": lambda f_ck, angle_deg: 0.75 * max(1.1 - f_ck / 500, 1.0),
         "nu_1_note_2": lambda f_ck, angle_deg: 0.75 * max(1.1 - f_ck / 500, 1.0),  # Note 2 not allowed
         "alpha_cw": 1.0,
         "nu_torsion": 0.525,
+        "z_cap": lambda d, d_2: max(d - 2 * d_2, d - d_2 - 30),  # German NA lever arm cap
+        "f_ct_eff_min": 3.0,
+        "k_1_crack": lambda is_high_bond_bar, k_2: 1 / k_2,
         "k_3_crack": 0.0,
         "k_4_crack": 1.0 / 3.6,
-        "z_cap": lambda d, d_2: max(d - 2 * d_2, d - d_2 - 30),  # German NA lever arm cap
+        "s_r_max_lim": lambda sigma_s, diameter, f_ct_eff: (sigma_s * diameter) / (3.6 * f_ct_eff),
     },
 }

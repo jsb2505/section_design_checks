@@ -423,7 +423,7 @@ def find_nu_factor(f_ck: float) -> float:
     return nu_fn(f_ck)
 
 
-def find_nu_1_factor(f_ck: float, angle_deg: float) -> float:
+def find_nu_1_factor(f_ck: float, link_angle_degrees: float) -> float:
     """
     Strength reduction factor ν₁ for V_Rd,max (§6.2.3(3), Eq. 6.14).
 
@@ -434,7 +434,7 @@ def find_nu_1_factor(f_ck: float, angle_deg: float) -> float:
 
     Args:
         f_ck: Characteristic cylinder strength of concrete in MPa
-        angle_deg: Shear reinforcement angle to longitudinal axis in degrees
+        link_angle_degrees: Shear reinforcement angle to longitudinal axis in degrees
 
     Returns:
         ν₁ factor (dimensionless)
@@ -442,10 +442,10 @@ def find_nu_1_factor(f_ck: float, angle_deg: float) -> float:
     from materials.reinforced_concrete.ndp import get_ndp_callable
 
     nu_1_fn = get_ndp_callable("nu_1")
-    return nu_1_fn(f_ck, angle_deg)
+    return nu_1_fn(f_ck, link_angle_degrees)
 
 
-def find_nu_1_factor_note_2(f_ck: float, angle_deg: float) -> float:
+def find_nu_1_factor_note_2(f_ck: float, link_angle_degrees: float) -> float:
     """
     Increased strength reduction factor ν₁ for V_Rd,max when σ_s < 0.8·f_yk (§6.2.3(3) Note 2).
 
@@ -456,7 +456,7 @@ def find_nu_1_factor_note_2(f_ck: float, angle_deg: float) -> float:
 
     Args:
         f_ck: Characteristic cylinder strength of concrete in MPa
-        angle_deg: Shear reinforcement angle to longitudinal axis in degrees
+        link_angle_degrees: Shear reinforcement angle to longitudinal axis in degrees
 
     Returns:
         ν₁ factor (dimensionless) - increased value for low-stress reinforcement
@@ -464,7 +464,7 @@ def find_nu_1_factor_note_2(f_ck: float, angle_deg: float) -> float:
     from materials.reinforced_concrete.ndp import get_ndp_callable
 
     nu_1_fn = get_ndp_callable("nu_1_note_2")
-    return nu_1_fn(f_ck, angle_deg)
+    return nu_1_fn(f_ck, link_angle_degrees)
 
 
 def find_nu_factor_torsion(f_ck: float) -> float:
