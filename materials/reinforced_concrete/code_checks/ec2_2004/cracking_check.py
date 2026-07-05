@@ -6,7 +6,7 @@ elastic/cracked section analysis to calculate crack widths.
 """
 
 from math import exp
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import List, Optional, Tuple, cast
 import warnings
@@ -24,7 +24,7 @@ from materials.reinforced_concrete.analysis import create_interaction_diagram
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
 from materials.core.units import ForceUnit, MomentUnit, from_kn, to_knm
-from materials.reinforced_concrete.ndp import get_ndp
+from materials.reinforced_concrete.ndp import get_ndp, get_ndp_callable
 
 
 class LoadDuration(StrEnum):
@@ -271,10 +271,14 @@ class CrackingCheck(BaseCodeCheck):
         """Factor for load duration (EC2 §7.3.4(2))."""
         return self.load_duration.k_t
 
-    @property
-    def k_1(self) -> float:
-        """Bond coefficient (EC2 §7.3.4(3)): 0.8 for high bond, 1.6 for plain."""
-        return 0.8 if self.is_high_bond_bar else 1.6
+    def _get_k_1(self, k_2: float) -> float:
+        """Bond coefficient (EC2 §7.3.4(3)), via NDP k_1_crack.
+
+        Base EC2: 0.8 for high bond, 1.6 for plain (independent of k_2).
+        DIN EN 1992-1-1/NA: 1/k_2 (so that k_1·k_2 = 1.0).
+        """
+        k_1_fn = get_ndp_callable("k_1_crack")
+        return k_1_fn(self.is_high_bond_bar, k_2)
 
     @property
     def k_3(self) -> float:
@@ -360,6 +364,7 @@ class CrackingCheck(BaseCodeCheck):
 
         return E_s / self.E_cm_eff
 
+
     # ===============================================
     # Cracking moment calculation
     # ===============================================
@@ -391,10 +396,11 @@ class CrackingCheck(BaseCodeCheck):
         # M_cr in kN·m (W_el in mm³, f_ctm_fl in MPa → result in N·mm)
         return to_knm(f_ctm_fl * W_el, MomentUnit.NMM)
 
+
     # ===============================================
     # h_c,ef calculation (EC2 §7.3.2(3), Fig 7.1)
     # ===============================================
-
+    # TODO EU_DE gives a a broader range of limits, make ndps
     def find_h_c_ef(
         self,
         d: float,
@@ -433,6 +439,7 @@ class CrackingCheck(BaseCodeCheck):
 
         return min(candidates)
 
+
     def find_h_c_ef_tension_member(
         self,
         d_top: float,
@@ -460,6 +467,7 @@ class CrackingCheck(BaseCodeCheck):
         h_c_ef_bottom = min(2.5 * d_bottom, h / 2)
 
         return h_c_ef_top, h_c_ef_bottom
+
 
     # ===============================================
     # Reinforcement ratio ρ_p,eff
@@ -493,6 +501,7 @@ class CrackingCheck(BaseCodeCheck):
             raise ValueError("Effective concrete area A_c,eff must be > 0")
 
         return (A_s_tension + xi_1 * A_p) / A_c_eff
+
 
     # ===============================================
     # Maximum crack spacing s_r,max
@@ -546,6 +555,7 @@ class CrackingCheck(BaseCodeCheck):
         # Clamp to valid range [0.5, 1.0]
         return max(0.5, min(1.0, k_2))
 
+
     def find_maximum_crack_spacing(
         self,
         cover: float,
@@ -554,6 +564,7 @@ class CrackingCheck(BaseCodeCheck):
         k_2: float,
         x: Optional[float] = None,
         has_tension_reinforcement: bool = True,
+        sigma_s: float = 0.0,
     ) -> float:
         """
         Maximum crack spacing s_r,max (EC2 §7.3.4(3), Eq. 7.11).
@@ -564,6 +575,9 @@ class CrackingCheck(BaseCodeCheck):
         If spacing > 5(c + φ/2) or no bonded reinforcement (Eq. 7.14):
             s_r_max = 1.3(h - x)
 
+        An additional NDP upper limit s_r_max_lim may cap the Eq. 7.11 result
+        (e.g. DIN EN 1992-1-1/NA: σ_s·φ / (3.6·f_ct,eff)).
+
         Args:
             cover: Concrete cover to tension reinforcement (mm)
             phi_eq: Equivalent bar diameter (mm)
@@ -571,16 +585,26 @@ class CrackingCheck(BaseCodeCheck):
             k_2: Strain distribution coefficient (0.5 for bending, 1.0 for tension)
             x: Neutral axis depth (mm), or None for uncracked/fully cracked
             has_tension_reinforcement: True if bonded reinforcement exists in tension zone
+            sigma_s: Steel stress in tension reinforcement (MPa, positive).
+                Required by some National Annexes for s_r,max upper limit.
 
         Returns:
             Maximum crack spacing in mm
         """
+        k_1 = self._get_k_1(k_2)
+
         # Standard formula (Eq. 7.11)
         if rho_p_eff > 0:
-            s_r_max = self.k_3 * cover + (self.k_1 * k_2 * self.k_4 * phi_eq / rho_p_eff)
+            s_r_max = self.k_3 * cover + (k_1 * k_2 * self.k_4 * phi_eq / rho_p_eff)
         else:
             # No reinforcement in tension zone - use upper bound
             s_r_max = float('inf')
+
+        # NDP upper limit on s_r,max (e.g. DIN NA), applied before spacing check
+        s_r_max_lim = get_ndp("s_r_max_lim")
+        if s_r_max_lim is not None and callable(s_r_max_lim) and sigma_s > 0:
+            f_ct_eff = self.concrete.f_ctm
+            s_r_max = min(s_r_max, s_r_max_lim(sigma_s, phi_eq, f_ct_eff))
 
         # Check if spacing exceeds 5(c + φ/2) -> use upper bound formula (Eq. 7.14)
         spacing_limit = 5 * (cover + phi_eq / 2)
@@ -596,6 +620,7 @@ class CrackingCheck(BaseCodeCheck):
                 s_r_max = 1.3 * h
 
         return s_r_max
+
 
     # ===============================================
     # Mean strain difference (ε_sm - ε_cm)
@@ -645,6 +670,7 @@ class CrackingCheck(BaseCodeCheck):
 
         return max(eps_diff, eps_min)
 
+
     # ===============================================
     # Crack width calculation
     # ===============================================
@@ -667,6 +693,7 @@ class CrackingCheck(BaseCodeCheck):
             Crack width in mm
         """
         return s_r_max * eps_sm_minus_eps_cm
+
 
     # ===============================================
     # Minimum reinforcement (EC2 §7.3.2(2))
@@ -725,10 +752,15 @@ class CrackingCheck(BaseCodeCheck):
             A_ct = y_from_bottom * b
 
         # f_ct,eff (could be f_ctm(t) for early age)
+        # NDP lower bound (e.g. DIN EN 1992-1-1/NA: f_ct,eff ≥ 3.0 MPa)
         f_ct_eff = self.concrete.f_ctm
+        f_ct_eff_min = get_ndp("f_ct_eff_min")
+        if f_ct_eff_min is not None:
+            f_ct_eff = max(f_ct_eff, cast(float, f_ct_eff_min))
 
         A_s_min = k_c * k * f_ct_eff * A_ct / abs(steel_stress)
         return A_s_min
+
 
     def find_k_c(
         self,
@@ -759,6 +791,7 @@ class CrackingCheck(BaseCodeCheck):
 
         # k_1 depends on axial force
         if N_Ed >= 0:
+            #! EC2 §7.3.2(2) doesn't state what to take if N_Ed = 0
             k_1 = 1.5  # Compression or zero axial
         else:
             k_1 = (2 * h_star) / (3 * h)  # Tension
@@ -771,6 +804,7 @@ class CrackingCheck(BaseCodeCheck):
 
         k_c = 0.4 * (1 - sigma_c / (k_1 * (h / h_star) * f_ct_eff))
         return min(1.0, max(0.0, k_c))
+
 
     # ===============================================
     # Helper methods for rebar analysis
@@ -837,6 +871,7 @@ class CrackingCheck(BaseCodeCheck):
 
         return total_area, mean_cover, tension_bars
 
+
     def _get_steel_stress(
         self,
         eps_top: float,
@@ -886,6 +921,7 @@ class CrackingCheck(BaseCodeCheck):
 
         # Return absolute value (always positive for tension)
         return max_tension_stress
+
 
     def _get_tension_zone_E_s(
         self,
@@ -945,6 +981,7 @@ class CrackingCheck(BaseCodeCheck):
 
         return outermost_E_s
 
+
     # ===============================================
     # Stress limitation helpers (EC2 §7.2)
     # ===============================================
@@ -985,6 +1022,7 @@ class CrackingCheck(BaseCodeCheck):
         peak = float(conc_stresses.max()) if len(conc_stresses) > 0 else 0.0
         return max(0.0, peak)
 
+
     def _compute_nonlinear_creep_coefficient(self, sigma_c: float) -> float:
         """
         Non-linear creep coefficient per EC2 §3.1.4(4), Eq. 3.7.
@@ -1002,6 +1040,7 @@ class CrackingCheck(BaseCodeCheck):
         k_sigma = sigma_c / self.concrete.f_cm
         return self.creep_coefficient * exp(1.5 * (k_sigma - 0.45))
 
+
     def _build_diagram_with_E_cm_eff(
         self, E_cm_eff: float, ignore_compression_steel: bool = False,
     ) -> MNInteractionDiagram:
@@ -1018,11 +1057,13 @@ class CrackingCheck(BaseCodeCheck):
             elastic_modulus=E_cm_eff,
         )
 
+
     def _get_f_yk_max(self) -> float:
         """Maximum f_yk across all rebar groups."""
         if not self.section.rebar_groups:
             return 500.0
         return max(g.rebar.f_yk for g in self.section.rebar_groups)
+
 
     # ===============================================
     # Main check method
@@ -1054,6 +1095,7 @@ class CrackingCheck(BaseCodeCheck):
             warning_threshold=warning_threshold,
             ignore_compression_steel=ignore_compression_steel,
         )
+
 
     def _check_single_case(
         self,
@@ -1243,6 +1285,7 @@ class CrackingCheck(BaseCodeCheck):
             k_2=k_2,
             x=x,
             has_tension_reinforcement=A_s_tension > 0,
+            sigma_s=sigma_s,
         )
 
         # Step 11: Calculate strain difference
@@ -1280,7 +1323,7 @@ class CrackingCheck(BaseCodeCheck):
             "w_k": float(w_k),
             "w_k_limit": float(self.w_k_limit),
             "k_t": float(self.k_t),
-            "k_1": float(self.k_1),
+            "k_1": float(self._get_k_1(k_2)),
             "k_2": float(k_2),
             "k_3": float(self.k_3),
             "k_4": float(self.k_4),
@@ -1309,6 +1352,7 @@ class CrackingCheck(BaseCodeCheck):
             message=message,
             details=details,
         )
+
 
     def calculate_detailed(
         self,
@@ -1406,6 +1450,7 @@ class CrackingCheck(BaseCodeCheck):
                 k_2=k_2,
                 x=x,
                 has_tension_reinforcement=A_s_tension > 0,
+                sigma_s=sigma_s,
             )
         else:
             s_r_max = 0.0

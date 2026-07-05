@@ -559,6 +559,7 @@ def cap_sigma_cp_upper(sigma_cp: float, f_cd: float) -> float:
     return min(sigma_cp, 0.2 * f_cd)
 
 
+# TODO this is an ndp
 def find_minimum_ratio_of_shear_reinforcement(f_ck: float, f_yk: float) -> float:
     '''
     Calculates the minimum ratio of shear reinforcement.

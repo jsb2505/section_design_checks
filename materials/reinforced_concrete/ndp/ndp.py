@@ -95,6 +95,10 @@ _NDP_METADATA = {
         "description": "Strength reduction factor for torsion",
         "ref": "6.3.2(4)",
     },
+    "z_cap": {
+        "description": "Upper limit on lever arm z for shear: z_cap = max(d - 2·d_2, d - d_2 - 30)",
+        "ref": "NA 6.2.3(1)",
+    },
     "k_1_stress": {
         "description": "SLS Characteristic concrete stress limit factor",
         "ref": "7.2(2)",
@@ -107,6 +111,14 @@ _NDP_METADATA = {
         "description": "SLS reinforcement stress limit factor",
         "ref": "7.2(5)",
     },
+    "f_ct_eff_min": {
+        "description": "The minimum value to take for f_ct,eff for minimum crack reinforcement",
+        "ref": "7.3.2(2)",
+    },
+    "k_1_crack": {
+        "description": "Crack calculation rebar bond factor",
+        "ref": "7.3.4(3)",
+    },
     "k_3_crack": {
         "description": "Crack calculation cover factor",
         "ref": "7.3.4(3)",
@@ -115,9 +127,9 @@ _NDP_METADATA = {
         "description": "Crack calculation diameter factor",
         "ref": "7.3.4(3)",
     },
-    "z_cap": {
-        "description": "Upper limit on lever arm z for shear: z_cap = max(d - 2·d_2, d - d_2 - 30)",
-        "ref": "NA 6.2.3(1)",
+    "s_r_max_lim": {
+        "description": "Upper limit for max crack spacing",
+        "ref": "7.3.4(3)",
     },
 }
 
@@ -159,12 +171,15 @@ EN1992_1_1_2004 = {
             else 2.5 * (1 - sigma_cp / f_cd)
         ),
         "nu_torsion": lambda f_ck: 0.6 * (1 - f_ck / 250),
+        "z_cap": None,  # No additional z cap in base EC2
         "k_1_stress": 0.6,
         "k_2_stress": 0.45,
         "k_3_stress": 0.8,
+        "f_ct_eff_min": None,  # No lower bound in base EC2, depends on f_ck
+        "k_1_crack": lambda is_high_bond_bar, k_2: 0.8 if is_high_bond_bar else 1.6,
         "k_3_crack": 3.4,
         "k_4_crack": 0.425,
-        "z_cap": None,  # No additional z cap in base Eurocode
+        "s_r_max_lim": None,  # No additional limit in base EC2
     },
 
     # -------------------------------------------------------------------------
@@ -212,9 +227,12 @@ EN1992_1_1_2004 = {
         "nu_1_note_2": lambda f_ck, angle_deg: 0.75 * max(1.1 - f_ck / 500, 1.0),  # Note 2 not allowed
         "alpha_cw": 1.0,
         "nu_torsion": 0.525,
+        "z_cap": lambda d, d_2: max(d - 2 * d_2, d - d_2 - 30),  # German NA lever arm cap
+        "f_ct_eff_min": 3.0,
+        "k_1_crack": lambda is_high_bond_bar, k_2: 1 / k_2,
         "k_3_crack": 0.0,
         "k_4_crack": 1.0 / 3.6,
-        "z_cap": lambda d, d_2: max(d - 2 * d_2, d - d_2 - 30),  # German NA lever arm cap
+        "s_r_max_lim": lambda sigma_s, diameter, f_ct_eff: (sigma_s * diameter) / (3.6 * f_ct_eff),
     },
 }
 
