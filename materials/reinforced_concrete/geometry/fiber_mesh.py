@@ -8,12 +8,11 @@ Each fiber has:
 - Material type (concrete or steel)
 """
 
-from typing import List, Tuple, Literal, Optional
+from typing import List, Tuple, Literal
 from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
-from shapely.geometry import Polygon, box
-from shapely.ops import unary_union
+from shapely.geometry import box
 from materials.reinforced_concrete.geometry.section import RCSection
 
 
@@ -155,9 +154,8 @@ class FiberMesh:
         Generate steel fibers (one per rebar).
 
         Each rebar is treated as a discrete fiber at its centroid.
+        Material index tracks which rebar group the fiber belongs to.
         """
-        material_index = 0
-
         for group_idx, group in enumerate(self.section.rebar_groups):
             for pos in group.positions:
                 fiber = Fiber(
@@ -214,14 +212,12 @@ class FiberMesh:
 
     def calculate_section_forces(
         self,
-        strains: npt.NDArray[np.float64],
         stresses: npt.NDArray[np.float64],
     ) -> Tuple[float, float]:
         """
-        Calculate axial force and moment from fiber strains and stresses.
+        Calculate axial force and moment from fiber stresses.
 
         Args:
-            strains: Strain at each fiber (must match fiber order)
             stresses: Stress at each fiber (must match fiber order)
 
         Returns:
@@ -246,19 +242,6 @@ class FiberMesh:
         M = np.sum(stresses * area * y_offset) / 1_000_000.0
 
         return N, M
-
-    def get_centroidal_axis_angle(self, neutral_axis_depth: float, angle: float = 0.0) -> float:
-        """
-        Get angle of neutral axis relative to section centroidal axis.
-
-        Args:
-            neutral_axis_depth: Depth to neutral axis from section top (mm)
-            angle: Angle in degrees (0 = horizontal neutral axis)
-
-        Returns:
-            Angle in radians
-        """
-        return np.radians(angle)
 
     def __repr__(self) -> str:
         return (

@@ -36,7 +36,6 @@ from materials.reinforced_concrete.geometry import (
     create_rectangular_perimeter_rebars,
     create_circular_perimeter_rebars,
     create_custom_rebar_layer,
-    create_single_rebar,
     FiberMesh,
 )
 
@@ -65,6 +64,5 @@ __all__ = [
     "create_rectangular_perimeter_rebars",
     "create_circular_perimeter_rebars",
     "create_custom_rebar_layer",
-    "create_single_rebar",
     "FiberMesh",
 ]

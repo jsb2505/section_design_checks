@@ -5,7 +5,7 @@ This is a FIRST PRINCIPLES check based on strain compatibility and force equilib
 Uses the fiber-based M-N interaction diagram infrastructure.
 """
 
-from typing import Optional, Literal
+from typing import Literal
 from pydantic import Field
 
 from materials.reinforced_concrete.code_checks.base_check import (
@@ -36,7 +36,7 @@ class BendingCheck(BaseCodeCheck):
         section: RC section geometry with reinforcement
         concrete: Concrete material (with γ_c factor)
         concrete_model_type: EC2 constitutive model to use
-        steel_branch_type: Steel post-yield behavior
+        steel_branch_type: Steel post-yield behaviour
         n_fibers_width: Mesh resolution (width)
         n_fibers_height: Mesh resolution (height)
 
@@ -75,7 +75,7 @@ class BendingCheck(BaseCodeCheck):
 
     steel_branch_type: Literal["horizontal", "inclined"] = Field(
         default="inclined",
-        description="Steel post-yield behavior (Fig 3.8)",
+        description="Steel post-yield behaviour (Fig 3.8)",
     )
 
     n_fibers_width: int = Field(
