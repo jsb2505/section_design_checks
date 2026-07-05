@@ -26,6 +26,7 @@ from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     calculate_section_breadth,
+    find_rho_l_from_strains,
     find_max_allowable_link_spacing,
     find_max_allowable_leg_spacing,
     find_cot_theta_for_V_Ed_from_V_Rd_max,
@@ -614,25 +615,14 @@ class ShearCheck(BaseCodeCheck):
         Returns:
             ρ_l (dimensionless)
         """
-        y_top = float(self.section.outline.bounds[3])
-        y_bot = float(self.section.outline.bounds[1])
-        h = y_top - y_bot
-
-        # Sum steel in tension (strain < 0, negative = tension)
-        A_sl = 0.0
-        for group in self.section.rebar_groups:
-            for pos in group.positions:
-                # Linear strain field
-                strain_at_bar = eps_bottom + (eps_top - eps_bottom) * (pos.y - y_bot) / h
-                if strain_at_bar < 0:  # Tension
-                    A_sl += group.rebar.area
-
-        if A_sl == 0:
-            return 0.0
-
-        b_w = self.breadth
-        rho_l = A_sl / (b_w * d)
-        return min(rho_l, 0.02)
+        return find_rho_l_from_strains(
+            section=self.section,
+            b_w=self.breadth,
+            d=d,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+            rho_l_max=0.02,
+        )
 
 
     # ===========================

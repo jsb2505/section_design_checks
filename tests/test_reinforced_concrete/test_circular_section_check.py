@@ -1,0 +1,249 @@
+"""
+Tests for CircularSectionCheck circular shear web-width behavior.
+"""
+
+from math import sqrt
+
+import pytest
+
+from materials.core.geometry import Point2D
+from materials.reinforced_concrete.code_checks.ec2_2004.circular_section_check import (
+    CircularSectionCheck,
+)
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearLoadCase
+from materials.reinforced_concrete.geometry import (
+    RebarGroup,
+    create_circular_perimeter_rebars,
+    create_circular_section,
+)
+from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
+
+
+def _make_circular_section(diameter: float = 600.0):
+    section = create_circular_section(diameter=diameter, hook_ref=0)
+    perimeter = create_circular_perimeter_rebars(
+        rebar=Rebar(diameter=20, grade="B500B"),
+        diameter=diameter,
+        cover=40.0,
+        n_bars=12,
+        origin=(0.0, 0.0),
+    )
+    section.add_rebar_group(perimeter)
+    return section
+
+
+def _make_asymmetric_circular_section_for_rho_l(diameter: float = 600.0):
+    section = create_circular_section(diameter=diameter, hook_ref=0)
+
+    top_group = RebarGroup(
+        rebar=Rebar(diameter=28, grade="B500B"),
+        positions=(Point2D(x=0.0, y=220.0),),
+        layer_name="top",
+    )
+    bottom_group = RebarGroup(
+        rebar=Rebar(diameter=12, grade="B500B"),
+        positions=(Point2D(x=0.0, y=-220.0),),
+        layer_name="bottom",
+    )
+
+    section.add_rebar_group(top_group)
+    section.add_rebar_group(bottom_group)
+    return section
+
+
+def _expected_width(d: float, z: float, r: float, r_sv: float) -> tuple[float, float, float]:
+    c = max(d - z, 0.0)
+    b_wc = 2.0 * sqrt(max(c * (2.0 * r - c), 0.0))
+
+    e = max(r + r_sv - d, 0.0)
+    b_wt = 2.0 * sqrt(max(e * (2.0 * r_sv - e), 0.0))
+
+    if b_wc <= 0.0 and b_wt <= 0.0:
+        b_w = 0.0
+    elif b_wc <= 0.0:
+        b_w = b_wt
+    elif b_wt <= 0.0:
+        b_w = b_wc
+    else:
+        b_w = min(b_wc, b_wt)
+
+    return b_w, b_wc, b_wt
+
+
+class TestCircularEquivalentWebWidth:
+    def test_unreinforced_width_is_independent_of_cover(self):
+        section = _make_circular_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+
+        check_cover_30 = CircularSectionCheck(
+            section=section,
+            concrete=concrete,
+            diameter=600.0,
+            cover=30.0,
+            shear_reinforcement=None,
+        )
+        check_cover_80 = CircularSectionCheck(
+            section=section,
+            concrete=concrete,
+            diameter=600.0,
+            cover=80.0,
+            shear_reinforcement=None,
+        )
+
+        d = 510.0
+        z = 459.0
+
+        bw_30, bwc_30, bwt_30 = check_cover_30.calculate_equivalent_web_width(d, z)
+        bw_80, bwc_80, bwt_80 = check_cover_80.calculate_equivalent_web_width(d, z)
+
+        assert bw_30 == pytest.approx(bw_80, rel=1e-12)
+        assert bwc_30 == pytest.approx(bwc_80, rel=1e-12)
+        assert bwt_30 == pytest.approx(bwt_80, rel=1e-12)
+
+    def test_reinforced_width_matches_eq10_to_13_formula(self):
+        section = _make_circular_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        shear_rebar = ShearRebar(diameter=12, link_spacing=200, n_legs=2, grade="B500B")
+
+        check = CircularSectionCheck(
+            section=section,
+            concrete=concrete,
+            diameter=600.0,
+            cover=50.0,
+            shear_reinforcement=shear_rebar,
+        )
+
+        d = 510.0
+        z = 459.0
+
+        r = 300.0
+        r_sv = r - 50.0 - shear_rebar.diameter / 2.0
+        expected_bw, expected_bwc, expected_bwt = _expected_width(d, z, r, r_sv)
+
+        b_w, b_wc, b_wt = check.calculate_equivalent_web_width(d, z)
+
+        assert b_w == pytest.approx(expected_bw, rel=1e-12)
+        assert b_wc == pytest.approx(expected_bwc, rel=1e-12)
+        assert b_wt == pytest.approx(expected_bwt, rel=1e-12)
+
+    def test_unreinforced_can_still_be_governed_by_tension_chord(self):
+        section = _make_circular_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+
+        check = CircularSectionCheck(
+            section=section,
+            concrete=concrete,
+            diameter=600.0,
+            cover=80.0,
+            shear_reinforcement=None,
+        )
+
+        d = 510.0
+        z = 400.0
+        b_w, b_wc, b_wt = check.calculate_equivalent_web_width(d, z)
+
+        assert b_w == pytest.approx(b_wt, rel=1e-12)
+        assert b_w < b_wc
+
+
+class TestCircularShearCapacityNoRebar:
+    def test_unreinforced_shear_capacity_is_independent_of_cover(self):
+        section = _make_circular_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+
+        check_cover_30 = CircularSectionCheck(
+            section=section,
+            concrete=concrete,
+            diameter=600.0,
+            cover=30.0,
+            shear_reinforcement=None,
+        )
+        check_cover_80 = CircularSectionCheck(
+            section=section,
+            concrete=concrete,
+            diameter=600.0,
+            cover=80.0,
+            shear_reinforcement=None,
+        )
+
+        load = ShearLoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
+
+        result_30 = check_cover_30.perform_shear_check(
+            load_case=load,
+            force_cracked=True,
+            suppress_warnings=True,
+        )
+        result_80 = check_cover_80.perform_shear_check(
+            load_case=load,
+            force_cracked=True,
+            suppress_warnings=True,
+        )
+
+        assert result_30.capacity == pytest.approx(result_80.capacity, rel=1e-9)
+        assert result_30.details["V_Rd_c_max_unreinforced"] == pytest.approx(
+            result_80.details["V_Rd_c_max_unreinforced"], rel=1e-9
+        )
+
+
+class TestCircularRhoLFromStrains:
+    def test_rho_l_uses_tension_side_not_centroid_side(self):
+        section = _make_asymmetric_circular_section_for_rho_l()
+        concrete = ConcreteMaterial(grade="C30/37")
+        check = CircularSectionCheck(
+            section=section,
+            concrete=concrete,
+            diameter=600.0,
+            cover=50.0,
+            shear_reinforcement=None,
+        )
+
+        b_w = 300.0
+        d = 500.0
+
+        # Sagging-like strain state: bottom bar in tension
+        rho_sagging = check._find_rho_l(
+            M_Ed=100.0,
+            N_Ed=0.0,
+            b_w=b_w,
+            d=d,
+            eps_top=0.001,
+            eps_bottom=-0.001,
+        )
+
+        # Hogging-like strain state: top bar in tension (larger bar area)
+        rho_hogging = check._find_rho_l(
+            M_Ed=-100.0,
+            N_Ed=0.0,
+            b_w=b_w,
+            d=d,
+            eps_top=-0.001,
+            eps_bottom=0.001,
+        )
+
+        assert rho_hogging > rho_sagging
+
+        top_area = Rebar(diameter=28, grade="B500B").area
+        bottom_area = Rebar(diameter=12, grade="B500B").area
+        assert rho_sagging == pytest.approx(bottom_area / (b_w * d), rel=1e-12)
+        assert rho_hogging == pytest.approx(top_area / (b_w * d), rel=1e-12)
+
+    def test_rho_l_is_zero_when_all_bars_are_in_compression(self):
+        section = _make_asymmetric_circular_section_for_rho_l()
+        concrete = ConcreteMaterial(grade="C30/37")
+        check = CircularSectionCheck(
+            section=section,
+            concrete=concrete,
+            diameter=600.0,
+            cover=50.0,
+            shear_reinforcement=None,
+        )
+
+        rho_l = check._find_rho_l(
+            M_Ed=0.0,
+            N_Ed=1000.0,
+            b_w=300.0,
+            d=500.0,
+            eps_top=0.001,
+            eps_bottom=0.001,
+        )
+        assert rho_l == pytest.approx(0.0, abs=1e-15)

@@ -44,6 +44,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     find_nu_1_factor_note_2,
     find_V_Rd_c_cracked,
     find_V_Rd_c_max_unreinforced,
+    find_rho_l_from_strains,
     sigma_cp_from_N_and_area,
     cap_sigma_cp_upper,
     clamp_cot_theta,
@@ -513,6 +514,9 @@ class CircularSectionCheck(BaseModel):
         - b_wc = chord width at compression centroid depth (Eq.10)
         - b_wt = chord width inside shear reinforcement at tension centroid (Eq.12)
 
+        For members without shear reinforcement, the tension chord is taken
+        at the concrete perimeter (r_sv = D/2) so b_w does not depend on cover.
+
         Args:
             d: Effective depth from compression face to tension centroid (mm)
             z: Lever arm (mm)
@@ -520,11 +524,12 @@ class CircularSectionCheck(BaseModel):
         Returns:
             (b_w, b_wc, b_wt) all in mm
         """
-        # TODO if no shear_reinforcement then r_sv is a bit meaningless. What to take? 
-        # probably should just return the width of the compression chord
-        # (likely smallest and is an early return)
         r = self.diameter / 2  # radius to extreme fibre
-        r_sv = self.r_sv
+        if self.shear_reinforcement is None:
+            # No links/spiral: use concrete perimeter for the tension chord radius.
+            r_sv = r
+        else:
+            r_sv = self.r_sv
 
         # b_wc: width at compression centroid (Eq.10)
         c = d - z  # depth of compression centroid from compression face (Eq.11)
@@ -538,34 +543,62 @@ class CircularSectionCheck(BaseModel):
         arg_t = e * (2 * r_sv - e)
         b_wt = 2 * sqrt(max(arg_t, 0.0))
 
-        b_w = min(b_wc, b_wt) if b_wc > 0 and b_wt > 0 else max(b_wc, b_wt)
+        # Explicit degeneracy handling avoids relying on min/max side-effects.
+        if b_wc <= 0.0 and b_wt <= 0.0:
+            b_w = 0.0
+        elif b_wc <= 0.0:
+            b_w = b_wt
+        elif b_wt <= 0.0:
+            b_w = b_wc
+        else:
+            b_w = min(b_wc, b_wt)
         return b_w, b_wc, b_wt
 
-    def _find_rho_l(self, b_w: float, d: float) -> float:
+    def _find_rho_l(
+        self,
+        *,
+        M_Ed: float,
+        N_Ed: float,
+        b_w: float,
+        d: float,
+        eps_top: Optional[float] = None,
+        eps_bottom: Optional[float] = None,
+        ignore_compression_steel: bool = False,
+    ) -> float:
         """Longitudinal reinforcement ratio for EC2 §6.2.2.
 
-        Uses bars below the section centroid (tension side for sagging).
+        Uses bars in tension (strain < 0) from the section strain state.
         Capped at 0.02 per EC2 §6.2.2(1).
 
         Args:
+            M_Ed: Design bending moment (kN·m)
+            N_Ed: Design axial force (kN)
             b_w: Equivalent web width (mm)
             d: Effective depth (mm)
+            eps_top: Pre-computed top strain (optional)
+            eps_bottom: Pre-computed bottom strain (optional)
+            ignore_compression_steel: If True, use diagram without compression steel.
 
         Returns:
             rho_l, capped at 0.02
         """
-        # TODO tension bars may be above the centroid, it depends on the moment sign.
-        # Should determine tension bars based on strains top and bottom.
-        # need to update this. Can it use ShearChecks implementation? this uses strains.
-        _, centroid_y = self.section.get_centroid()
-        A_sl = 0.0
-        for group in self.section.rebar_groups:
-            for pos in group.positions:
-                if pos.y < centroid_y:
-                    A_sl += group.rebar.area
-        if A_sl == 0 or b_w <= 0 or d <= 0:
+        if b_w <= 0 or d <= 0:
             return 0.0
-        return min(A_sl / (b_w * d), 0.02)
+
+        if eps_top is None or eps_bottom is None:
+            assert self._shear_check is not None
+            eps_top, eps_bottom = self._shear_check._get_diagram(
+                ignore_compression_steel
+            ).find_strains_for_MN(M_Ed, N_Ed)
+
+        return find_rho_l_from_strains(
+            section=self.section,
+            b_w=b_w,
+            d=d,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+            rho_l_max=0.02,
+        )
 
     def calculate_V_Rd_c_uncracked(self, sigma_cp: float) -> float:
         """
@@ -828,7 +861,13 @@ class CircularSectionCheck(BaseModel):
         if self.shear_reinforcement is None:
             V_Rd_c_uncracked = self.calculate_V_Rd_c_uncracked(sigma_cp_capped)
             b_w_cr, _, _ = self.calculate_equivalent_web_width(d, z)
-            rho_l = self._find_rho_l(b_w_cr, d)
+            rho_l = self._find_rho_l(
+                M_Ed=M_Ed,
+                N_Ed=N_Ed,
+                b_w=b_w_cr,
+                d=d,
+                ignore_compression_steel=ignore_compression_steel,
+            )
             V_Rd_c_cracked = find_V_Rd_c_cracked(
                 b_w=b_w_cr, d=d, rho_l=rho_l, sigma_cp=sigma_cp_capped,
                 f_ck=self._concrete_uls.f_ck, gamma_c=self._concrete_uls.gamma_c,
@@ -870,7 +909,13 @@ class CircularSectionCheck(BaseModel):
             sigma_cp_capped,
             use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
         )
-        rho_l_for_spacing = self._find_rho_l(b_w, d)
+        rho_l_for_spacing = self._find_rho_l(
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            b_w=b_w,
+            d=d,
+            ignore_compression_steel=ignore_compression_steel,
+        )
         V_Rd_c_for_spacing = find_V_Rd_c_cracked(
             b_w=b_w,
             d=d,

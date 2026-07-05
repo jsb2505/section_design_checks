@@ -299,6 +299,55 @@ def calculate_section_breadth(
     return min_width
 
 
+def find_rho_l_from_strains(
+    *,
+    section: RCSection,
+    b_w: float,
+    d: float,
+    eps_top: float,
+    eps_bottom: float,
+    rho_l_max: float = 0.02,
+) -> float:
+    """
+    Longitudinal reinforcement ratio from strain state (EC2 §6.2.2(1)).
+
+    Uses only reinforcement in tension (strain < 0):
+        rho_l = A_sl / (b_w * d) <= rho_l_max
+
+    Args:
+        section: RC section geometry with reinforcement.
+        b_w: Web breadth in mm.
+        d: Effective depth in mm.
+        eps_top: Strain at top fibre (compression positive).
+        eps_bottom: Strain at bottom fibre (compression positive).
+        rho_l_max: Upper limit for rho_l (default 0.02).
+
+    Returns:
+        rho_l (dimensionless), capped at rho_l_max.
+    """
+    if b_w <= 0.0 or d <= 0.0:
+        return 0.0
+
+    _, y_bot, _, y_top = section.outline.bounds
+    h = y_top - y_bot
+    if h <= 0.0:
+        return 0.0
+
+    A_sl = 0.0
+    for group in section.rebar_groups:
+        for pos in group.positions:
+            # Linear strain field through section depth
+            strain_at_bar = eps_bottom + (eps_top - eps_bottom) * (pos.y - y_bot) / h
+            if strain_at_bar < 0.0:
+                A_sl += group.rebar.area
+
+    if A_sl <= 0.0:
+        return 0.0
+
+    rho_l = A_sl / (b_w * d)
+    return min(rho_l, rho_l_max)
+
+
 def find_max_allowable_link_spacing(
     *,
     effective_depth: float,

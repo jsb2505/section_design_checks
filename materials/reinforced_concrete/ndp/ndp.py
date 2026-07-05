@@ -426,7 +426,7 @@ EN1992_2_2005 = {
         "k_2_stress": 0.45,
         "k_3_stress": 0.8,
         "k_4_stress": 1.0,
-        "f_ct_eff_min": None,  # No lower bound in base EC2, depends on f_ck
+        "f_ct_eff_min": 2.9, # (7.1)
         "k_1_crack": lambda is_high_bond_bar, k_2: 0.8 if is_high_bond_bar else 1.6,
         "k_3_crack": 3.4,
         "k_4_crack": 0.425,
@@ -477,8 +477,8 @@ EN1992_2_2005 = {
                 / (1 - (0.24 * f_ck**(1/3) * (1 - 1.2 * sigma_cp / f_cd) * b_w * z) / V_Ed)
             )
         ),
-        "nu_shear": 0.675,
-        "nu_1": lambda f_ck, angle_deg: 0.75 * max(1.1 - f_ck / 500, 1.0),
+        "nu_shear": 0.75,
+        "nu_1": lambda f_ck, angle_deg: 0.75,
         "nu_1_note_2": lambda f_ck, angle_deg: 0.75 * max(1.1 - f_ck / 500, 1.0),  # Note 2 not allowed
         "alpha_cw": 1.0,
         "nu_torsion": 0.525,
