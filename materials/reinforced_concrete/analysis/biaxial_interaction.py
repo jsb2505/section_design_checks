@@ -4,12 +4,14 @@ Biaxial M-M-N interaction surface generator using fiber-based strain compatibili
 Implements EC2 ultimate limit state analysis for combined axial force and biaxial bending.
 """
 
-from typing import List, Optional, Literal, Dict, Any
+from typing import List, Optional, Literal, Dict, Any, Tuple
 import json
 import csv
 from pathlib import Path
 import numpy as np
 from pydantic import BaseModel, Field, ConfigDict
+from scipy.optimize import brentq, OptimizeWarning
+import warnings
 
 from materials.reinforced_concrete.geometry import RCSection, FiberMesh
 from materials.reinforced_concrete.constitutive import (
@@ -138,6 +140,59 @@ class BiaxialMNInteractionSurface:
         self.section_width = max_x - min_x
         self.section_height = max_y - min_y
 
+    def find_neutral_axis_depth_for_axial_force(
+        self,
+        target_N: float,
+        neutral_axis_angle: float = 0.0,
+        max_concrete_strain: Optional[float] = None,
+        tol: float = 0.1,
+    ) -> Optional[float]:
+        """
+        Find the neutral axis depth that produces a target axial force N.
+
+        This is the inverse problem: given (target_N, angle) → find NA_depth.
+        Uses root finding to solve: N(NA_depth, angle) - target_N = 0
+
+        Args:
+            target_N: Target axial force (kN)
+            neutral_axis_angle: Neutral axis angle (degrees)
+            max_concrete_strain: Maximum concrete strain
+            tol: Tolerance for N convergence (kN)
+
+        Returns:
+            Neutral axis depth (mm) or None if not found
+        """
+        max_depth = max(self.section_width, self.section_height)
+
+        # Define objective function: N(depth) - target_N
+        def objective(depth: float) -> float:
+            point = self.calculate_point(depth, neutral_axis_angle, max_concrete_strain)
+            return point.N - target_N
+
+        # Search bounds: from deep tension to deep compression
+        depth_min = -max_depth * 3
+        depth_max = max_depth * 20
+
+        try:
+            # Check if target is bracketed
+            f_min = objective(depth_min)
+            f_max = objective(depth_max)
+
+            if f_min * f_max > 0:
+                # Target not bracketed - may be outside valid range
+                return None
+
+            # Use Brent's method for root finding
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=OptimizeWarning)
+                na_depth = brentq(objective, depth_min, depth_max, xtol=tol)
+
+            return na_depth
+
+        except (ValueError, RuntimeError):
+            # Root finding failed
+            return None
+
     def calculate_point(
         self,
         neutral_axis_depth: float,
@@ -186,23 +241,34 @@ class BiaxialMNInteractionSurface:
         nx = np.sin(theta)
         ny = -np.cos(theta)
 
-        # Signed distance from neutral axis (positive = compression)
+        # Perpendicular distance from each fiber to neutral axis
+        # The neutral axis is defined by: nx*x + ny*y = neutral_axis_depth
+        # So distance from a point (x_rel, y_rel) to this line is:
         distance_from_na = nx * x_rel + ny * y_rel - neutral_axis_depth
 
-        # Calculate strain at each fiber
-        # ε = ε_max * distance_from_na / (max_distance_from_na)
-        # For simplicity, use fixed compression zone depth
-        # Strain varies linearly from NA
+        # Find the extreme fiber distances for scaling strains
+        # The extreme compression fiber has maximum positive distance
+        # The extreme tension fiber has maximum negative distance
+        d_max = np.max(distance_from_na)  # Extreme compression fiber
+        d_min = np.min(distance_from_na)  # Extreme tension fiber
 
-        if neutral_axis_depth > 0:
-            # Compression zone exists
-            # Maximum compression at the extreme fiber on compression side
-            # ε = ε_cu * distance_from_na / neutral_axis_depth
-            strains = max_concrete_strain * distance_from_na / neutral_axis_depth
+        # Calculate strains using plane sections remain plane
+        # Strain varies linearly from neutral axis
+        # At extreme compression fiber: ε = ε_cu (ultimate compression strain)
+        # At neutral axis: ε = 0
+        # In tension zone: ε < 0 (tensile strain)
+
+        if d_max > 0:
+            # There is a compression zone
+            # Scale strains so that extreme compression fiber reaches ε_cu
+            strains = max_concrete_strain * distance_from_na / d_max
+        elif d_min < 0:
+            # Pure tension (all fibers in tension)
+            # Scale by most tensioned fiber
+            strains = max_concrete_strain * distance_from_na / abs(d_min)
         else:
-            # Pure tension (NA beyond section)
-            # All fibers in tension
-            strains = -max_concrete_strain * distance_from_na / abs(neutral_axis_depth)
+            # All fibers at neutral axis (shouldn't happen)
+            strains = np.zeros_like(distance_from_na)
 
         # Calculate stresses from constitutive models
         stresses = np.zeros_like(strains)
@@ -257,175 +323,184 @@ class BiaxialMNInteractionSurface:
 
     def generate_surface(
         self,
-        n_angles: int = 16,
-        n_depths: int = 30,
+        n_angles: int = 36,
+        n_axial_levels: int = 20,
         include_tension: bool = True,
     ) -> List[BiaxialInteractionPoint]:
         """
-        Generate complete biaxial M-M-N interaction surface.
+        Generate biaxial M-M-N interaction surface using constant N contours.
 
-        Creates points covering:
-        - Full range of neutral axis angles (0° to 360°)
-        - Full range of neutral axis depths (compression to tension)
-        - Pure compression point (all concrete and steel at compression capacity)
-        - Pure tension point (all steel at tension capacity, concrete cracked)
+        This method creates horizontal slices through the surface at constant N levels,
+        producing the proper rugby ball / ellipsoidal shape.
+
+        For each N level:
+        1. Sweep through neutral axis angles (0° to 360°)
+        2. Solve for NA depth that gives the target N
+        3. Creates a closed contour (ellipse) at that N level
 
         Args:
-            n_angles: Number of neutral axis angles to evaluate
-            n_depths: Number of neutral axis depths per angle
-            include_tension: Include pure tension branch
+            n_angles: Number of neutral axis angles per contour (recommended: 36-60)
+            n_axial_levels: Number of N levels to generate (recommended: 20-50)
+            include_tension: Include tension branch (negative N)
 
         Returns:
-            List of BiaxialInteractionPoint covering the 3D surface
+            List of BiaxialInteractionPoint with proper ellipsoidal shape
+
+        Example:
+            >>> surface = create_biaxial_interaction_surface(section, concrete)
+            >>> points = surface.generate_surface(n_angles=60, n_axial_levels=50)
+            >>> # Creates ~3000 points in rugby ball shape
         """
         points: List[BiaxialInteractionPoint] = []
 
-        # Range of neutral axis angles (0° to 360°)
-        # For full generality, use 0° to 360° to capture any asymmetry
-        angles = np.linspace(0, 360, n_angles, endpoint=False)
+        # Calculate pure compression and tension capacities
+        pure_compression_N, pure_tension_N = self._get_axial_capacity_range()
 
-        # For each angle, generate points at different NA depths
-        for angle in angles:
-            # Define neutral axis depth range for this angle
-            max_depth = max(self.section_width, self.section_height)
+        # Define N levels from tension to compression
+        if include_tension:
+            N_levels = np.linspace(pure_tension_N * 0.95, pure_compression_N * 0.95, n_axial_levels)
+        else:
+            N_levels = np.linspace(0, pure_compression_N * 0.95, n_axial_levels)
 
-            # Use sophisticated sampling similar to uniaxial M-N diagram
-            # Denser sampling in high-curvature regions (balanced failure zone)
-            na_depths = np.concatenate([
-                # Very deep compression (approaching pure compression)
-                np.linspace(max_depth * 10, max_depth * 2, max(3, n_depths // 8)),
-                # Deep compression (approaching section)
-                np.linspace(max_depth * 2, max_depth * 1.5, max(5, n_depths // 8)),
-                # Compression controlled (high curvature region)
-                np.linspace(max_depth * 1.5, max_depth * 0.5, max(10, n_depths // 4)),
-                # Balanced region (very high curvature - needs dense sampling)
-                np.linspace(max_depth * 0.5, max_depth * 0.05, max(20, n_depths // 2)),
-                # Tension controlled - stop at NA just inside section
-                np.linspace(max_depth * 0.05, max_depth * 0.001, max(5, n_depths // 8)),
-            ])
+        # Generate points for each N level
+        for target_N in N_levels:
+            # Angles for this contour (0° to 360°)
+            angles = np.linspace(0, 360, n_angles, endpoint=False)
 
-            # Generate points for this angle
-            for depth in na_depths:
-                points.append(self.calculate_point(depth, angle))
-
-            # Add tension branch if requested
-            if include_tension:
-                # Tension-controlled points (NA beyond section on compression side)
-                depths_tension = np.linspace(
-                    -max_depth * 0.001,
-                    -max_depth * 2,
-                    max(10, n_depths // 4)
+            for angle in angles:
+                # Find NA depth that gives target N at this angle
+                na_depth = self.find_neutral_axis_depth_for_axial_force(
+                    target_N=target_N,
+                    neutral_axis_angle=angle,
                 )
-                for depth in depths_tension:
-                    points.append(self.calculate_point(depth, angle))
+
+                if na_depth is not None:
+                    point = self.calculate_point(na_depth, angle)
+                    points.append(point)
 
         # Add pure compression point
-        # Pure compression: entire section at ultimate concrete strain
-        # N = concrete_area × f_c + Σ(A_s × f_yd)
-        # My and Mz arise from eccentric steel placement
+        pure_comp_point = self._get_pure_compression_point()
+        points.append(pure_comp_point)
 
+        # Add pure tension point if requested
+        if include_tension:
+            pure_tens_point = self._get_pure_tension_point()
+            points.append(pure_tens_point)
+
+        return points
+
+    def _get_axial_capacity_range(self) -> Tuple[float, float]:
+        """Get pure compression and pure tension capacities."""
+        # Pure compression
+        concrete_area = self.section.outline.area
+        f_c = self.concrete_model.get_yield_stress()
+        N_concrete = concrete_area * f_c / 1000.0
+
+        N_steel_comp = 0.0
+        N_steel_tens = 0.0
+
+        for group_idx, group in enumerate(self.section.rebar_groups):
+            A_s = group.rebar.area
+            f_yd = self.steel_models[group_idx].get_yield_stress()
+            n_bars = len(group.positions)
+
+            N_steel_comp += n_bars * A_s * f_yd / 1000.0
+            N_steel_tens += n_bars * A_s * f_yd / 1000.0
+
+        pure_compression_N = N_concrete + N_steel_comp
+        pure_tension_N = -N_steel_tens
+
+        return pure_compression_N, pure_tension_N
+
+    def _get_pure_compression_point(self) -> BiaxialInteractionPoint:
+        """Calculate pure compression point."""
         section_cx, section_cy = self.section.get_centroid()
 
-        # Concrete contribution (uniform compression at design strength)
-        concrete_area = self.section.outline.area  # mm²
-        f_c = self.concrete_model.get_yield_stress()  # f_cd for design models
-        N_concrete = concrete_area * f_c / 1000.0  # kN
+        concrete_area = self.section.outline.area
+        f_c = self.concrete_model.get_yield_stress()
+        N_concrete = concrete_area * f_c / 1000.0
 
-        # Steel contribution (all steel at yield in compression)
         N_steel = 0.0
         My_steel = 0.0
         Mz_steel = 0.0
         max_steel_strain = 0.0
 
         for group_idx, group in enumerate(self.section.rebar_groups):
-            A_s = group.rebar.area  # Area per bar
-            f_yd = self.steel_models[group_idx].get_yield_stress()  # Yield stress
+            A_s = group.rebar.area
+            f_yd = self.steel_models[group_idx].get_yield_stress()
 
             for pos in group.positions:
-                # Compression force (positive)
-                bar_force = A_s * f_yd / 1000.0  # kN
+                bar_force = A_s * f_yd / 1000.0
                 N_steel += bar_force
 
-                # Moments about section centroid (3D FEA convention)
-                x_offset = pos.x - section_cx  # Horizontal offset
-                y_offset = pos.y - section_cy  # Vertical offset
+                x_offset = pos.x - section_cx
+                y_offset = pos.y - section_cy
 
-                # My = moment about y-axis (from z-direction forces)
-                My_steel += bar_force * y_offset / 1000.0  # kN·m
+                My_steel += bar_force * y_offset / 1000.0
+                Mz_steel += bar_force * x_offset / 1000.0
 
-                # Mz = moment about z-axis (from y-direction forces)
-                Mz_steel += bar_force * x_offset / 1000.0  # kN·m
-
-            # Track maximum steel yield strain
             max_steel_strain = max(max_steel_strain, self.steel_models[group_idx].epsilon_y)
 
-        pure_compression_N = N_concrete + N_steel
-        pure_compression_My = My_steel  # Concrete symmetric → no moment
-        pure_compression_Mz = Mz_steel
+        max_depth = max(self.section_width, self.section_height)
 
-        pure_compression_point = BiaxialInteractionPoint(
-            N=pure_compression_N,
-            My=pure_compression_My,
-            Mz=pure_compression_Mz,
-            neutral_axis_depth=max_depth * 1000,  # NA very deep
-            neutral_axis_angle=0.0,  # Arbitrary for pure compression
+        return BiaxialInteractionPoint(
+            N=N_concrete + N_steel,
+            My=My_steel,
+            Mz=Mz_steel,
+            neutral_axis_depth=max_depth * 1000,
+            neutral_axis_angle=0.0,
             max_concrete_strain=self.concrete_model.get_ultimate_strain(),
             max_steel_strain=max_steel_strain,
         )
-        points.append(pure_compression_point)
 
-        # Add pure tension point if requested
-        if include_tension:
-            # Pure tension: all steel at yield in tension, concrete fully cracked
-            # N = -Σ(A_s × f_yd)
-            # My and Mz arise from eccentric steel placement
+    def _get_pure_tension_point(self) -> BiaxialInteractionPoint:
+        """Calculate pure tension point."""
+        section_cx, section_cy = self.section.get_centroid()
 
-            pure_tension_N = 0.0
-            pure_tension_My = 0.0
-            pure_tension_Mz = 0.0
-            max_steel_strain = 0.0
+        N_steel = 0.0
+        My_steel = 0.0
+        Mz_steel = 0.0
+        max_steel_strain = 0.0
 
-            for group_idx, group in enumerate(self.section.rebar_groups):
-                A_s = group.rebar.area
-                f_yd = self.steel_models[group_idx].get_yield_stress()
+        for group_idx, group in enumerate(self.section.rebar_groups):
+            A_s = group.rebar.area
+            f_yd = self.steel_models[group_idx].get_yield_stress()
 
-                for pos in group.positions:
-                    # Tension force (negative)
-                    bar_force = -A_s * f_yd / 1000.0  # kN (negative for tension)
-                    pure_tension_N += bar_force
+            for pos in group.positions:
+                bar_force = -A_s * f_yd / 1000.0  # Negative for tension
+                N_steel += bar_force
 
-                    # Moments about section centroid
-                    x_offset = pos.x - section_cx
-                    y_offset = pos.y - section_cy
+                x_offset = pos.x - section_cx
+                y_offset = pos.y - section_cy
 
-                    pure_tension_My += bar_force * y_offset / 1000.0  # kN·m
-                    pure_tension_Mz += bar_force * x_offset / 1000.0  # kN·m
+                My_steel += bar_force * y_offset / 1000.0
+                Mz_steel += bar_force * x_offset / 1000.0
 
-                max_steel_strain = max(max_steel_strain, self.steel_models[group_idx].epsilon_y)
+            max_steel_strain = max(max_steel_strain, self.steel_models[group_idx].epsilon_y)
 
-            pure_tension_point = BiaxialInteractionPoint(
-                N=pure_tension_N,
-                My=pure_tension_My,
-                Mz=pure_tension_Mz,
-                neutral_axis_depth=-max_depth * 10,  # NA far beyond section
-                neutral_axis_angle=0.0,  # Arbitrary for pure tension
-                max_concrete_strain=0.0,
-                max_steel_strain=max_steel_strain,
-            )
-            points.append(pure_tension_point)
+        max_depth = max(self.section_width, self.section_height)
 
-        return points
+        return BiaxialInteractionPoint(
+            N=N_steel,
+            My=My_steel,
+            Mz=Mz_steel,
+            neutral_axis_depth=-max_depth * 10,
+            neutral_axis_angle=0.0,
+            max_concrete_strain=0.0,
+            max_steel_strain=max_steel_strain,
+        )
+
 
     def export_to_json(
         self,
         file_path: str | Path,
-        n_angles: int = 16,
-        n_depths: int = 30,
+        n_angles: int = 36,
+        n_axial_levels: int = 20,
         include_metadata: bool = True,
         indent: int = 2,
     ) -> None:
         """Export biaxial M-M-N surface to JSON file."""
-        points = self.generate_surface(n_angles=n_angles, n_depths=n_depths)
+        points = self.generate_surface(n_angles=n_angles, n_axial_levels=n_axial_levels)
 
         data: Dict[str, Any] = {
             "surface_points": [p.to_dict() for p in points],
@@ -442,7 +517,7 @@ class BiaxialMNInteractionSurface:
                 "concrete_model": type(self.concrete_model).__name__,
                 "steel_models": [type(sm).__name__ for sm in self.steel_models],
                 "n_angles": n_angles,
-                "n_depths": n_depths,
+                "n_axial_levels": n_axial_levels,
                 "total_points": len(points),
             }
 
@@ -453,11 +528,11 @@ class BiaxialMNInteractionSurface:
     def export_to_csv(
         self,
         file_path: str | Path,
-        n_angles: int = 16,
-        n_depths: int = 30,
+        n_angles: int = 36,
+        n_axial_levels: int = 20,
     ) -> None:
         """Export biaxial M-M-N surface to CSV file."""
-        points = self.generate_surface(n_angles=n_angles, n_depths=n_depths)
+        points = self.generate_surface(n_angles=n_angles, n_axial_levels=n_axial_levels)
 
         file_path = Path(file_path)
         with open(file_path, 'w', newline='', encoding='utf-8') as f:
@@ -510,6 +585,6 @@ def create_biaxial_interaction_surface(
         >>> concrete = ConcreteMaterial(grade="C30/37")
         >>>
         >>> surface = create_biaxial_interaction_surface(section, concrete)
-        >>> points = surface.generate_surface(n_angles=16, n_depths=30)
+        >>> points = surface.generate_surface(n_angles=60, n_axial_levels=50)
     """
     return BiaxialMNInteractionSurface(section=section, concrete=concrete, **kwargs)
