@@ -146,42 +146,77 @@ class TestCircularEquivalentWebWidth:
         assert b_w < b_wc
 
 
-class TestCircularShearCapacityNoRebar:
-    def test_unreinforced_shear_capacity_is_independent_of_cover(self):
+class TestCircularShearCapacityPolicy:
+    def test_perform_shear_check_requires_shear_reinforcement(self):
         section = _make_circular_section()
         concrete = ConcreteMaterial(grade="C30/37")
 
-        check_cover_30 = CircularSectionCheck(
+        check = CircularSectionCheck(
             section=section,
             concrete=concrete,
             diameter=600.0,
             cover=30.0,
             shear_reinforcement=None,
         )
-        check_cover_80 = CircularSectionCheck(
+
+        load = ShearLoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
+
+        with pytest.raises(ValueError, match="requires shear_reinforcement"):
+            check.perform_shear_check(load_case=load, suppress_warnings=True)
+
+    def test_reports_both_cracked_and_uncracked_vrdc(self):
+        section = _make_circular_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        shear_rebar = ShearRebar(diameter=12, link_spacing=200, n_legs=2, grade="B500B")
+
+        check = CircularSectionCheck(
             section=section,
             concrete=concrete,
             diameter=600.0,
-            cover=80.0,
-            shear_reinforcement=None,
+            cover=50.0,
+            shear_reinforcement=shear_rebar,
+        )
+
+        load = ShearLoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
+        result = check.perform_shear_check(load_case=load, suppress_warnings=True)
+
+        assert result.details["use_uncracked_V_Rd_c"] is False
+        assert result.details["V_Rd_c"] == pytest.approx(result.details["V_Rd_c_cracked"], rel=1e-12)
+        assert result.details["V_Rd_c_uncracked"] is not None
+        assert result.details["V_Rd_s"] is not None
+        assert result.details["V_Rd_max"] is not None
+
+    def test_use_uncracked_vrdc_changes_selected_vrdc_not_reinforced_capacity(self):
+        section = _make_circular_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        shear_rebar = ShearRebar(diameter=12, link_spacing=200, n_legs=2, grade="B500B")
+
+        check = CircularSectionCheck(
+            section=section,
+            concrete=concrete,
+            diameter=600.0,
+            cover=50.0,
+            shear_reinforcement=shear_rebar,
         )
 
         load = ShearLoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
 
-        result_30 = check_cover_30.perform_shear_check(
+        result_default = check.perform_shear_check(
             load_case=load,
-            force_cracked=True,
             suppress_warnings=True,
         )
-        result_80 = check_cover_80.perform_shear_check(
+        result_uncracked = check.perform_shear_check(
             load_case=load,
-            force_cracked=True,
+            use_uncracked_V_Rd_c=True,
             suppress_warnings=True,
         )
 
-        assert result_30.capacity == pytest.approx(result_80.capacity, rel=1e-9)
-        assert result_30.details["V_Rd_c_max_unreinforced"] == pytest.approx(
-            result_80.details["V_Rd_c_max_unreinforced"], rel=1e-9
+        assert result_default.capacity == pytest.approx(result_uncracked.capacity, rel=1e-12)
+        assert result_default.details["V_Rd_c"] == pytest.approx(
+            result_default.details["V_Rd_c_cracked"], rel=1e-12
+        )
+        assert result_uncracked.details["V_Rd_c"] == pytest.approx(
+            result_uncracked.details["V_Rd_c_uncracked"], rel=1e-12
         )
 
 

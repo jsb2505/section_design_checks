@@ -43,7 +43,6 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     find_nu_1_factor,
     find_nu_1_factor_note_2,
     find_V_Rd_c_cracked,
-    find_V_Rd_c_max_unreinforced,
     find_rho_l_from_strains,
     sigma_cp_from_N_and_area,
     cap_sigma_cp_upper,
@@ -166,17 +165,15 @@ class CircularSectionCheck(BaseModel):
         ),
     )
 
-    # TODO this field is really a policy decision to enhance nu_1
-    # (thereby increasing V_Rd,max) at the cost of a reduction in V_Rd,s
-    # Option include, making the wording more explicit or changing to policy
-    # approach with 'check_only' or 'cap_stress'
     use_increased_nu_1: bool = Field(
         default=False,
         description=(
-            "Use increased ν₁ factor per EC2 §6.2.3(3) Note 2 when shear "
-            "reinforcement stress is below 80% of f_yk (σ_s < 0.8·f_yk). "
-            "This allows higher V_Rd,max capacity but requires iterative "
-            "calculation and reduces f_ywd to 0.8·f_ywk for V_Rd,s."
+            "Policy toggle for EC2 §6.2.3(3) Note 2 iteration. If True, the "
+            "check attempts Note 2 (increased ν₁) when eligible by stress "
+            "criterion (σ_s < 0.8·f_yk), but may revert to Note 1 if "
+            "oscillation/non-convergence is detected. When Note 2 is used, "
+            "f_ywd is reduced to 0.8·f_ywk for V_Rd,s. Ignored when "
+            "cot_theta_override is provided."
         ),
     )
 
@@ -325,7 +322,7 @@ class CircularSectionCheck(BaseModel):
         ):
             warnings.warn(
                 f"ShearRebar.angle={self.shear_reinforcement.angle}° is ignored for "
-                f"circular sections — links must be 90° (vertical)."
+                f"circular sections — links must be 90° (vertical). "
                 f"Spirals use spacing for pitch, angle makes no difference. "
                 f"The λ1/λ2 efficiency factors account for circular geometry.",
                 UserWarning,
@@ -757,10 +754,10 @@ class CircularSectionCheck(BaseModel):
         load_case: ShearLoadCase,
         cot_theta_override: Optional[float] = None,
         use_v_rd_s_for_cot_theta: bool = False,
+        use_uncracked_V_Rd_c: bool = False,
         warning_threshold: float = 0.95,
         suppress_warnings: bool = False,
         ignore_compression_steel: bool = False,
-        force_cracked: bool = False,
     ) -> CheckResult:
         """
         Shear check for circular section (Orr 2012).
@@ -774,26 +771,36 @@ class CircularSectionCheck(BaseModel):
         Args:
             load_case: ShearLoadCase with V_Ed, M_Ed, N_Ed
             cot_theta_override: User-supplied cot(θ). If None, computed from
-                V_Rd_max equation with circular b_w.
+                V_Rd_max equation with circular b_w. When provided, this
+                bypasses the Note 2 iteration logic and uses Note 1 values.
             use_v_rd_s_for_cot_theta: If True, solve cot(θ) from rearranged EC2
                 Eq. 6.13 (V_Rd,s = V_Ed). If False (default), solve from
                 rearranged EC2 Eq. 6.14 / V_Rd,max.
+            use_uncracked_V_Rd_c:
+                If True, use uncracked Eq.17 V_Rd,c when passing V_Rd,c into
+                NDP note-based spacing rules and reporting selected V_Rd,c.
+                If False (default), use cracked V_Rd,c for this purpose.
+                In both cases, reinforced shear capacity still governs from
+                min(V_Rd,s, V_Rd,max).
             warning_threshold: Utilization threshold for warnings
             suppress_warnings: If True, suppress warnings emitted during this check.
             ignore_compression_steel: If True, ignore compression reinforcement.
-            force_cracked: If True, skip the cracking moment check and go
-                straight to the reinforced shear check
 
         Returns:
             CheckResult with shear utilization and detailed breakdown
         """
         assert self._shear_check is not None
-        assert self._cracking_check is not None
         assert self._concrete_uls is not None
 
         V_Ed = abs(load_case.V_Ed)
         M_Ed = load_case.M_Ed
         N_Ed = load_case.N_Ed
+
+        if self.shear_reinforcement is None:
+            raise ValueError(
+                "Circular shear check requires shear_reinforcement. "
+                "Unreinforced circular shear design is not supported in this flow."
+            )
 
         # 1. Get d and z from the solver
         d = self._shear_check.find_effective_depth(
@@ -813,93 +820,33 @@ class CircularSectionCheck(BaseModel):
         A_c = self.section.get_area()  # Gross concrete area (mm²)
         sigma_cp = sigma_cp_from_N_and_area(N_Ed=N_Ed, area=A_c)
         sigma_cp_capped = cap_sigma_cp_upper(sigma_cp=sigma_cp, f_cd=self._f_cd_design)
-
-        # 3. Check if section is cracked (unless forced)
-        is_cracked = force_cracked
-        M_cr: Optional[float] = None
-        if not force_cracked:
-            # TODO big correctness bug here find_cracking_moment is a SLS check
-            # so should take characteristic axial force but then a ULS bending
-            # force is being compared to it. Also the function uses E,c,Eff always
-            # (no current arg to toggle or override this on the function).
-            # Finally even if the section isn't cracked in this loadcase, there is
-            # no certainty it won't be cracked from another loadcase.
-            # Once cracked it stays cracked so this branch is invalid.
-            # Perhaps better to let the user derive first if the section remains
-            # uncracked and then instead allow the user to force a use_uncracked mode?
-            M_cr = self._cracking_check.find_cracking_moment(N_Ed=N_Ed)
-            is_cracked = abs(M_Ed) > abs(M_cr)
-
-        # 4. Uncracked section — use Eq.17
-        if not is_cracked:
-            # TODO should V_Rd_c_max only be found if the section is unreinforced? that is how ShearCheck works
-            V_Rd_c = self.calculate_V_Rd_c_uncracked(sigma_cp_capped)
-            # Eq.6.5 upper bound on unreinforced shear resistance
-            b_w_uc, _, _ = self.calculate_equivalent_web_width(d, z)
-            V_Rd_c_max = find_V_Rd_c_max_unreinforced(
-                b_w=b_w_uc, d=d, f_ck=self._concrete_uls.f_ck, f_cd=self._f_cd_design,
-            )
-            V_Rd_c = min(V_Rd_c, V_Rd_c_max)
-            return self._build_check_result(
-                check_name="Circular shear (uncracked, Eq.17)",
-                code_reference="Orr (2012) Eq.17, based on EC2 §6.2",
-                demand=V_Ed,
-                capacity=V_Rd_c,
-                units="kN",
-                warning_threshold=warning_threshold,
-                details=self._shear_details(
-                    V_Ed=V_Ed, M_Ed=M_Ed, N_Ed=N_Ed, V_Rd=V_Rd_c,
-                    d=d, z=z, sigma_cp=sigma_cp_capped,
-                    is_cracked=False, M_cr=M_cr, V_Rd_c=V_Rd_c,
-                    V_Rd_c_max=V_Rd_c_max,
-                    governing_mode="uncracked concrete",
-                    section_name=self.section.section_name or "",
-                ),
-            )
-
-        # 5. Cracked but no reinforcement — min of uncracked Eq.17 and cracked §6.2.2
-        if self.shear_reinforcement is None:
-            V_Rd_c_uncracked = self.calculate_V_Rd_c_uncracked(sigma_cp_capped)
-            b_w_cr, _, _ = self.calculate_equivalent_web_width(d, z)
-            rho_l = self._find_rho_l(
-                M_Ed=M_Ed,
-                N_Ed=N_Ed,
-                b_w=b_w_cr,
-                d=d,
-                ignore_compression_steel=ignore_compression_steel,
-            )
-            V_Rd_c_cracked = find_V_Rd_c_cracked(
-                b_w=b_w_cr, d=d, rho_l=rho_l, sigma_cp=sigma_cp_capped,
-                f_ck=self._concrete_uls.f_ck, gamma_c=self._concrete_uls.gamma_c,
-            )
-            V_Rd_c_max = find_V_Rd_c_max_unreinforced(
-                b_w=b_w_cr, d=d, f_ck=self._concrete_uls.f_ck, f_cd=self._f_cd_design,
-            )
-            V_Rd_c = min(V_Rd_c_uncracked, V_Rd_c_cracked, V_Rd_c_max)
-            return self._build_check_result(
-                check_name="Circular shear (cracked, no reinforcement)",
-                code_reference="Orr (2012) Eq.17 + EC2 §6.2.2",
-                demand=V_Ed,
-                capacity=V_Rd_c,
-                units="kN",
-                warning_threshold=warning_threshold,
-                details=self._shear_details(
-                    V_Ed=V_Ed, M_Ed=M_Ed, N_Ed=N_Ed, V_Rd=V_Rd_c,
-                    d=d, z=z, sigma_cp=sigma_cp_capped,
-                    is_cracked=True, M_cr=M_cr, V_Rd_c=V_Rd_c,
-                    V_Rd_c_max=V_Rd_c_max,
-                    governing_mode="concrete (no shear reinforcement)",
-                    section_name=self.section.section_name or "",
-                ),
-            )
-
-        # 6. Cracked with shear reinforcement
+        # 3. Reinforced shear checks.
+        # Concrete V_Rd,c values are still calculated for reporting and spacing
+        # note rules, but design capacity is always from V_Rd,s / V_Rd,max.
         z_0 = d - self.diameter / 2  # distance from section centre to tension centroid
         lambda_1 = self.calculate_lambda_1(z_0, z)
         lambda_2 = self.calculate_lambda_2()
 
         # Circular equivalent web width
         b_w, b_wc, b_wt = self.calculate_equivalent_web_width(d, z)
+
+        rho_l = self._find_rho_l(
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            b_w=b_w,
+            d=d,
+            ignore_compression_steel=ignore_compression_steel,
+        )
+        V_Rd_c_cracked = find_V_Rd_c_cracked(
+            b_w=b_w,
+            d=d,
+            rho_l=rho_l,
+            sigma_cp=sigma_cp_capped,
+            f_ck=self._concrete_uls.f_ck,
+            gamma_c=self._concrete_uls.gamma_c,
+        )
+        V_Rd_c_uncracked = self.calculate_V_Rd_c_uncracked(sigma_cp_capped)
+        V_Rd_c = V_Rd_c_uncracked if use_uncracked_V_Rd_c else V_Rd_c_cracked
 
         # Strut parameters
         f_cd = self._f_cd_design
@@ -908,21 +855,6 @@ class CircularSectionCheck(BaseModel):
             f_cd,
             sigma_cp_capped,
             use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
-        )
-        rho_l_for_spacing = self._find_rho_l(
-            M_Ed=M_Ed,
-            N_Ed=N_Ed,
-            b_w=b_w,
-            d=d,
-            ignore_compression_steel=ignore_compression_steel,
-        )
-        V_Rd_c_for_spacing = find_V_Rd_c_cracked(
-            b_w=b_w,
-            d=d,
-            rho_l=rho_l_for_spacing,
-            sigma_cp=sigma_cp_capped,
-            f_ck=f_ck,
-            gamma_c=self._concrete_uls.gamma_c,
         )
         link_spacing_max_allowable: Optional[float] = None
         link_spacing_satisfied: Optional[bool] = None
@@ -988,7 +920,7 @@ class CircularSectionCheck(BaseModel):
             f_ck=f_ck,
             V_Ed=V_Ed,
             V_Rd_max=V_Rd_max,
-            V_Rd_c=V_Rd_c_for_spacing,
+            V_Rd_c=V_Rd_c,
             link_angle_degrees=self.shear_reinforcement.angle,
         )
         link_spacing_satisfied = self.shear_reinforcement.link_spacing <= link_spacing_max_allowable + 1e-9
@@ -1006,7 +938,7 @@ class CircularSectionCheck(BaseModel):
                 f_ck=f_ck,
                 V_Ed=V_Ed,
                 V_Rd_max=V_Rd_max,
-                V_Rd_c=V_Rd_c_for_spacing,
+                V_Rd_c=V_Rd_c,
                 link_angle_degrees=self.shear_reinforcement.angle,
             )
             leg_spacing_satisfied = self.shear_reinforcement.leg_spacing <= leg_spacing_max_allowable + 1e-9
@@ -1031,7 +963,9 @@ class CircularSectionCheck(BaseModel):
             details=self._shear_details(
                 V_Ed=V_Ed, M_Ed=M_Ed, N_Ed=N_Ed, V_Rd=V_Rd,
                 d=d, z=z, sigma_cp=sigma_cp_capped,
-                is_cracked=True, M_cr=M_cr,
+                V_Rd_c=V_Rd_c,
+                V_Rd_c_cracked=V_Rd_c_cracked, V_Rd_c_uncracked=V_Rd_c_uncracked,
+                use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
                 V_Rd_s=V_Rd_s, V_Rd_max=V_Rd_max,
                 governing_mode=governing,
                 section_name=self.section.section_name or "",
@@ -1069,6 +1003,7 @@ class CircularSectionCheck(BaseModel):
         """
         Calculate V_Rd_max and V_Rd_s with ν₁ Note 2 iteration per EC2 §6.2.3(3).
 
+        This is an "attempt Note 2" policy, not a forced Note 2 policy.
         Iterates to check if σ_s < 0.8·f_yk, allowing increased ν₁ factor.
         Detects oscillation and reverts to Note 1 if needed.
 
@@ -1292,11 +1227,12 @@ class CircularSectionCheck(BaseModel):
         d: float,
         z: float,
         sigma_cp: float,
-        is_cracked: bool,
         section_name: str = "",
         governing_mode: str = "",
-        M_cr: Optional[float] = None,
         V_Rd_c: Optional[float] = None,
+        V_Rd_c_cracked: Optional[float] = None,
+        V_Rd_c_uncracked: Optional[float] = None,
+        use_uncracked_V_Rd_c: Optional[bool] = None,
         V_Rd_c_max: Optional[float] = None,
         V_Rd_s: Optional[float] = None,
         V_Rd_max: Optional[float] = None,
@@ -1323,8 +1259,8 @@ class CircularSectionCheck(BaseModel):
         """Assemble details dict for shear check results.
 
         Key names match ShearCheck.perform_check details for consistency.
-        Circular-specific keys (lambda_1, lambda_2, b_wc, b_wt, z_0, is_cracked,
-        M_cr) are appended after the common fields.
+        Circular-specific keys (lambda_1, lambda_2, b_wc, b_wt, z_0) are
+        appended after the common fields.
         """
         # Common fields — same names and order as ShearCheck
         details: Dict[str, Any] = {
@@ -1333,6 +1269,9 @@ class CircularSectionCheck(BaseModel):
             "N_Ed": N_Ed,
             "V_Rd": V_Rd,
             "V_Rd_c": V_Rd_c,
+            "V_Rd_c_cracked": V_Rd_c_cracked,
+            "V_Rd_c_uncracked": V_Rd_c_uncracked,
+            "use_uncracked_V_Rd_c": use_uncracked_V_Rd_c,
             "V_Rd_c_max_unreinforced": V_Rd_c_max,
             "V_Rd_s": V_Rd_s,
             "V_Rd_max": V_Rd_max,
@@ -1358,9 +1297,6 @@ class CircularSectionCheck(BaseModel):
             "leg_spacing_max_allowable": leg_spacing_max_allowable,
         }
         # Circular-specific fields
-        details["is_cracked"] = is_cracked
-        if M_cr is not None:
-            details["M_cr"] = M_cr
         if lambda_1 is not None:
             details["lambda_1"] = lambda_1
         if lambda_2 is not None:
