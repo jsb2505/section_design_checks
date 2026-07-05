@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 from materials.reinforced_concrete.ndp.ndp import (
     _NDP_METADATA,
@@ -49,8 +49,8 @@ class CountryCode(StrEnum):
 # All NDP data keyed by code version
 # Structure: {code_version: {country_code: {param: value}}}
 _NDP_DATA: dict[str, dict[str, dict[str, NDPValue]]] = {
-    EurocodeVersion.EN1992_1_1_2004: EN1992_1_1_2004,
-    EurocodeVersion.EN1992_2_2005: EN1992_2_2005,
+    EurocodeVersion.EN1992_1_1_2004: cast("dict[str, dict[str, NDPValue]]", EN1992_1_1_2004),
+    EurocodeVersion.EN1992_2_2005: cast("dict[str, dict[str, NDPValue]]", EN1992_2_2005),
 }
 
 # Overlay relationships: overlay code -> base code.
@@ -143,7 +143,7 @@ class NDPRegistry:
                 f"{self._code} / {self._country}. "
                 f"Available: {sorted(country_data.keys())}"
             )
-        return country_data[param]["value"]
+        return cast(NDPValue, country_data[param]["value"])
 
     def get_info(self, param: str) -> dict[str, Any]:
         """

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import cached_property
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.materials.concrete import ConcreteMaterial
@@ -253,14 +253,14 @@ def _coerce_point2d_sequence(v: Any) -> tuple[Point2D, ...]:
     """Coerce a sequence of Point2D-like items."""
     if isinstance(v, (tuple, list)):
         return tuple(_coerce_point2d(item) for item in v)
-    return v
+    return cast("tuple[Point2D, ...]", v)  # let Pydantic validate/reject
 
 
 def _coerce_voids(v: Any) -> tuple[tuple[Point2D, ...], ...]:
     """Coerce nested sequence of Point2D-like items for voids."""
     if isinstance(v, (tuple, list)):
         return tuple(_coerce_point2d_sequence(ring) for ring in v)
-    return v
+    return cast("tuple[tuple[Point2D, ...], ...]", v)  # let Pydantic validate/reject
 
 
 class RCSection(BaseGeometry):
@@ -1011,14 +1011,14 @@ class RCSection(BaseGeometry):
             if vv <= 1e-18:
                 dx = px - ax
                 dy = py - ay
-                return (dx * dx + dy * dy) ** 0.5
+                return float((dx * dx + dy * dy) ** 0.5)
             t = (wx * vx + wy * vy) / vv
             t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
             cx_ = ax + t * vx
             cy_ = ay + t * vy
             dx = px - cx_
             dy = py - cy_
-            return (dx * dx + dy * dy) ** 0.5
+            return float((dx * dx + dy * dy) ** 0.5)
 
         for group in self.rebar_groups:
             r = float(group.rebar.diameter) / 2.0

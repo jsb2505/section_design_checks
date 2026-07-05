@@ -10,7 +10,7 @@ authors = [
     {name = "Joe B", email = "jsb2505@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 keywords = ["structural engineering", "reinforced concrete", "eurocode", "materials"]
 classifiers = [
@@ -18,7 +18,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
@@ -57,11 +56,11 @@ include = ["materials*"]
 
 [tool.black]
 line-length = 120
-target-version = ['py310', 'py311', 'py312']
+target-version = ['py311', 'py312']
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
@@ -82,11 +81,18 @@ ignore = [
 "tests/**" = ["E501"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
+# The codebase is built on Pydantic v2 models; the pydantic mypy plugin teaches
+# mypy about model fields, validators and field construction.
+plugins = ["pydantic.mypy"]
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
+# Pydantic v2's idiomatic computed field is `@computed_field` stacked on top of
+# `@property`; mypy's core flags this as "Decorators on top of @property are not
+# supported" (prop-decorator). The pattern is correct, so silence that one code.
+disable_error_code = ["prop-decorator"]
 
 # pytest configuration lives in pytest.ini (the single source of truth).
 # A [tool.pytest.ini_options] block here is silently ignored by pytest whenever
