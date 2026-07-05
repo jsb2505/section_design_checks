@@ -1,16 +1,17 @@
 """
-Cracking (flexure) check using M-N interaction diagrams and serviceability loads and
-stress-strain relationships.
+Cracking check for reinforced concrete sections according to EC2 §7.3.
 
-This is a FIRST PRINCIPLES check based on strain compatibility and force equilibrium.
-Uses the fibre-based M-N interaction diagram infrastructure.
+This is a SERVICEABILITY check using characteristic material properties and
+elastic/cracked section analysis to calculate crack widths.
 """
 
-from math import sqrt
-from typing import Optional
-from scipy import interpolate
+from functools import cached_property
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import List, Optional, Tuple
+import warnings
 
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, computed_field
 
 from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
@@ -21,20 +22,75 @@ from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial
 from materials.reinforced_concrete.analysis import create_interaction_diagram
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
 
 
-# TO DO:
-# Finish find_adjusted_ratio_of_bond_strengths method
-# rename methods
-# remove tension and compression rebar these should be calculated from the interaction diagram
-# will need to update the method calls so the new rebar set-up works
-# i.e. area of steel and effective depth
+class LoadDuration(StrEnum):
+    """Load duration for k_t factor in crack width calculation (EC2 §7.3.4(2))."""
+    SHORT_TERM = "short_term"
+    LONG_TERM = "long_term"
+
+    @property
+    def k_t(self) -> float:
+        """Factor for load duration (EC2 §7.3.4(2)): 0.6 short-term, 0.4 long-term."""
+        return {
+            LoadDuration.SHORT_TERM: 0.6,
+            LoadDuration.LONG_TERM: 0.4,
+        }[self]
+
+
+@dataclass
+class CrackingResult:
+    """Detailed results from crack width calculation."""
+    w_k: float  # Calculated crack width (mm)
+    w_k_limit: float  # Allowable crack width (mm)
+    s_r_max: float  # Maximum crack spacing (mm)
+    eps_sm_minus_eps_cm: float  # Difference in mean strains (dimensionless)
+    sigma_s: float  # Steel stress in tension rebar (MPa)
+    rho_p_eff: float  # Effective reinforcement ratio (dimensionless)
+    h_c_ef: float  # Effective height of concrete in tension (mm)
+    x: Optional[float]  # Neutral axis depth from compression face (mm)
+    is_cracked: bool  # Whether section is cracked
+    phi_eq: float  # Equivalent bar diameter (mm)
+    cover: float  # Concrete cover to tension rebar (mm)
+
 
 class CrackingCheck(BaseCodeCheck):
-    '''
-    EC2 2004 cracking check for reinforced concrete sections in flexure.
-    Ref: EC2 §7.3
-    '''
+    """
+    EC2 2004 cracking check for reinforced concrete sections (§7.3).
+
+    Calculates crack widths using EC2 formula (Eq. 7.8):
+        w_k = s_r,max × (ε_sm - ε_cm)
+
+    The check process:
+    1. Determine if section is cracked (compare M_Ed to cracking moment)
+    2. If cracked, solve for strain state using M-N interaction diagram
+    3. Calculate steel stress from strain state
+    4. Calculate h_c,ef, ρ_p,eff, and s_r,max
+    5. Calculate crack width and compare to limit
+
+    Attributes:
+        section: RC section geometry with reinforcement
+        concrete: Concrete material (characteristic properties for SLS)
+        w_k_limit: Allowable crack width (default 0.3mm for XC2/XC3)
+        load_duration: SHORT_TERM (k_t=0.6) or LONG_TERM (k_t=0.4)
+        effective_modulus_ratio: Ratio to reduce E_cm for long-term creep effects
+
+    Example:
+        >>> from materials.reinforced_concrete.geometry import create_rectangular_section
+        >>> from materials.reinforced_concrete.materials import ConcreteMaterial
+        >>>
+        >>> section = create_rectangular_section(width=300, height=500)
+        >>> # ... add reinforcement ...
+        >>> concrete = ConcreteMaterial(grade="C30/37")
+        >>>
+        >>> check = CrackingCheck(section=section, concrete=concrete)
+        >>> result = check.perform_check(M_Ed=50.0, N_Ed=0.0)  # SLS moments in kN·m
+        >>>
+        >>> # For long-term analysis with creep coefficient φ = 2.0:
+        >>> check_lt = CrackingCheck(section=section, concrete=concrete, effective_modulus_ratio=3.0)
+    """
+
     section: RCSection = Field(
         ...,
         description="RC section with reinforcement",
@@ -45,14 +101,25 @@ class CrackingCheck(BaseCodeCheck):
         description="Concrete material properties",
     )
 
+    w_k_limit: float = Field(
+        default=0.3,
+        description="Allowable crack width in mm (EC2 Table 7.1N)",
+        gt=0.0,
+    )
+
+    load_duration: LoadDuration = Field(
+        default=LoadDuration.LONG_TERM,
+        description="Load duration: SHORT_TERM (k_t=0.6) or LONG_TERM (k_t=0.4)",
+    )
+
     concrete_model_type: ConcreteModelType = Field(
         default=ConcreteModelType.PARABOLA_RECTANGLE,
-        description="EC2 concrete stress-strain model (Fig 3.3, 3.4, 3.2)",
+        description="EC2 concrete stress-strain model",
     )
 
     steel_model_type: SteelModelType = Field(
         default=SteelModelType.INCLINED,
-        description="Steel post-yield behaviour (Fig 3.8)",
+        description="Steel post-yield behaviour",
     )
 
     n_fibres_width: int = Field(
@@ -69,24 +136,44 @@ class CrackingCheck(BaseCodeCheck):
         le=500,
     )
 
-    
+    is_high_bond_bar: bool = Field(
+        default=True,
+        description="True for ribbed bars (k_1=0.8), False for plain bars (k_1=1.6)",
+    )
+
+    effective_modulus_ratio: float = Field(
+        default=1.0,
+        description="Ratio to reduce E_cm for long-term creep effects: E_cm,eff = E_cm / ratio. "
+                    "Use (1 + φ) where φ is the creep coefficient for long-term SLS.",
+        gt=0.0,
+    )
+
+    # National Annex coefficients for crack spacing (EC2 §7.3.4(3))
+    k_3: float = Field(
+        default=3.4,
+        description="National Annex coefficient k_3 for crack spacing (recommended 3.4)",
+    )
+
+    k_4: float = Field(
+        default=0.425,
+        description="National Annex coefficient k_4 for crack spacing (recommended 0.425)",
+    )
+
     # ===========================
     # Internal state (private)
     # ===========================
 
     _diagram: MNInteractionDiagram = PrivateAttr()
-    _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
 
     def model_post_init(self, __context):
         """
-        Create M-N interaction diagram on initialization for reuse across multiple checks.
+        Create M-N interaction diagram on initialization.
 
-        This significantly improves performance when checking multiple load cases against
-        the same section, as the diagram (mesh + material models) only needs to be created once.
+        Uses characteristic strengths for serviceability analysis.
         """
         super().model_post_init(__context)
 
-        # Create and cache the diagram for reuse (with compression steel)
+        # Create diagram with CHARACTERISTIC strengths for SLS
         self._diagram = create_interaction_diagram(
             section=self.section,
             concrete=self.concrete,
@@ -94,220 +181,668 @@ class CrackingCheck(BaseCodeCheck):
             steel_model_type=self.steel_model_type,
             n_fibres_width=self.n_fibres_width,
             n_fibres_height=self.n_fibres_height,
-            use_characteristic=True,
+            use_characteristic=True,  # SLS uses characteristic values
             ignore_compression_steel=False,
         )
-        # Diagram without compression steel is created lazily on first use
-        self._diagram_no_comp_steel = None
 
-    def _get_diagram(self, ignore_compression_steel: bool = False) -> MNInteractionDiagram:
-        """Get the appropriate cached diagram based on ignore_compression_steel flag."""
-        if not ignore_compression_steel:
-            return self._diagram
+    # ===============================================
+    # Properties (immutable - don't depend on loads)
+    # ===============================================
 
-        # Lazily create the diagram without compression steel
-        if self._diagram_no_comp_steel is None:
-            self._diagram_no_comp_steel = create_interaction_diagram(
-                section=self.section,
-                concrete=self.concrete,
-                concrete_model_type=self.concrete_model_type,
-                steel_model_type=self.steel_model_type,
-                n_fibres_width=self.n_fibres_width,
-                n_fibres_height=self.n_fibres_height,
-                use_characteristic=True,
-                ignore_compression_steel=True,
-            )
-        return self._diagram_no_comp_steel
+    @computed_field
+    @property
+    def height(self) -> float:
+        """Section height in mm."""
+        return flexure_utils.calculate_section_height(self.section)
 
+    @computed_field
+    @property
+    def breadth(self) -> float:
+        """Section breadth (width) in mm."""
+        return flexure_utils.calculate_section_breadth(self.section)
 
-    def find_rho_p_eff(self,
-                       area_of_steel_tension: float,
-                       h_c_ef: float,
-                       adjusted_ratio_of_bond_strengths: Optional[float] = None,
-                       area_of_prestressing_steel: float = 0) -> float:
-        '''Ratio of area of tension steel reinforcement to effective
-        area of concrete surrounding tension reinforcement.
-        
-        Ref: EC2 §7.3.4(2) (7.10)
-        '''
-        xi_1 = adjusted_ratio_of_bond_strengths  # ξ_1
-        if xi_1 is None:
-            xi_1 = 0  # ξ_1
-        # Effective area of concrete surrounding reinforcement
-        a_c_eff = h_c_ef * self.breadth
-        rho_p_eff = (area_of_steel_tension + xi_1 * area_of_prestressing_steel) / a_c_eff
-        return rho_p_eff
+    @property
+    def k_t(self) -> float:
+        """Factor for load duration (EC2 §7.3.4(2))."""
+        return self.load_duration.k_t
 
-    @staticmethod
-    def find_adjusted_ratio_of_bond_strengths(
-            largest_diameter_of_rebar: int,
-            equivalent_diameter_of_tendon: float,
-            ratio_of_bond_strength_between_bonded_tendons_and_ribbed_steel: float
-            ) -> float:
-        '''ξ_1
-        
-        Ref: EC2 §7.3.2(3) (7.5) & §6.8.2 & Table 6.2
-        '''
-        xi = ratio_of_bond_strength_between_bonded_tendons_and_ribbed_steel  # ξ, §6.8.2 & Table 6.2
-        xi_1 = sqrt(xi * largest_diameter_of_rebar / equivalent_diameter_of_tendon)
-        return xi_1
+    @cached_property
+    def k_1(self) -> float:
+        """Bond coefficient (EC2 §7.3.4(3)): 0.8 for high bond, 1.6 for plain."""
+        return 0.8 if self.is_high_bond_bar else 1.6
 
-    def find_h_c_ef(self) -> float:
-        '''Effective height of concrete surrounding tension reinforcement, in [mm].
+    @cached_property
+    def E_cm_eff(self) -> float:
+        """
+        Effective concrete modulus accounting for creep (EC2 §7.4.3).
 
-        Ref: EC2 §7.3.2(3) & Fig 7.1
-        '''
-        E_cm = self.concrete.get_elastic_modulus()
+        E_cm,eff = E_cm / effective_modulus_ratio
+
+        For long-term analysis, use effective_modulus_ratio = (1 + φ)
+        where φ is the creep coefficient.
+
+        Returns:
+            Effective modulus in MPa
+        """
+        return self.concrete.get_elastic_modulus() / self.effective_modulus_ratio
+
+    @cached_property
+    def alpha_e(self) -> float:
+        """
+        Modular ratio E_s / E_cm,eff (EC2 §7.3.4(2)).
+
+        Uses area-weighted average E_s when multiple rebar groups have different
+        elastic moduli. This is appropriate since alpha_e multiplies rho_p_eff
+        (which sums tension steel areas).
+
+        Returns:
+            Modular ratio (dimensionless)
+        """
+        # TODO strictly speaking it is only the bars that are in tension
+        # that should be considered in the weighting.
+        # Can remove need for heavy compute by first checking if E_s in bars differ or not.
+        if not self.section.rebar_groups:
+            E_s = 200000.0  # Default E_s = 200 GPa
+        else:
+            # Area-weighted average E_s across all rebar groups
+            total_area = 0.0
+            weighted_E_s = 0.0
+            for group in self.section.rebar_groups:
+                group_area = group.rebar.area * len(group.positions)
+                total_area += group_area
+                weighted_E_s += group.rebar.E_s * group_area
+
+            E_s = weighted_E_s / total_area if total_area > 0 else 200000.0
+
+        return E_s / self.E_cm_eff
+
+    # ===============================================
+    # Cracking moment calculation
+    # ===============================================
+
+    def find_cracking_moment(self) -> float:
+        """
+        Cracking moment M_cr (kN·m) - moment at which section first cracks.
+
+        M_cr = f_ctm,fl × W_el / 10^6
+
+        where:
+        - f_ctm,fl = mean flexural tensile strength (accounts for size effect)
+        - W_el = elastic section modulus to tension face
+
+        Returns:
+            Cracking moment in kN·m
+        """
+        # Flexural tensile strength (EC2 §3.1.8)
+        f_ctm_fl = self.concrete.find_mean_flexural_tensile_strength(self.height)
+
+        # Elastic section modulus (uncracked transformed section)
+        I_yy, _, _ = self.section.get_transformed_second_moment_area(self.E_cm_eff)
+        _, c_y, _ = self.section.get_transformed_centroid(self.E_cm_eff)
+        bounds = self.section.outline.bounds
+        y_tension = c_y - bounds[1]  # Distance to bottom (tension) face
+
+        W_el = I_yy / y_tension if y_tension > 0 else I_yy / (self.height / 2)
+
+        # M_cr in kN·m (W_el in mm³, f_ctm_fl in MPa)
+        return f_ctm_fl * W_el / 1e6
+
+    # ===============================================
+    # h_c,ef calculation (EC2 §7.3.2(3), Fig 7.1)
+    # ===============================================
+
+    def find_h_c_ef(
+        self,
+        d: float,
+        x: Optional[float] = None,
+    ) -> float:
+        """
+        Effective height of concrete in tension zone h_c,ef (EC2 §7.3.2(3), Fig 7.1).
+
+        h_c,ef = min(2.5(h-d), (h-x)/3, h/2)
+
+        where:
+        - h = section depth
+        - d = effective depth to tension steel
+        - x = neutral axis depth from compression face
+
+        Note: For sections fully in tension (both faces), use find_h_c_ef_tension_member()
+        instead, which calculates separate h_c,ef values for each face.
+
+        Args:
+            d: Effective depth to tension reinforcement (mm)
+            x: Neutral axis depth from compression face (mm), or None for uncracked
+
+        Returns:
+            Effective concrete height in tension zone (mm)
+        """
         h = self.height
-        d_mean = self.mean_effective_depth
-        x_u = self.find_neutral_axis_depth_uncracked(E_cm)
-        h_c_ef = min(
-            2.5 * (h - d_mean),
-            (h - x_u) / 3,
-            h / 2
-        )
-        return h_c_ef
 
-    def find_area_of_steel_minimum(self,
-                                   f_ctm: float,
-                                   k_c: float = 1,
-                                   steel_stress: float = 500) -> float:
-        '''Minimum area of reinforcement to control cracking, in [mm^2].
+        candidates = [
+            2.5 * (h - d),
+            h / 2,
+        ]
 
-        f_ctm may be given at time, t, i.e. f_ctm(t), if cracking expected earlier than 28days.
-        steel_stress should be positive in [MPa]
-        Ref: EC2 §7.3.2(2) (7.1)
-        '''
-        b = self.breadth
+        # Only include (h-x)/3 if we have a valid NA depth
+        if x is not None and x > 0:
+            candidates.append((h - x) / 3)
+
+        return min(candidates)
+
+    def find_h_c_ef_tension_member(
+        self,
+        d_top: float,
+        d_bottom: float,
+    ) -> Tuple[float, float]:
+        """
+        Effective heights for fully tensioned sections (EC2 Fig 7.1, case c).
+
+        When both faces are in tension (no neutral axis within section),
+        h_c,ef must be calculated separately for each face.
+
+        Args:
+            d_top: Depth from top face to centroid of top tension reinforcement (mm)
+            d_bottom: Depth from bottom face to centroid of bottom tension reinforcement (mm)
+
+        Returns:
+            Tuple of (h_c_ef_top, h_c_ef_bottom) in mm
+        """
         h = self.height
-        min_dimension = min(h, b)
-        # k = coefficient for non-uniform, self-equilibrium stress
-        k_max = 1
-        k_min = 0.65
-        if min_dimension <= 300:
-            k = k_max
-        elif min_dimension >= 800:
-            k = k_min
+
+        # Top half: tension face at top
+        h_c_ef_top = min(2.5 * d_top, h / 2)
+
+        # Bottom half: tension face at bottom
+        h_c_ef_bottom = min(2.5 * d_bottom, h / 2)
+
+        return h_c_ef_top, h_c_ef_bottom
+
+    # ===============================================
+    # Reinforcement ratio ρ_p,eff
+    # ===============================================
+
+    def find_rho_p_eff(
+        self,
+        A_s_tension: float,
+        h_c_ef: float,
+        xi_1: float = 0.0,
+        A_p: float = 0.0,
+    ) -> float:
+        """
+        Effective reinforcement ratio ρ_p,eff (EC2 §7.3.4(2)).
+
+        ρ_p,eff = (A_s + ξ₁ × A_p') / A_c,eff
+
+        where A_c,eff = h_c,ef × b
+
+        Args:
+            A_s_tension: Area of tension reinforcement (mm²)
+            h_c_ef: Effective height of concrete in tension (mm)
+            xi_1: Adjusted ratio of bond strengths (ξ₁), default 0 for no prestress
+            A_p: Area of prestressing tendons (mm²), default 0
+
+        Returns:
+            Effective reinforcement ratio (dimensionless)
+        """
+        A_c_eff = h_c_ef * self.breadth
+        if A_c_eff <= 0:
+            raise ValueError("Effective concrete area A_c,eff must be > 0")
+
+        return (A_s_tension + xi_1 * A_p) / A_c_eff
+
+    # ===============================================
+    # Maximum crack spacing s_r,max
+    # ===============================================
+
+    def find_k_2(
+        self,
+        eps_top: float,
+        eps_bottom: float,
+    ) -> float:
+        """
+        Strain distribution coefficient k_2 (EC2 §7.3.4(3)).
+
+        k_2 = (ε₁ + ε₂) / (2 × ε₁)
+
+        where ε₁ is the greater and ε₂ the lesser tensile strain at the
+        section boundaries.
+
+        Returns:
+            - 0.5 for pure bending (one face in compression)
+            - 1.0 for pure tension (uniform tension)
+            - Intermediate values for eccentric tension
+
+        Args:
+            eps_top: Strain at top fibre (compression positive, tension negative)
+            eps_bottom: Strain at bottom fibre (compression positive, tension negative)
+
+        Returns:
+            k_2 coefficient (0.5 to 1.0)
+        """
+        # Check if either face is in compression (strain >= 0)
+        if eps_top >= 0 or eps_bottom >= 0:
+            # At least one face in compression -> bending dominated
+            return 0.5
+
+        # Both faces in tension (both strains negative)
+        # ε₁ = greater tensile strain (more negative = larger absolute tension)
+        # ε₂ = lesser tensile strain
+        eps_1 = min(eps_top, eps_bottom)  # More negative = greater tension
+        eps_2 = max(eps_top, eps_bottom)  # Less negative = lesser tension
+
+        # Both are negative, so abs values for the formula
+        abs_eps_1 = abs(eps_1)
+        abs_eps_2 = abs(eps_2)
+
+        if abs_eps_1 < 1e-12:
+            return 0.5  # Guard against division by zero
+
+        k_2 = (abs_eps_1 + abs_eps_2) / (2 * abs_eps_1)
+
+        # Clamp to valid range [0.5, 1.0]
+        return max(0.5, min(1.0, k_2))
+
+    def find_maximum_crack_spacing(
+        self,
+        cover: float,
+        phi_eq: float,
+        rho_p_eff: float,
+        k_2: float,
+        x: Optional[float] = None,
+        has_tension_reinforcement: bool = True,
+    ) -> float:
+        """
+        Maximum crack spacing s_r,max (EC2 §7.3.4(3), Eq. 7.11).
+
+        Standard formula (spacing ≤ 5(c + φ/2)):
+            s_r,max = k_3·c + k_1·k_2·k_4·φ / ρ_p,eff
+
+        If spacing > 5(c + φ/2) or no bonded reinforcement (Eq. 7.14):
+            s_r_max = 1.3(h - x)
+
+        Args:
+            cover: Concrete cover to tension reinforcement (mm)
+            phi_eq: Equivalent bar diameter (mm)
+            rho_p_eff: Effective reinforcement ratio (dimensionless)
+            k_2: Strain distribution coefficient (0.5 for bending, 1.0 for tension)
+            x: Neutral axis depth (mm), or None for uncracked/fully cracked
+            has_tension_reinforcement: True if bonded reinforcement exists in tension zone
+
+        Returns:
+            Maximum crack spacing in mm
+        """
+        # Standard formula (Eq. 7.11)
+        if rho_p_eff > 0:
+            s_r_max = self.k_3 * cover + (self.k_1 * k_2 * self.k_4 * phi_eq / rho_p_eff)
         else:
-            k_interpolator = interpolate.interp1d([300, 800], [k_max, k_min])
-            k = k_interpolator(min_dimension)
-        f_ctm = self.concrete.f_ctm
-        h_c_ef = self.find_h_c_ef()
-        a_ct = h_c_ef * b
-        a_s_min_crack = k_c * k * f_ctm * a_ct / abs(steel_stress)
-        return a_s_min_crack
+            # No reinforcement in tension zone - use upper bound
+            s_r_max = float('inf')
 
-    def find_k_c(
-            self,
-            axial_force_sls: float = 0,
-            is_in_bending: bool = True,
-            use_transformed_area: bool = True
-        ) -> float:
-        '''Factor for minimum crack reinforcement taking into 
-        account stress distribution within the section.
+        # Check if spacing exceeds 5(c + φ/2) -> use upper bound formula (Eq. 7.14)
+        spacing_limit = 5 * (cover + phi_eq / 2)
 
-        axial_force may be tensile (negative) or compressive (positive), must be in [kN].
-        The axial_force should be calculated for the relevant SLS.
-        f_ctm may be given at time, t, i.e. f_ctm(t)
-        Ref: EC2 §7.3.2(2) (7.1)
-        '''
-        if is_in_bending:
+        # Use upper bound if spacing too large OR no bonded reinforcement in tension zone
+        if s_r_max > spacing_limit or not has_tension_reinforcement:
+            # Upper bound formula
             h = self.height
-            if h < 1000:
-                h_star = h
+            if x is not None and x > 0:
+                s_r_max = 1.3 * (h - x)
             else:
-                h_star = 1000
+                # If no NA (uncracked or fully cracked), use full height
+                s_r_max = 1.3 * h
 
-            if axial_force_sls >= 0:
-                k_1 = 1.5 # EC2 clause doesn't say what to use if N_Ed = 0. This is conservative.
-            else:
-                k_1 = (2 * h_star) / (3 * h)
-            
-            f_ctm = self.concrete.f_ctm
-
-            if use_transformed_area:
-                A_eff = self.section.get_transformed_area(self.concrete.get_elastic_modulus())
-            else:
-                A_eff = self.section.get_area()
-            
-            concrete_stress = axial_force_sls * 10**3 / A_eff  # convert kN to N
-            k_c = min(1, 0.4 * (1 -  concrete_stress / (k_1 * (h / h_star) * f_ctm)))
-        else:
-            k_c = 1  # pure tension
-        return k_c
-
-    # TODO NEED TO FINISH
-    def find_maximum_crack_spacing(self,
-                                   cover_to_flexural_tension_rebar: float,
-                                   elastic_modulus_of_concrete: float,
-                                   rho_p_eff: float,
-                                   is_in_bending: bool = True,
-                                   is_high_bond_bar: bool = True) -> float:
-        '''Maximum crack spacing, in [mm].
-
-        Ref: EC2 §7.3.4(3) (7.11)
-        '''
-        # See PD 6687-1:2020 has more guidance on crack check
-        # cycle through tension rebar only...
-        for rebar_group in self.section.rebar_groups:
-            bar_diameter_tens = rebar_group.rebar.diameter
-            bar_spacing_tens = self.section.find_bar_spacing(rebar_group)
-
-        if is_in_bending:
-            x_c = self.section.find_neutral_axis_depth_cracked(elastic_modulus_of_concrete)
-        else:
-            x_c = 0
-
-        # Assumed that this applies to tension only rebar bars
-        #ø_eq = (n_1 * ø_1**2 + n_2 * ø_2**2) / (n_1 * ø_1 + n_2 * ø_2)
-
-        #! Using the same approach used for equivalent diameter
-        # to find an equivalent spacing of multiple bars
-        #max_spacing = (n_1**2 * ø_1 + n_2**2 * ø_2) / (n_1 * ø_1 + n_2 * ø_2)
-
-        if mixed_sizes:
-            eqv_dia = find_equivalent_diameter()
-        else:
-            eqv_dia = bar_diameter_tens
-
-        if is_high_bond_bar:
-            k_1 = 0.8
-        else:  # plain bar
-            k_1 = 1.6
-
-        if is_in_bending:
-            k_2 = 0.5
-        else:  # pure tension
-            k_2 = 1
-
-        k_3 = 3.4
-        k_4 = 0.425
-        c = cover_to_flexural_tension_rebar
-        s_r_max = k_3*c + (k_1 * k_2 * k_4 * eqv_dia / rho_p_eff)
-
-        if s_r_max > 5*(c + eqv_dia/2) or not is_high_bond_bar:
-            h = self.height
-            s_r_max = 1.3 * (h - x_c)
         return s_r_max
 
-    @staticmethod
-    def find_crack_width(maximum_crack_spacing: float, difference_in_mean_strains: float) -> float:
-        '''Crack width, in [mm].
+    # ===============================================
+    # Mean strain difference (ε_sm - ε_cm)
+    # ===============================================
 
-        Ref: EC2 §7.3.4(1) (7.8)
-        '''
-        w_k = maximum_crack_spacing * difference_in_mean_strains
-        return w_k
+    def find_strain_difference(
+        self,
+        sigma_s: float,
+        rho_p_eff: float,
+        E_s: float,
+    ) -> float:
+        """
+        Mean strain difference (ε_sm - ε_cm) (EC2 §7.3.4(2), Eq. 7.9).
 
-    def find_cracking_moment(self, elastic_modulus_of_concrete: float) -> float:
-        '''Return the cracking moment in [kNm]. 
-        
-        The cracking moment is the bending moment at which a section cracks in flexure.
-        '''
-        f_ctm_fl = self.concrete.find_mean_flexural_tensile_strength(self.height)
-        elastic_section_modulus = self.section.find_elastic_section_modulus_uncracked(elastic_modulus_of_concrete)
-        m_cr = f_ctm_fl * elastic_section_modulus
-        return m_cr / 10**6
+        (ε_sm - ε_cm) = [σ_s - k_t × f_ct,eff × (1 + α_e × ρ_p,eff) / ρ_p,eff] / E_s
+                      ≥ 0.6 × σ_s / E_s
+
+        where:
+        - σ_s = stress in tension reinforcement (MPa, positive for tension)
+        - k_t = load duration factor (0.6 short, 0.4 long)
+        - f_ct,eff = mean tensile strength of concrete (MPa)
+        - α_e = E_s / E_cm
+        - ρ_p,eff = effective reinforcement ratio
+
+        Args:
+            sigma_s: Absolute steel stress in tension reinforcement (MPa, positive)
+            rho_p_eff: Effective reinforcement ratio
+            E_s: Steel elastic modulus (MPa)
+
+        Returns:
+            Mean strain difference (dimensionless, always positive)
+        """
+        if sigma_s <= 0:
+            return 0.0  # No tension, no cracking
+
+        f_ct_eff = self.concrete.f_ctm  # Could be f_ctm(t) for early age
+
+        # Full formula
+        if rho_p_eff > 0:
+            tension_stiffening = self.k_t * f_ct_eff * (1 + self.alpha_e * rho_p_eff) / rho_p_eff
+            eps_diff = (sigma_s - tension_stiffening) / E_s
+        else:
+            eps_diff = sigma_s / E_s
+
+        # Minimum value (Eq. 7.9 lower bound)
+        eps_min = 0.6 * sigma_s / E_s
+
+        return max(eps_diff, eps_min)
+
+    # ===============================================
+    # Crack width calculation
+    # ===============================================
+
+    def calculate_crack_width(
+        self,
+        s_r_max: float,
+        eps_sm_minus_eps_cm: float,
+    ) -> float:
+        """
+        Characteristic crack width w_k (EC2 §7.3.4(1), Eq. 7.8).
+
+        w_k = s_r,max × (ε_sm - ε_cm)
+
+        Args:
+            s_r_max: Maximum crack spacing (mm)
+            eps_sm_minus_eps_cm: Mean strain difference (dimensionless)
+
+        Returns:
+            Crack width in mm
+        """
+        return s_r_max * eps_sm_minus_eps_cm
+
+    # ===============================================
+    # Minimum reinforcement (EC2 §7.3.2(2))
+    # ===============================================
+
+    def find_minimum_crack_reinforcement(
+        self,
+        steel_stress: float = 500.0,
+        k_c: Optional[float] = None,
+        N_Ed: float = 0.0,
+        is_in_bending: bool = True,
+    ) -> float:
+        """
+        Minimum reinforcement to control cracking A_s,min (EC2 §7.3.2(2), Eq. 7.1).
+
+        A_s,min × σ_s = k_c × k × f_ct,eff × A_ct
+
+        Args:
+            steel_stress:
+                The absolute value of the maximum permitted stress in the reinforcement.
+                (default 500 MPa)
+            k_c: Stress distribution coefficient (calculated if None)
+            N_Ed: Axial force for k_c calculation (kN, compression positive)
+            is_in_bending: True for bending, False for pure tension
+
+        Returns:
+            Minimum reinforcement area in mm²
+        """
+        if k_c is None:
+            k_c = self.find_k_c(N_Ed, is_in_bending)
+
+        # k factor for non-uniform self-equilibrating stresses
+        h = self.height
+        b = self.breadth
+        min_dim = min(h, b)
+
+        if min_dim <= 300:
+            k = 1.0
+        elif min_dim >= 800:
+            k = 0.65
+        else:
+            # Linear interpolation
+            k = 1.0 - 0.35 * (min_dim - 300) / 500
+
+        # A_ct: area of concrete within tensile zone just before first crack
+        # For uncracked section, tension zone is below the elastic neutral axis
+        # For rectangular section in bending: A_ct ≈ h/2 × b
+        # For tension members, more of section is in tension
+        if N_Ed >= 0:  # Compression or pure bending
+            A_ct = 0.5 * h * b
+        else:
+            # Tension - use transformed section centroid to estimate tension zone
+            _, c_y, _ = self.section.get_transformed_centroid(self.E_cm_eff)
+            bounds = self.section.outline.bounds
+            y_from_bottom = c_y - bounds[1]
+            A_ct = y_from_bottom * b
+
+        # f_ct,eff (could be f_ctm(t) for early age)
+        f_ct_eff = self.concrete.f_ctm
+
+        A_s_min = k_c * k * f_ct_eff * A_ct / abs(steel_stress)
+        return A_s_min
+
+    def find_k_c(
+        self,
+        N_Ed: float = 0.0,
+        is_in_bending: bool = True,
+    ) -> float:
+        """
+        Stress distribution coefficient k_c (EC2 §7.3.2(2)).
+
+        For bending (rectangular stress block):
+            k_c = 0.4 × [1 - σ_c / (k_1 × (h/h*) × f_ct,eff)] ≤ 1.0
+
+        For pure tension:
+            k_c = 1.0
+
+        Args:
+            N_Ed: Axial force (kN, compression positive)
+            is_in_bending: True for bending, False for pure tension
+
+        Returns:
+            k_c coefficient (dimensionless)
+        """
+        if not is_in_bending:
+            return 1.0
+
+        h = self.height
+        h_star = min(h, 1000)
+
+        # k_1 depends on axial force
+        if N_Ed >= 0:
+            k_1 = 1.5  # Compression or zero axial
+        else:
+            k_1 = (2 * h_star) / (3 * h)  # Tension
+
+        # Concrete stress from axial force
+        A_eff = self.section.get_transformed_area(self.concrete.E_cm)
+        sigma_c = N_Ed * 1000 / A_eff  # MPa
+
+        f_ct_eff = self.concrete.f_ctm
+
+        k_c = 0.4 * (1 - sigma_c / (k_1 * (h / h_star) * f_ct_eff))
+        return min(1.0, max(0.0, k_c))
+
+    # ===============================================
+    # Helper methods for rebar analysis
+    # ===============================================
+
+    def _get_tension_rebar_info(
+        self,
+        eps_top: float,
+        eps_bottom: float,
+    ) -> Tuple[float, float, List[Tuple[float, int]]]:
+        """
+        Get tension reinforcement information from strain state.
+
+        Returns:
+            Tuple of (total_area, mean_cover, bar_sizes) where:
+            - total_area: Total area of tension reinforcement (mm²)
+            - mean_cover: Area-weighted mean cover to tension bars (mm)
+            - bar_sizes: List of (diameter, count) for equivalent diameter calc
+        """
+        bounds = self.section.outline.bounds
+        h = bounds[3] - bounds[1]
+        y_min = bounds[1]
+        y_max = bounds[3]
+
+        tension_bars: List[Tuple[float, int]] = []
+        total_area = 0.0
+        cover_sum = 0.0
+
+        # Determine tension face
+        comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
+        if comp_face is None:
+            # Both faces in tension - use bottom as reference
+            comp_face = "top"
+
+        for group in self.section.rebar_groups:
+            diameter = float(group.rebar.diameter)
+            bar_area = float(group.rebar.area)
+            bar_count = 0
+
+            for pos in group.positions:
+                # Calculate strain at bar location
+                y_rel = (pos.y - y_min) / h
+                strain_at_bar = eps_bottom + (eps_top - eps_bottom) * y_rel
+
+                # Tension is negative strain
+                if strain_at_bar < 0:
+                    bar_count += 1
+                    total_area += bar_area
+
+                    # Calculate cover based on tension face
+                    if comp_face == "top":
+                        # Tension at bottom
+                        cover = pos.y - y_min - diameter / 2
+                    else:
+                        # Tension at top
+                        cover = y_max - pos.y - diameter / 2
+
+                    cover_sum += bar_area * max(0, cover)
+
+            if bar_count > 0:
+                tension_bars.append((diameter, bar_count))
+
+        mean_cover = cover_sum / total_area if total_area > 0 else 0.0
+
+        return total_area, mean_cover, tension_bars
+
+    def _get_steel_stress(
+        self,
+        eps_top: float,
+        eps_bottom: float,
+    ) -> float:
+        """
+        Get maximum steel stress in tension zone from strain state.
+
+        Note: Returns the absolute value of stress (always positive),
+        even though tension strains are negative by convention.
+
+        Args:
+            eps_top: Top fibre strain (compression positive)
+            eps_bottom: Bottom fibre strain (compression positive)
+
+        Returns:
+            Maximum tensile stress in reinforcement (MPa, always positive)
+        """
+        # TODO may need to check SteelModelType before passing k
+        # If HORIZONTAL the stress does not go higher than f_yk.
+        bounds = self.section.outline.bounds
+        h = bounds[3] - bounds[1]
+        y_min = bounds[1]
+
+        max_tension_stress = 0.0
+
+        for group in self.section.rebar_groups:
+            E_s = group.rebar.E_s
+            f_yk = group.rebar.f_yk
+            k_ratio = group.rebar.grade.ft_ratio_min  # Hardening ratio
+
+            for pos in group.positions:
+                # Strain at bar location
+                y_rel = (pos.y - y_min) / h
+                strain_at_bar = eps_bottom + (eps_top - eps_bottom) * y_rel
+
+                # Only consider tension (negative strain)
+                if strain_at_bar < 0:
+                    stress = flexure_utils.calculate_rebar_stress_from_strain(
+                        strain=strain_at_bar,
+                        E_s=E_s,
+                        f_yk=f_yk,
+                        k=k_ratio,
+                    )
+                    max_tension_stress = max(max_tension_stress, abs(stress))
+
+        # Return absolute value (always positive for tension)
+        return max_tension_stress
+
+    def _get_tension_zone_E_s(
+        self,
+        eps_top: float,
+        eps_bottom: float,
+    ) -> float:
+        """
+        Get E_s from the outermost tension rebar layer.
+
+        Optimized to return early if all rebar groups have the same E_s.
+
+        Args:
+            eps_top: Top fibre strain (compression positive)
+            eps_bottom: Bottom fibre strain (compression positive)
+
+        Returns:
+            Elastic modulus of outermost tension rebar (MPa)
+        """
+        if not self.section.rebar_groups:
+            return 200000.0  # Default
+
+        # Early return optimization: check if all E_s values are the same
+        first_E_s = self.section.rebar_groups[0].rebar.E_s
+        all_same = all(g.rebar.E_s == first_E_s for g in self.section.rebar_groups)
+        if all_same:
+            return first_E_s
+
+        # Different E_s values - find outermost tension bar
+        bounds = self.section.outline.bounds
+        h = bounds[3] - bounds[1]
+        y_min = bounds[1]
+
+        comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
+
+        outermost_y: Optional[float] = None
+        outermost_E_s = first_E_s
+
+        for group in self.section.rebar_groups:
+            for pos in group.positions:
+                # Check if bar is in tension
+                y_rel = (pos.y - y_min) / h
+                strain = eps_bottom + (eps_top - eps_bottom) * y_rel
+                if strain >= 0:  # Compression, skip
+                    continue
+
+                # Track outermost tension bar
+                if comp_face == "top":
+                    # Tension at bottom - find lowest bar
+                    if outermost_y is None or pos.y < outermost_y:
+                        outermost_y = pos.y
+                        outermost_E_s = group.rebar.E_s
+                else:
+                    # Tension at top - find highest bar
+                    if outermost_y is None or pos.y > outermost_y:
+                        outermost_y = pos.y
+                        outermost_E_s = group.rebar.E_s
+
+        return outermost_E_s
+
+    # ===============================================
+    # Main check method
+    # ===============================================
 
     def perform_check(
         self,
@@ -315,32 +850,297 @@ class CrackingCheck(BaseCodeCheck):
         M_Ed: float,
         N_Ed: float = 0.0,
         warning_threshold: float = 0.95,
-        ignore_compression_steel: bool = False,
         **kwargs,
     ) -> CheckResult:
-        '''
-        Docstring for perform_check
-        
-        :param self: Description
-        :param M_Ed: Description
-        :type M_Ed: float
-        :param N_Ed: Description
-        :type N_Ed: float
-        :param warning_threshold: Description
-        :type warning_threshold: float
-        :param ignore_compression_steel: Description
-        :type ignore_compression_steel: bool
-        :param kwargs: Description
-        :return: Description
-        :rtype: CheckResult
-        '''
+        """
+        Perform crack width check for applied serviceability loads.
+
+        Args:
+            M_Ed: Design moment at SLS (kN·m)
+            N_Ed: Design axial force at SLS (kN, compression positive)
+            warning_threshold: Utilization threshold for warnings
+
+        Returns:
+            CheckResult with crack width utilization
+        """
         return self._check_single_case(
             M_Ed=M_Ed,
             N_Ed=N_Ed,
             warning_threshold=warning_threshold,
-            ignore_compression_steel=ignore_compression_steel,
         )
-
 
     def _check_single_case(
         self,
+        *,
+        M_Ed: float,
+        N_Ed: float,
+        warning_threshold: float,
+    ) -> CheckResult:
+        """Internal implementation of crack check."""
+
+        # Step 1: Check if section is cracked
+        #TODO this logic doesn't work if N_Ed is provided as the comparison
+        # of moment to cracking moment should consider axial force as well.
+        # Really it is a stress comparison of the most tensile concrete fibre to f_ctm,fl
+        M_cr = self.find_cracking_moment()
+        is_cracked = abs(M_Ed) > abs(M_cr)
+
+        if not is_cracked:
+            # Section uncracked - no crack width to check
+            return self._create_result(
+                check_name="Cracking check (EC2 §7.3)",
+                code_reference="EC2 §7.3",
+                warning_threshold=warning_threshold,
+                utilization=0.0,
+                demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
+                capacity_components={"w_k_limit": self.w_k_limit, "M_cr": float(M_cr)},
+                units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm", "M_cr": "kN·m"},
+                message="Section uncracked (M_Ed < M_cr)",
+                details={
+                    "M_Ed": float(M_Ed),
+                    "N_Ed": float(N_Ed),
+                    "M_cr": float(M_cr),
+                    "is_cracked": False,
+                    "w_k": 0.0,
+                    "w_k_limit": self.w_k_limit,
+                },
+            )
+
+        # Step 2: Solve for strain state (cracked section)
+        try:
+            eps_top, eps_bottom = self._diagram.find_strains_for_MN(
+                M_target=M_Ed,
+                N_target=N_Ed,
+            )
+        except ValueError as e:
+            # Load point outside capacity - section fails
+            return self._create_result(
+                check_name="Cracking check (EC2 §7.3)",
+                code_reference="EC2 §7.3",
+                warning_threshold=warning_threshold,
+                utilization=float("inf"),
+                demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
+                capacity_components={"w_k_limit": self.w_k_limit},
+                units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm"},
+                message=f"Failed to solve strain state: {e}",
+                details={"error": str(e)},
+            )
+
+        # Step 3: Calculate neutral axis depth
+        x = flexure_utils.calculate_neutral_axis_depth_from_strains(
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+            section_height=self.height,
+        )
+
+        # Step 4: Get tension reinforcement info
+        A_s_tension, mean_cover, bar_sizes = self._get_tension_rebar_info(eps_top, eps_bottom)
+
+        if A_s_tension <= 0:
+            warnings.warn(
+                "No tension reinforcement found - cannot calculate crack width",
+                stacklevel=2,
+            )
+            return self._create_result(
+                check_name="Cracking check (EC2 §7.3)",
+                code_reference="EC2 §7.3",
+                warning_threshold=warning_threshold,
+                utilization=float("inf"),
+                demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
+                capacity_components={"w_k_limit": self.w_k_limit},
+                units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm"},
+                message="No tension reinforcement found",
+                details={"is_cracked": True, "A_s_tension": 0.0},
+            )
+
+        # Step 5: Calculate equivalent diameter
+        phi_eq = flexure_utils.find_equivalent_diameter(bar_sizes)
+
+        # Step 6: Get effective depth and h_c,ef
+        comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
+        if comp_face == "top":
+            d = self.section.get_effective_depth(compression_face="top")
+        else:
+            d = self.section.get_effective_depth(compression_face="bottom")
+
+        h_c_ef = self.find_h_c_ef(d=d, x=x)
+
+        # Step 7: Calculate ρ_p,eff
+        rho_p_eff = self.find_rho_p_eff(A_s_tension=A_s_tension, h_c_ef=h_c_ef)
+
+        # Step 8: Get steel stress (returned as absolute value, always positive)
+        sigma_s = self._get_steel_stress(eps_top, eps_bottom)
+
+        # Step 9: Get cover (use calculated mean or from section)
+        try:
+            cover = self.section.get_concrete_cover(
+                reference="bottom" if comp_face == "top" else "top"
+            )
+        except ValueError:
+            cover = mean_cover
+
+        # Step 10: Calculate k_2 and maximum crack spacing
+        k_2 = self.find_k_2(eps_top, eps_bottom)
+        s_r_max = self.find_maximum_crack_spacing(
+            cover=cover,
+            phi_eq=phi_eq,
+            rho_p_eff=rho_p_eff,
+            k_2=k_2,
+            x=x,
+            has_tension_reinforcement=A_s_tension > 0,
+        )
+
+        # Step 11: Calculate strain difference
+        E_s = self._get_tension_zone_E_s(eps_top, eps_bottom)
+        eps_sm_minus_eps_cm = self.find_strain_difference(
+            sigma_s=sigma_s,
+            rho_p_eff=rho_p_eff,
+            E_s=E_s,
+        )
+
+        # Step 12: Calculate crack width
+        w_k = self.calculate_crack_width(s_r_max, eps_sm_minus_eps_cm)
+
+        # Step 13: Calculate utilization
+        utilization = w_k / self.w_k_limit if self.w_k_limit > 0 else float("inf")
+
+        # Build detailed results
+        details = {
+            "M_Ed": float(M_Ed),
+            "N_Ed": float(N_Ed),
+            "M_cr": float(M_cr),
+            "is_cracked": True,
+            "eps_top": float(eps_top),
+            "eps_bottom": float(eps_bottom),
+            "x": float(x) if x is not None else None,
+            "d": float(d),
+            "h_c_ef": float(h_c_ef),
+            "A_s_tension": float(A_s_tension),
+            "phi_eq": float(phi_eq),
+            "cover": float(cover),
+            "rho_p_eff": float(rho_p_eff),
+            "sigma_s": float(sigma_s),
+            "s_r_max": float(s_r_max),
+            "eps_sm_minus_eps_cm": float(eps_sm_minus_eps_cm),
+            "w_k": float(w_k),
+            "w_k_limit": float(self.w_k_limit),
+            "k_t": float(self.k_t),
+            "k_1": float(self.k_1),
+            "k_2": float(k_2),
+            "k_3": float(self.k_3),
+            "k_4": float(self.k_4),
+        }
+
+        # Create result
+        is_pass = w_k <= self.w_k_limit
+        message = f"w_k = {w_k:.3f} mm {'<=' if is_pass else '>'} {self.w_k_limit:.2f} mm limit"
+
+        return self._create_result(
+            check_name="Cracking check (EC2 §7.3)",
+            code_reference="EC2 §7.3",
+            warning_threshold=warning_threshold,
+            utilization=utilization,
+            demand_components={"w_k": float(w_k)},
+            capacity_components={"w_k_limit": self.w_k_limit},
+            units_components={"w_k": "mm", "w_k_limit": "mm"},
+            message=message,
+            details=details,
+        )
+
+    def calculate_detailed(
+        self,
+        M_Ed: float,
+        N_Ed: float = 0.0,
+    ) -> CrackingResult:
+        """
+        Calculate detailed cracking results without creating CheckResult.
+
+        Useful for parametric studies or when you need the raw values.
+
+        Args:
+            M_Ed: Design moment at SLS (kN·m)
+            N_Ed: Design axial force at SLS (kN, compression positive)
+
+        Returns:
+            CrackingResult dataclass with all intermediate values
+        """
+        # Check if cracked
+        #TODO this logic doesn't work if N_Ed is provided as the comparison
+        # of moment to cracking moment should consider axial force as well.
+        # Really it is a stress comparison of the most tensile concrete fibre to f_ctm,fl
+        M_cr = self.find_cracking_moment()
+        is_cracked = abs(M_Ed) > abs(M_cr)
+
+        if not is_cracked:
+            return CrackingResult(
+                w_k=0.0,
+                w_k_limit=self.w_k_limit,
+                s_r_max=0.0,
+                eps_sm_minus_eps_cm=0.0,
+                sigma_s=0.0,
+                rho_p_eff=0.0,
+                h_c_ef=0.0,
+                x=None,
+                is_cracked=False,
+                phi_eq=0.0,
+                cover=0.0,
+            )
+
+        # Solve strain state
+        eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
+
+        # Calculate all values
+        x = flexure_utils.calculate_neutral_axis_depth_from_strains(
+            eps_top, eps_bottom, self.height
+        )
+
+        A_s_tension, mean_cover, bar_sizes = self._get_tension_rebar_info(eps_top, eps_bottom)
+        phi_eq = flexure_utils.find_equivalent_diameter(bar_sizes) if bar_sizes else 0.0
+
+        comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
+        d = self.section.get_effective_depth(
+            compression_face=comp_face if comp_face else "top"
+        )
+
+        h_c_ef = self.find_h_c_ef(d=d, x=x)
+        rho_p_eff = self.find_rho_p_eff(A_s_tension, h_c_ef) if A_s_tension > 0 else 0.0
+        sigma_s = self._get_steel_stress(eps_top, eps_bottom)
+
+        try:
+            cover = self.section.get_concrete_cover(
+                reference="bottom" if comp_face == "top" else "top"
+            )
+        except ValueError:
+            cover = mean_cover
+
+        k_2 = self.find_k_2(eps_top, eps_bottom)
+        if rho_p_eff > 0:
+            s_r_max = self.find_maximum_crack_spacing(
+                cover=cover,
+                phi_eq=phi_eq,
+                rho_p_eff=rho_p_eff,
+                k_2=k_2,
+                x=x,
+                has_tension_reinforcement=A_s_tension > 0,
+            )
+        else:
+            s_r_max = 0.0
+
+        E_s = self._get_tension_zone_E_s(eps_top, eps_bottom)
+        eps_diff = self.find_strain_difference(sigma_s, rho_p_eff, E_s) if rho_p_eff > 0 else 0.0
+
+        w_k = self.calculate_crack_width(s_r_max, eps_diff)
+
+        return CrackingResult(
+            w_k=w_k,
+            w_k_limit=self.w_k_limit,
+            s_r_max=s_r_max,
+            eps_sm_minus_eps_cm=eps_diff,
+            sigma_s=sigma_s,
+            rho_p_eff=rho_p_eff,
+            h_c_ef=h_c_ef,
+            x=x,
+            is_cracked=True,
+            phi_eq=phi_eq,
+            cover=cover,
+        )

@@ -61,9 +61,9 @@ from materials.reinforced_concrete.geometry import FibreMesh, RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial
 
 
-# ----------------------------
+# ------------------------
 # Types / small utilities
-# ----------------------------
+# ------------------------
 
 def _ray_segment_intersection_alpha(
     ray_dir: Tuple[float, float],
@@ -317,9 +317,9 @@ class MNInteractionDiagram:
         # Base (design-level) concrete stresses from constitutive model
         concrete_stresses = self.concrete_model.get_stress_array(concrete_strains)
 
-        # ------------------
+        # -------------------------------------
         # Confined concrete (compression only)
-        # ------------------
+        # -------------------------------------
         if self.confined_concrete:
             assert self.confinement_rho_s is not None
             assert self.confinement_f_yh is not None
@@ -375,9 +375,9 @@ class MNInteractionDiagram:
 
                 concrete_stresses[comp_mask] = f_conf_d
 
-        # ------------------
+        # ----------------------------------
         # Tension stiffening (tension only)
-        # ------------------
+        # ----------------------------------
         if self.tension_stiffening:
             ten_mask = concrete_strains < 0.0
             if np.any(ten_mask):

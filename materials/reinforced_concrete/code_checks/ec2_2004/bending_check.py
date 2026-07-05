@@ -5,6 +5,7 @@ This is a FIRST PRINCIPLES check based on strain compatibility and force equilib
 Uses the fibre-based M-N interaction diagram infrastructure.
 """
 
+from functools import cached_property
 from typing import Optional
 from dataclasses import dataclass
 from math import copysign
@@ -167,7 +168,7 @@ class BendingCheck(BaseCodeCheck):
     # Properties (immutable - don't depend on loads)
     # ===============================================
 
-    @property
+    @cached_property
     def f_cd_design(self) -> float:
         """Design concrete strength (accidental or persistent) in MPa."""
         return self.concrete.f_cd_accidental if self.use_accidental else self.concrete.f_cd
@@ -277,8 +278,8 @@ class BendingCheck(BaseCodeCheck):
 
         # --- Step 2: capacity check against diagram ---
         diagram = self._get_diagram(ignore_compression_steel)
-        cap = diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_design, return_details=False)
-        N_Rd, M_Rd, is_safe, utilization = cap.N_Rd, cap.M_Rd, cap.is_safe, cap.utilization
+        capacity = diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_design, return_details=False)
+        N_Rd, M_Rd, is_safe, utilization = capacity.N_Rd, capacity.M_Rd, capacity.is_safe, capacity.utilization
 
         demand_components = {"N": float(N_Ed), "M": float(M_Ed_original)}
         units_components = {"N": "kN", "M": "kN·m"}

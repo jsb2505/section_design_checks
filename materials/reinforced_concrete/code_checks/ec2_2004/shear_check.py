@@ -8,8 +8,9 @@ N_Ed, M_Ed, and V_Ed are now parameters to perform_check(),not fields.
 This enables checking multiple load cases against the same section efficiently.
 """
 
+from functools import cached_property
 from typing import Optional, ClassVar
-from math import atan, degrees, radians, sin
+from math import atan, degrees, radians, sin, sqrt
 import warnings
 from pydantic import BaseModel, Field, PrivateAttr, computed_field
 
@@ -247,17 +248,17 @@ class ShearCheck(BaseCodeCheck):
     def breadth(self) -> float:
         return calculate_section_breadth(self.section)
 
-    @property
+    @cached_property
     def f_cd_design(self) -> float:
         """Design concrete strength (accidental or persistent) in MPa."""
         return self.concrete.f_cd_accidental if self.use_accidental else self.concrete.f_cd
 
-    @property
+    @cached_property
     def gamma_c_design(self) -> float:
         """Partial factor for concrete (accidental or persistent)."""
         return self.concrete.gamma_c_accidental if self.use_accidental else self.concrete.gamma_c
 
-    @property
+    @cached_property
     def f_ywd_design(self) -> float:
         """Design yield strength of shear reinforcement (accidental or persistent) in MPa."""
         if self.shear_reinforcement is None:
@@ -898,6 +899,41 @@ class ShearCheck(BaseCodeCheck):
             cot_min=self.MIN_COT_THETA,
             cot_max=self.MAX_COT_THETA
         )
-
+        
+        A_sw_over_s_min = self._find_min_a_sw_over_s()
         A_sw_over_s = (V_Ed * 1000) / (z_ec2 * f_ywd * cot_theta_limited)
-        return A_sw_over_s
+        return max(A_sw_over_s, A_sw_over_s_min)
+
+
+    def _find_min_a_sw_over_s(self, use_defaults: bool = False) -> float:
+        '''Minimum shear reinforcement area per unit length times sin α (§9.2.2(5)).
+        
+        Args:
+            use_defaults: If True, assumes vertical links and grade 500 (α=90°, f_yk=500 MPa). 
+                          If False, uses angle and f_yk from provided shear reinforcement.
+                          To be used if shear reinforcement is not provided.
+
+        Returns:
+            A_sw / s in mm²/mm
+        '''
+        if use_defaults:
+            f_yk = ShearRebar.f_yk_for()
+            link_angle_deg = 90.0  # Default vertical links
+        elif self.shear_reinforcement is None:
+            raise ValueError("Shear reinforcement must be provided to compute minimum shear reinforcement.")
+        else:
+            f_yk = self.shear_reinforcement.f_yk
+            link_angle_deg = self.shear_reinforcement.angle
+
+        rho_w_min = self._find_minimum_ratio_of_shear_reinforcement(self.concrete.f_ck, f_yk)
+        reinforcement_angle_rads = radians(link_angle_deg)
+        return rho_w_min * self.breadth * sin(reinforcement_angle_rads)
+
+
+    @staticmethod
+    def _find_minimum_ratio_of_shear_reinforcement(f_ck: float, f_yk: float) -> float:
+        '''Minimum ratio of shear reinforcement, ρ_w_min.
+
+        Ref: EC2 §9.2.2(5) (9.5N)
+        '''
+        return 0.08 * sqrt(f_ck) / f_yk

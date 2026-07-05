@@ -275,13 +275,16 @@ class ConcreteMaterial(BaseMaterial):
             return 0.0035
         return (2.6 + 35.0 * (((90.0 - self.f_ck) / 100.0) ** 4.0)) / 1000.0
     
-    def find_mean_flexural_tensile_strength(self, section_height_mm: float) -> float:
-        '''The return value of this function relies on the section height of the member.
+    def find_mean_flexural_tensile_strength(self, h_mm: float) -> float:
+        '''Calculates the mean flexural tensile strength of concrete (§3.1.8(1)).
 
-        Ref: EC2 §3.1.8(1)(3.23)
+        Args:
+            h_mm: Section height in mm
+        
+        Returns:
+            f_ctm,fl in MPa
         '''
-        h = section_height_mm
-        f_ctm_fl = self.f_ctm * max(1.6 - h/1000, 1)
+        f_ctm_fl = self.f_ctm * max(1.6 - h_mm/1000, 1)
         return f_ctm_fl
 
     def __str__(self) -> str:
