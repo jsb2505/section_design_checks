@@ -16,6 +16,25 @@ from materials.core.base_material import BaseMaterial
 
 # Concrete grades according to EC2 Table 3.1 (single source of truth)
 class ConcreteGrade(StrEnum):
+    '''
+    Concrete grades supported as per EC2.
+
+    Attributes:
+        C12_15: C12/15
+        C16_20: C16/20
+        C20_25: C20/25
+        C25_30: C25/30
+        C30_37: C30/37
+        C35_45: C35/45
+        C40_50: C40/50
+        C45_55: C45/55
+        C50_60: C50/60
+        C55_67: C55/67
+        C60_75: C60/75
+        C70_85: C70/85
+        C80_95: C80/95
+        C90_105: C90/105
+    '''
     C12_15 = "C12/15"
     C16_20 = "C16/20"
     C20_25 = "C20/25"

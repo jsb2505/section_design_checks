@@ -16,7 +16,7 @@ class ReinforcementInvalidPolicy(StrEnum):
 
     Attributes:
         ERROR: Aborts the operation and raises a ValueError.
-        DROP_INVALID_BARS: Removes individual bars that fall outside.
+        DROP_INVALID_BARS: Removes individual bars that fall outside the section boundary.
         DROP_INVALID_GROUPS: Removes an entire group if any bar is invalid.
         ALLOW_INVALID: No action taken; bars remain in their original coords.
     '''
@@ -46,6 +46,13 @@ def find_invalid_rebars(section: "RCSection") -> tuple[list[str], list[tuple[int
     """
     Find rebars (as discs) not fully covered by the section outline.
 
+    A bar is valid if:
+    1. Its center is inside the polygon (or on boundary)
+    2. The distance from center to boundary >= radius
+
+    This distance-based approach is faster than buffer() + covers()
+    for sections with many bars.
+
     Returns:
         details: list of readable strings
         invalid: list of (group_index, bar_index)
@@ -54,12 +61,22 @@ def find_invalid_rebars(section: "RCSection") -> tuple[list[str], list[tuple[int
     invalid: list[tuple[int, int]] = []
 
     poly = section.outline
+    boundary = poly.boundary
+
+    # Small tolerance for floating-point comparisons
+    tol = 1e-6
 
     for gi, group in enumerate(section.rebar_groups):
-        r = float(group.rebar.diameter) / 2.0
+        radius = float(group.rebar.diameter) / 2.0
         for bi, pos in enumerate(group.positions):
-            disc = ShapelyPoint(pos.x, pos.y).buffer(r)
-            if not poly.covers(disc):
+            point = ShapelyPoint(pos.x, pos.y)
+
+            # Check 1: Center must be inside (or on boundary)
+            # Check 2: Distance to boundary must be >= radius
+            center_inside = poly.contains(point) or boundary.distance(point) < tol
+            distance_ok = boundary.distance(point) >= (radius - tol)
+
+            if not (center_inside and distance_ok):
                 invalid.append((gi, bi))
                 details.append(
                     f"group[{gi}] '{group.layer_name}' bar[{bi}] "
@@ -84,7 +101,6 @@ def prune_reinforcement_for_outline(
 
     if policy == ReinforcementInvalidPolicy.ALLOW_INVALID:
         # no mutation, just report
-        invalid_groups_set = {gi for gi, _ in invalid}
         return ReinforcementUpdateReport(
             invalid_groups=invalid_groups_count,
             invalid_bars=invalid_bars_count,

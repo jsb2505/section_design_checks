@@ -90,9 +90,13 @@ def _polygon_integrals_about_origin(poly: Polygon) -> Tuple[float, float, float,
 
     Strategy:
         - Compute ring integrals for exterior ring.
-        - Add ring integrals for each interior ring (holes). Orientation is handled
-          via signed area in the formulas (holes should contribute negative area).
-        - Combine to obtain polygon centroid and origin-referenced inertias.
+        - Subtract ring integrals for each interior ring (holes).
+
+    Note:
+        Shapely normalizes all rings to CCW winding, so the shoelace formula
+        produces positive values for both exterior and interior rings. We must
+        explicitly subtract interior ring contributions to get correct results
+        for hollow sections.
     """
     # Exterior
     ext = np.asarray(poly.exterior.coords, dtype=float)
@@ -105,17 +109,18 @@ def _polygon_integrals_about_origin(poly: Polygon) -> Tuple[float, float, float,
     Iyy0 = Iyy_e
     Ixy0 = Ixy_e
 
-    # Interiors (holes)
+    # Interiors (holes) - subtract their contributions
     for ring in poly.interiors:
         coords = np.asarray(ring.coords, dtype=float)
         A_i, Cx_i, Cy_i, Ixx_i, Iyy_i, Ixy_i = _ring_integrals_about_origin(coords)
 
-        A_total += A_i
-        Cx_num += Cx_i * A_i
-        Cy_num += Cy_i * A_i
-        Ixx0 += Ixx_i
-        Iyy0 += Iyy_i
-        Ixy0 += Ixy_i
+        # Subtract hole contributions (Shapely stores holes as CCW, same as exterior)
+        A_total -= abs(A_i)
+        Cx_num -= Cx_i * abs(A_i)
+        Cy_num -= Cy_i * abs(A_i)
+        Ixx0 -= abs(Ixx_i)
+        Iyy0 -= abs(Iyy_i)
+        Ixy0 -= Ixy_i  # Product of inertia keeps sign
 
     if abs(A_total) < 1e-18:
         return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -133,10 +138,8 @@ class RebarGroup(BaseModel):
     """
 
     model_config = ConfigDict(
-        arbitrary_types_allowed=False,
-        validate_assignment=False,
+        frozen=True,  # Immutable and hashable
         extra="forbid",
-        frozen=False,
     )
 
     rebar: Rebar = Field(
@@ -282,38 +285,19 @@ class RCSection(BaseGeometry):
         """Clear cached Shapely outline so it rebuilds next time it's accessed."""
         self.__dict__.pop("outline", None)  # cached_property stores value on the instance
 
-
-    # --- RCSection: replace your __setattr__ with this version ---
     def __setattr__(self, name: str, value: Any) -> None:
-        old_outline_coords = getattr(self, "outline_coords", None)
-        old_voids_coords = getattr(self, "voids_coords", None)
+        """
+        Override to invalidate outline cache when coords change.
 
+        Note: Reconciliation is handled by model_validator (which Pydantic calls
+        after field assignment when validate_assignment=True). For atomic updates
+        with rollback capability, use update_outline() instead.
+        """
         super().__setattr__(name, value)
 
-        if name not in {"outline_coords", "voids_coords"}:
-            return
-
-        # During init or when explicitly suspended (atomic update)
-        if old_outline_coords is None or getattr(self, "_suspend_outline_reconcile", False):
-            return
-
-        # Invalidate + rebuild so checks use the new polygon
-        self._invalidate_outline_cache()
-        _ = self.outline  # raises if polygon invalid
-
-        try:
-            self._auto_reconcile_reinforcement()
-        except Exception:
-            # Roll back without triggering reconcile again
-            super().__setattr__("_suspend_outline_reconcile", True)
-            try:
-                super().__setattr__("outline_coords", old_outline_coords)
-                super().__setattr__("voids_coords", old_voids_coords)
-                self._invalidate_outline_cache()
-                _ = self.outline  # rebuild back to previous
-            finally:
-                super().__setattr__("_suspend_outline_reconcile", False)
-            raise
+        # Invalidate cached outline when geometry coords change
+        if name in {"outline_coords", "voids_coords"}:
+            self._invalidate_outline_cache()
 
 
     rebar_groups: List[RebarGroup] = Field(
@@ -332,10 +316,23 @@ class RCSection(BaseGeometry):
         description="Section identifier"
     )
 
-    # --- RCSection: replace validate_outline_and_rebars with policy-aware version ---
     @model_validator(mode="after")
     def validate_outline_and_rebars(self) -> "RCSection":
-        # Ensure outline is built from the latest coords
+        """
+        Validate polygon geometry and reconcile reinforcement.
+
+        This runs:
+        - During __init__
+        - After any field assignment (when validate_assignment=True)
+
+        For atomic updates with rollback, use update_outline() which sets
+        _suspend_outline_reconcile=True to bypass reconciliation here.
+        """
+        # Skip if suspended (atomic updates via update_outline handle reconciliation themselves)
+        if getattr(self, "_suspend_outline_reconcile", False):
+            return self
+
+        # Rebuild and validate the polygon
         self._invalidate_outline_cache()
         poly = self.outline
 
@@ -346,8 +343,10 @@ class RCSection(BaseGeometry):
         if poly.area <= 0:
             raise ValueError("Section outline has zero or negative area")
 
-        # Now enforce the chosen reinforcement policy (may raise / prune / allow)
-        self._auto_reconcile_reinforcement()
+        # Reconcile reinforcement according to policy
+        if self.rebar_groups:
+            self._auto_reconcile_reinforcement()
+
         return self
 
 
@@ -378,10 +377,12 @@ class RCSection(BaseGeometry):
         self._suspend_outline_reconcile = True
         try:
             if override:
-                self.reinforcement_policy = reinforcement_policy  # temporary
+                # Use super().__setattr__ to avoid triggering reconcile
+                super().__setattr__("reinforcement_policy", reinforcement_policy)
 
-            self.outline_coords = outline_coords
-            self.voids_coords = voids_coords
+            # Use super().__setattr__ to bypass __setattr__ reconcile logic
+            super().__setattr__("outline_coords", outline_coords)
+            super().__setattr__("voids_coords", voids_coords)
 
             self._invalidate_outline_cache()
             _ = self.outline  # force build / validate polygon
@@ -389,17 +390,21 @@ class RCSection(BaseGeometry):
             return self._auto_reconcile_reinforcement()
 
         except Exception:
-            # rollback everything
-            self.outline_coords = old_outline_coords
-            self.voids_coords = old_voids_coords
+            # rollback everything using super().__setattr__ to avoid triggering reconcile
+            super().__setattr__("outline_coords", old_outline_coords)
+            super().__setattr__("voids_coords", old_voids_coords)
+            if override:
+                # Restore policy while still suspended
+                super().__setattr__("reinforcement_policy", old_policy)
             self._invalidate_outline_cache()
             _ = self.outline
             raise
 
         finally:
-            self._suspend_outline_reconcile = False
+            # Restore policy while still suspended (before turning off suspend)
             if override:
-                self.reinforcement_policy = old_policy
+                super().__setattr__("reinforcement_policy", old_policy)
+            self._suspend_outline_reconcile = False
 
 
     # --- RCSection: update _build_outline_polygon to work with tuples + ensure closure ---
