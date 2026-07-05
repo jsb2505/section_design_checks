@@ -36,9 +36,13 @@ def _pt(N: float, My: float, Mz: float, depth: float = 100.0, angle: float = 0.0
 def _make_surface_stub() -> BiaxialMNInteractionSurface:
     s = object.__new__(BiaxialMNInteractionSurface)
     s._surface_cache = {}
+    s._surface_indices_cache = {}
     s._hull_cache = {}
     s._dense_surface_points = None
     s._dense_params = None
+    s._dense_grid_indices = []
+    s._grid_indices = []
+    s._grid_shape = (0, 0)
     s.elastic_modulus = None
     s.include_tension = False
     s.crack_to_neutral_axis_on_first_tension_failure = True
@@ -439,10 +443,27 @@ class TestSurfaceGenerationAndPlotting:
         assert surface._hull_cache == {}
 
         dense = tuple(_pt(float(i), float(i), float(i)) for i in range(12))
-        assert BiaxialMNInteractionSurface._downsample_surface(dense, 4, 3, 4, 3) == dense
-        assert BiaxialMNInteractionSurface._downsample_surface(dense[:5], 4, 3, 2, 2) == dense[:5]
-        down = BiaxialMNInteractionSurface._downsample_surface(dense, 4, 3, 2, 2)
+        # No downsampling needed: points returned as-is with full-grid indices
+        same, same_idx = BiaxialMNInteractionSurface._downsample_surface(dense, 4, 3, 4, 3)
+        assert same == dense
+        assert same_idx == [divmod(k, 4) for k in range(12)]
+        # Sparse grid with position metadata: selected via dense indices,
+        # returned with OUTPUT-grid indices (the crash fix)
+        sparse_idx = [divmod(k, 4) for k in range(5)]  # dense cells (0,0)..(1,0)
+        down_sparse, down_sparse_idx = BiaxialMNInteractionSurface._downsample_surface(
+            dense[:5], 4, 3, 2, 2, dense_grid_indices=sparse_idx
+        )
+        # Output grid selects dense cells (0,0), (0,2), (1,0), (1,2); the
+        # sparse set contains (0,0), (0,2) and (1,0) but not (1,2)
+        assert down_sparse == (dense[0], dense[2], dense[4])
+        assert down_sparse_idx == [(0, 0), (0, 1), (1, 0)]
+        assert all(i < 2 and j < 2 for i, j in down_sparse_idx)
+        # Sparse grid WITHOUT position metadata: best-effort passthrough
+        down_nometa, _ = BiaxialMNInteractionSurface._downsample_surface(dense[:5], 4, 3, 2, 2)
+        assert down_nometa == dense[:5]
+        down, down_idx = BiaxialMNInteractionSurface._downsample_surface(dense, 4, 3, 2, 2)
         assert len(down) == 4
+        assert down_idx == [(0, 0), (0, 1), (1, 0), (1, 1)]
 
         # generate_surface_pivot cache hit
         surface_cache = _make_surface_stub()
@@ -463,7 +484,7 @@ class TestSurfaceGenerationAndPlotting:
         monkeypatch.setattr(
             surface2,
             "_downsample_surface",
-            lambda **kwargs: tuple([_pt(9, 9, 9)]),
+            lambda **kwargs: (tuple([_pt(9, 9, 9)]), [(0, 0)]),
         )
         out = surface2.generate_surface_pivot(n_angles=12, n_axial_levels=10)
         assert out == (_pt(9, 9, 9),)

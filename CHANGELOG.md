@@ -5,6 +5,16 @@ All notable changes to this project are recorded here. The project is in early
 
 ## [Unreleased]
 
+### Fixed — biaxial surface plotting crash on sparse grids
+
+`BiaxialMNInteractionSurface._downsample_surface` now selects points via the
+stored `(i_axial, j_angle)` grid metadata when some dense-grid points fail to
+converge, and returns output-grid indices for downstream reshaping.
+Previously a sparse dense grid was passed through unchanged with dense-grid
+indices, so `_prepare_surface_matrices` (used by `plot()`) raised
+`IndexError` for any non-default surface resolution. Unresolvable points now
+render as NaN holes, as documented.
+
 ### Changed — BREAKING: shear-axis (Vy/Vz) convention corrected
 
 The `LoadCase` shear subscripts now follow the standard structural convention,

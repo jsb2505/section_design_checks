@@ -7,7 +7,7 @@ name = "materials"
 version = "0.1.0"
 description = "API-ready library for structural materials and code-checked section design"
 authors = [
-    {name = "Joe B", email = "jsb2505@gmail.com"}
+    {name = "Joe Bunting", email = "jsb2505@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.11"

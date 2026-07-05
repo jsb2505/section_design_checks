@@ -1,89 +1,50 @@
-# Materials Library Examples
+# Examples
 
-This directory contains examples and tutorials demonstrating the materials library functionality.
+Runnable scripts and Jupyter notebooks demonstrating the library.
 
-## Jupyter Notebooks
+## Jupyter notebooks
 
-### [m_n_interaction_diagram_tutorial.ipynb](m_n_interaction_diagram_tutorial.ipynb)
-Comprehensive tutorial covering all M-N interaction diagram functions:
+| Notebook | Topic |
+|---|---|
+| [section_example.ipynb](section_example.ipynb) | Building sections, adding reinforcement, section viewer |
+| [m_n_interaction_diagram_tutorial.ipynb](m_n_interaction_diagram_tutorial.ipynb) | Uniaxial M-N interaction diagrams end to end: materials, sections, diagram generation, capacity checks, model comparisons, T-beams |
+| [biaxial_mn_interaction_tutorial.ipynb](biaxial_mn_interaction_tutorial.ipynb) | Biaxial M-M-N interaction surfaces with the EC2 pivot method, 3D plotting, capacity vectors |
+| [ec2_code_checks_demonstration.ipynb](ec2_code_checks_demonstration.ipynb) | Bending, shear, cracking and stress-limit checks on a worked example |
+| [shear_viewer_demonstration.ipynb](shear_viewer_demonstration.ipynb) | Shear design study plots: cot θ and link-angle studies, heatmaps, force contour maps |
+| [crack_width_viewer_demonstration.ipynb](crack_width_viewer_demonstration.ipynb) | Crack width visualisation: 3D stem plots and M-N contour maps |
+| [circular_section_check_demonstration.ipynb](circular_section_check_demonstration.ipynb) | Circular pile/column checks following Orr (2012) |
+| [circular_shear_viewer_demonstration.ipynb](circular_shear_viewer_demonstration.ipynb) | Shear study plots for circular sections |
+| [circular_vs_standard_shear.ipynb](circular_vs_standard_shear.ipynb) | Circular vs rectangular shear check comparison |
+| [ndp_demonstration.ipynb](ndp_demonstration.ipynb) | Nationally Determined Parameters: EU, UK and German annexes |
+| [tension_shift_demonstration.ipynb](tension_shift_demonstration.ipynb) | Tension shift in the shear/bending interaction |
+| [strain_state_1d_vs_2d_demonstration.ipynb](strain_state_1d_vs_2d_demonstration.ipynb) | 1D vs 2D strain-state solutions |
+| [cracking_moment_vs_solver_comparison.ipynb](cracking_moment_vs_solver_comparison.ipynb) | Cracking moment: closed form vs solver |
+| [shear_comparison.ipynb](shear_comparison.ipynb) | Shear check parameter comparisons |
 
-1. **Setup and Imports** - Library setup and configuration
-2. **Create Materials** - Concrete and reinforcing steel definitions
-3. **Create RC Section** - Section geometry with reinforcement
-4. **Create M-N Diagram** - Initialize the analysis
-5. **Calculate Individual Points** - Single point calculations
-6. **Generate Complete Diagram** - Full M-N curve generation
-7. **Visualize** - Plotting and visualization
-8. **Check Capacity** - Applied load verification
-9. **Get Moment Capacity** - Capacity at specific axial force
-10. **Compare Concrete Models** - EC2 model comparison
-11. **Compare Steel Models** - Post-yield behavior comparison
-12. **Mesh Resolution Effects** - Accuracy vs. speed trade-offs
-13. **Advanced: T-Beam** - Non-rectangular sections
+## Python scripts
 
-**Key features demonstrated:**
-- All M-N diagram methods and functions
-- Multiple EC2 constitutive models
-- Capacity checking and utilization
-- Visualization examples
-- Performance optimization
-- Complex geometries with Shapely
+| Script | Topic |
+|---|---|
+| [rc_beam_example.py](rc_beam_example.py) | Simple beam design workflow |
+| [beam_analysis.py](beam_analysis.py) | Beam section analysis |
+| [example_biaxial_surface.py](example_biaxial_surface.py) | Biaxial surface generation and export |
+| [example_export_mn_diagram.py](example_export_mn_diagram.py) | Exporting M-N diagram data |
+| [example_save_load_section.py](example_save_load_section.py) | Saving and loading sections as JSON |
+| [example_accidental_limit_state.py](example_accidental_limit_state.py) | Accidental limit state checks |
+| [generate_mn_diagram_figure.py](generate_mn_diagram_figure.py) | Matplotlib M-N diagram figure |
+| [generate_release_plots.py](generate_release_plots.py) | Regenerates the README gallery figures in [plots/](plots/) |
 
-### [shear_viewer_demonstration.ipynb](shear_viewer_demonstration.ipynb)
-Demonstrates the new ShearCheck visualization wrappers:
+## Running the examples
 
-1. `plot_cot_theta_study`
-2. `plot_cot_theta_moment_shift_study`
-3. `plot_link_angle_study`
-4. `plot_link_angle_moment_shift_study`
-5. `plot_cot_theta_link_angle_heatmap`
-6. `plot_force_cot_theta_contour`
-
-Includes a complete section/material setup and an example load case.
-
-## Python Scripts
-
-### Coming Soon
-- Simple beam design example
-- Column design example
-- FEA post-processing workflow
-- Parametric study example
-
-## Running the Examples
-
-### Jupyter Notebooks
+From the repository root:
 
 ```bash
-# Install Jupyter
-pip install jupyter matplotlib
+pip install -e ".[viz]"
+pip install jupyter
 
-# Navigate to examples directory
-cd c:\Users\user\Repo\Scripts\materials\examples
-
-# Start Jupyter
-jupyter notebook
+jupyter notebook examples/          # notebooks
+python examples/rc_beam_example.py  # scripts
 ```
 
-Then open `m_n_interaction_diagram_tutorial.ipynb` in your browser.
-
-### Python Scripts
-
-```bash
-cd c:\Users\user\Repo\Scripts\materials\examples
-python example_name.py
-```
-
-## Requirements
-
-All examples require:
-- Python 3.10+
-- Materials library and dependencies (see `requirements.txt`)
-- Plotly for interactive plotting
-- Jupyter for notebook examples
-
-## Learn More
-
-- [M-N_DIAGRAM_IMPLEMENTATION.md](../M-N_DIAGRAM_IMPLEMENTATION.md) - Implementation details
-- [README.md](../README.md) - Library overview
-- [GETTING_STARTED.md](../GETTING_STARTED.md) - Quick start guide
-- [TEST_RESULTS_FINAL.md](../TEST_RESULTS_FINAL.md) - Test coverage
+The notebooks use Plotly for interactive figures. Static image export
+(`generate_release_plots.py`) additionally requires `pip install kaleido`.
