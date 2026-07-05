@@ -92,7 +92,7 @@ class StressStrainViewer:
         save_path: Optional[str | Path] = None,
         show: bool = True,
         title: Optional[str] = None,
-        width: int = 1200,
+        width: int = 1100,
         height: int = 1000,
         section_render: Literal["points", "filled"] = "points",
     ) -> Any:
@@ -372,9 +372,6 @@ class StressStrainViewer:
                             cmax=cmax_val,
                             colorbar=dict(
                                 title=dict(text="σ<br>(MPa)", side="right"),
-                                x=0.28,
-                                len=0.7,
-                                y=0.5,
                                 thickness=15,
                             ),
                         ),
@@ -627,20 +624,6 @@ class StressStrainViewer:
             if s.section_failed:
                 title += " <span style='color:red'>(SECTION FAILS)</span>"
 
-        # Annotation in top-right quadrant (row=1, col=2)
-        fig.add_annotation(
-            xref="x2 domain",
-            yref="y2 domain",
-            x=0.0,
-            y=1.0,
-            text=self._build_annotation_text(s),
-            showarrow=False,
-            font=dict(size=10),
-            align="left",
-            xanchor="left",
-            yanchor="top",
-        )
-
         fig.update_layout(
             title=dict(text=title, x=0.5),
             width=width,
@@ -679,10 +662,150 @@ class StressStrainViewer:
             row=2, col=2,
         )
 
+        # Two-column annotation in top-right quadrant, both anchored at same top y.
+        ann_left_x, ann_right_x, ann_y = self._top_right_annotation_anchors(fig)
+        left_text, right_text = self._build_annotation_columns(s)
+        if left_text:
+            fig.add_annotation(
+                xref="paper",
+                yref="paper",
+                x=ann_left_x,
+                y=ann_y,
+                text=left_text,
+                showarrow=False,
+                font=dict(size=10),
+                align="left",
+                xanchor="left",
+                yanchor="top",
+            )
+        if right_text:
+            fig.add_annotation(
+                xref="paper",
+                yref="paper",
+                x=ann_right_x,
+                y=ann_y,
+                text=right_text,
+                showarrow=False,
+                font=dict(size=10),
+                align="left",
+                xanchor="left",
+                yanchor="top",
+            )
+
+        # Scale and position the concrete colorbar relative to the section subplot.
+        self._position_section_colorbar(fig)
+
 
     # -----------------------------
     # Helpers
     # -----------------------------
+    @staticmethod
+    def _axis_domain(layout: Any, axis_name: str, fallback: tuple[float, float]) -> tuple[float, float]:
+        """Return axis domain in paper coordinates with a safe fallback."""
+        axis = getattr(layout, axis_name, None)
+        domain = getattr(axis, "domain", None) if axis is not None else None
+        if isinstance(domain, (tuple, list)) and len(domain) == 2:
+            try:
+                a = float(domain[0])
+                b = float(domain[1])
+                if np.isfinite(a) and np.isfinite(b) and b > a:
+                    return (a, b)
+            except (TypeError, ValueError):
+                pass
+        return fallback
+
+    def _top_right_annotation_anchor(self, fig: Any) -> tuple[float, float]:
+        """Get paper-coordinate anchor for top-left of top-right quadrant."""
+        left_x, _, y = self._top_right_annotation_anchors(fig)
+        return (left_x, y)
+
+    def _top_right_annotation_anchors(self, fig: Any) -> tuple[float, float, float]:
+        """Get paper-coordinate anchors for left/right annotation columns."""
+        layout = getattr(fig, "layout", None)
+        if layout is None:
+            return (0.52, 0.63, 0.98)
+
+        x0, x1 = self._axis_domain(layout, "xaxis2", (0.52, 0.98))
+        y0, y1 = self._axis_domain(layout, "yaxis2", (0.56, 0.98))
+
+        span_x = max(1e-9, x1 - x0)
+        pad_x = max(0.01, 0.04 * span_x)
+        gap_x = max(0.008, 0.02 * span_x)
+        pad_y = 0.01 * (y1 - y0)
+
+        left_x = x0 + pad_x
+        # Keep columns between previous and current spacing (midpoint adjustment).
+        old_right_x = min(x1 - pad_x, x0 + 0.5 * span_x + gap_x)
+        half_sep = 0.5 * (old_right_x - left_x)
+        min_sep = max(0.006, 0.02 * span_x)
+        mid_sep = 0.5 * ((old_right_x - left_x) + half_sep)
+        right_x = min(x1 - pad_x, left_x + max(min_sep, mid_sep))
+        top_y = y1 - pad_y
+        return (left_x, right_x, top_y)
+
+    def _position_section_colorbar(self, fig: Any) -> None:
+        """
+        Position concrete stress colorbar to the right of the section subplot and
+        scale it to that subplot's height.
+        """
+        layout = getattr(fig, "layout", None)
+        if layout is None:
+            return
+
+        x0, x1 = self._axis_domain(layout, "xaxis", (0.0, 0.45))
+        y0, y1 = self._axis_domain(layout, "yaxis", (0.55, 1.0))
+
+        colorbar_cfg = dict(
+            x=min(0.98, x1 + 0.012),
+            y=0.5 * (y0 + y1),
+            len=max(0.08, 0.95 * (y1 - y0)),
+            lenmode="fraction",
+            xanchor="left",
+            yanchor="middle",
+            thickness=15,
+            title=dict(text="σ<br>(MPa)", side="right"),
+        )
+
+        # Real Plotly figure path.
+        if hasattr(fig, "for_each_trace"):
+            def _update_trace(trace: Any) -> None:
+                if getattr(trace, "name", None) != "Concrete":
+                    return
+
+                marker = getattr(trace, "marker", None)
+                marker_cb = getattr(marker, "colorbar", None) if marker is not None else None
+                if marker_cb is not None:
+                    for key, value in colorbar_cfg.items():
+                        setattr(marker_cb, key, value)
+
+                trace_cb = getattr(trace, "colorbar", None)
+                if trace_cb is not None:
+                    for key, value in colorbar_cfg.items():
+                        setattr(trace_cb, key, value)
+
+            fig.for_each_trace(_update_trace)
+            return
+
+        # Fallback path for lightweight fake figures used in tests.
+        traces = getattr(fig, "traces", None)
+        if traces is None:
+            return
+
+        for item in traces:
+            trace = item[0] if isinstance(item, tuple) and item else item
+            if not isinstance(trace, dict) or trace.get("name") != "Concrete":
+                continue
+
+            marker = trace.get("marker")
+            if isinstance(marker, dict):
+                marker_cb = marker.get("colorbar")
+                if isinstance(marker_cb, dict):
+                    marker_cb.update(colorbar_cfg)
+
+            trace_cb = trace.get("colorbar")
+            if isinstance(trace_cb, dict):
+                trace_cb.update(colorbar_cfg)
+
     def _add_concrete_filled_field(self, fig: Any, go: Any, s: _StressStrainPlotState, *, row: int, col: int) -> None:
         """
         Render concrete stresses as a filled cell-based field using i/j fibre indices.
@@ -755,9 +878,6 @@ class StressStrainViewer:
                 showscale=True,
                 colorbar=dict(
                     title=dict(text="σ<br>(MPa)", side="right"),
-                    x=0.28,
-                    len=0.7,
-                    y=0.5,
                     thickness=15,
                 ),
                 hovertemplate="x: %{x:.1f} mm<br>y: %{y:.1f} mm<br>σ: %{z:.2f} MPa<extra>Concrete</extra>",
@@ -986,34 +1106,60 @@ class StressStrainViewer:
         )
 
     def _build_annotation_text(self, s: _StressStrainPlotState) -> str:
-        txt = ""
+        left, right = self._build_annotation_columns(s)
+        if left and right:
+            return f"{left}<br><br>{right}"
+        return left or right
+
+    def _build_annotation_columns(self, s: _StressStrainPlotState) -> tuple[str, str]:
+        indent = "&nbsp;&nbsp;&nbsp;&nbsp;"
+        block_gap = "<br><br>"
+        left_blocks: list[str] = []
+        right_blocks: list[str] = []
 
         # Show prominent warning if section fails
         if s.section_failed:
-            txt += (
+            left_blocks.append(
                 '<span style="color:red; font-size:12px"><b>⚠ SECTION FAILS: '
                 'Applied loads exceed capacity. Strains shown are bounded '
-                'approximation NOT in equilibrium with applied forces.</b></span><br><br>'
+                'approximation NOT in equilibrium with applied forces.</b></span>'
             )
 
-        txt += (
-            f"<b>Load Case:</b> M<sub>Ed</sub> = {s.M_Ed:.1f} kN·m, N<sub>Ed</sub> = {s.N_Ed:.1f} kN<br>"
+        left_blocks.append(
+            "<b>Load Case:</b><br>"
+            f"{indent}M<sub>Ed</sub> = {s.M_Ed:.1f} kN·m<br>"
+            f"{indent}N<sub>Ed</sub> = {s.N_Ed:.1f} kN<br>"
         )
         if s.M_Rd_pos is not None and s.N_Rd is not None:
-            cap_parts = f"M<sub>Rd</sub> = {s.M_Rd_pos:.1f} kN·m, N<sub>Rd</sub> = {s.N_Rd:.1f} kN"
-            if s.utilisation is not None:
-                cap_parts += f", Utilisation = {s.utilisation:.2f}"
-            txt += f"<b>Capacity:</b> {cap_parts}<br>"
-        txt += (
-            f"<b>Strains:</b> ε<sub>top</sub> = {s.eps_top*1000:.3f}‰, ε<sub>bot</sub> = {s.eps_bottom*1000:.3f}‰<br>"
+            right_blocks.append(
+                "<b>Capacity:</b><br>"
+                f"{indent}M<sub>Rd</sub> = {s.M_Rd_pos:.1f} kN·m<br>"
+                f"{indent}N<sub>Rd</sub> = {s.N_Rd:.1f} kN<br>"
+            )
+
+        left_blocks.append(
+            "<b>Strains:</b><br>"
+            f"{indent}ε<sub>top</sub> = {s.eps_top*1000:.3f}‰<br>"
+            f"{indent}ε<sub>bot</sub> = {s.eps_bottom*1000:.3f}‰<br>"
         )
+        compression_at_top = s.eps_top >= s.eps_bottom
+        y_comp_face = s.y_top if compression_at_top else s.y_bottom
+        section_info_lines: list[str] = []
+        if s.utilisation is not None:
+            section_info_lines.append(f"<b>Utilisation:</b> {100.0 * s.utilisation:.1f}%")
         if s.y_na is not None:
-            txt += f"<b>Neutral Axis:</b> y = {s.y_na:.1f} mm"
+            x_na = (y_comp_face - s.y_na) if compression_at_top else (s.y_na - y_comp_face)
+            na_line = f"<b>Neutral Axis:</b> x = {x_na:.1f} mm"
             if not s.na_in_section:
-                txt += " (outside section)"
-            txt += "<br>"
+                na_line += " (outside section)"
+            section_info_lines.append(na_line)
         if s.z is not None:
-            txt += f"<b>Lever Arm:</b> z = {s.z:.1f} mm<br>"
+            section_info_lines.append(f"<b>Lever Arm:</b> z = {s.z:.1f} mm")
+            if s.y_T is not None:
+                d_eff = abs(y_comp_face - s.y_T)
+                section_info_lines.append(f"<b>Effective Depth:</b> d = {d_eff:.1f} mm")
+        if section_info_lines:
+            right_blocks.append("<br>".join(section_info_lines))
 
         parts = []
         if abs(s.F_c_comp) > 0.001:
@@ -1025,23 +1171,35 @@ class StressStrainViewer:
         if abs(s.F_s_tens) > 0.001:
             parts.append(f"F<sub>st</sub> = {s.F_s_tens:.1f} kN")
 
-        txt += "<b>Resultants:</b> " + (", ".join(parts) if parts else "No forces")
+        resultants_block = "<b>Resultants:</b><br>"
+        if parts:
+            for part in parts:
+                resultants_block += f"{indent}{part}<br>"
+        else:
+            resultants_block += f"{indent}No forces<br>"
+        left_blocks.append(resultants_block)
 
         F_total = s.F_c_comp + s.F_c_tens + s.F_s_comp + s.F_s_tens
-        txt += f"<br><b>ΣF = {F_total:.1f} kN</b> (≈ N<sub>Ed</sub> = {s.N_Ed:.1f} kN)"
+        right_blocks.append(
+            "<b>ΣF:</b><br>"
+            f"{indent}{F_total:.1f} kN<br>"
+            f"{indent}(≈ N<sub>Ed</sub> = {s.N_Ed:.1f} kN)<br>"
+        )
 
         # Show equilibrium error if section failed
         if s.section_failed:
-            txt += (
-                f'<br><span style="color:red"><b>Equilibrium Error:</b> '
-                f"ΔN = {s.equilibrium_error_N:.1f} kN, "
-                f"ΔM = {s.equilibrium_error_M:.1f} kN·m</span>"
+            right_blocks.append(
+                '<span style="color:red"><b>Equilibrium Error:</b><br>'
+                f"{indent}ΔN = {s.equilibrium_error_N:.1f} kN<br>"
+                f"{indent}ΔM = {s.equilibrium_error_M:.1f} kN·m</span>"
             )
-            txt += (
-                f'<br><span style="color:red"><b>Achieved:</b> '
-                f"N = {s.achieved_N:.1f} kN, M = {s.achieved_M:.1f} kN·m</span>"
+            right_blocks.append(
+                '<span style="color:red"><b>Achieved:</b><br>'
+                f"{indent}N = {s.achieved_N:.1f} kN<br>"
+                f"{indent}M = {s.achieved_M:.1f} kN·m</span>"
             )
-        return txt
+
+        return (block_gap.join(left_blocks), block_gap.join(right_blocks))
 
     def _stress_x_range(self, s: _StressStrainPlotState) -> Tuple[float, float]:
         # base range from concrete stresses

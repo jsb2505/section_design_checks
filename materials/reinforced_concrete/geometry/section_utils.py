@@ -127,7 +127,7 @@ def create_circular_section(
     diameter: float,
     n_points: int = 60,
     origin: Tuple[float, float] = (0.0, 0.0),
-    hook_ref: int = 1,
+    hook_ref: int = 0,
     section_name: Optional[str] = None,
 ) -> RCSection:
     """
@@ -455,7 +455,7 @@ def create_box_section(
 
     return RCSection(
         outline_coords=_points_to_outline(outer),
-        voids_coords=[_points_to_outline(void)],
+        voids_coords=(_points_to_outline(void),),
         section_name=section_name or f"Box {width}×{height}",
     )
 
@@ -548,7 +548,7 @@ def create_voided_deck_section(
 
     return RCSection(
         outline_coords=_points_to_outline(outer),
-        voids_coords=voids,
+        voids_coords=tuple(voids),
         section_name=section_name or f"Voided deck {width}×{height} ({n_voids}×Ø{void_diameter})",
     )
 
