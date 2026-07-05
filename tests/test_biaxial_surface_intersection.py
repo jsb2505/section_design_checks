@@ -4,15 +4,15 @@ import numpy as np
 import pytest
 from scipy.spatial import ConvexHull
 
-from materials.reinforced_concrete.analysis.biaxial_interaction import (
+from section_design_checks.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialMNInteractionSurface,
     create_biaxial_interaction_surface,
 )
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 pytestmark = pytest.mark.slow
 def _create_square_column() -> BiaxialMNInteractionSurface:

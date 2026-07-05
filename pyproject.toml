@@ -1,18 +1,20 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+# setuptools>=77 is required for the PEP 639 SPDX `license` expression below.
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "materials"
+name = "section-design-checks"
 version = "0.1.0"
-description = "API-ready library for structural materials and code-checked section design"
+description = "Reinforced concrete section analysis and Eurocode 2 design checks"
 authors = [
     {name = "Joe Bunting", email = "jsb2505@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
-keywords = ["structural engineering", "reinforced concrete", "eurocode", "materials"]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["structural engineering", "reinforced concrete", "eurocode", "section design", "interaction diagram"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -56,7 +58,7 @@ Repository = "https://github.com/jsb2505/section_design_checks"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["materials*"]
+include = ["section_design_checks*"]
 
 [tool.black]
 line-length = 120

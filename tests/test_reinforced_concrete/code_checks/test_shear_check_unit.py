@@ -11,13 +11,13 @@ from types import SimpleNamespace
 import pytest
 from shapely.geometry import Polygon
 
-import materials.reinforced_concrete.code_checks.ec2_2004.shear_check as sc_mod
-from materials.reinforced_concrete.code_checks.base_check import CheckResult, CheckStatus
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import (
+import section_design_checks.reinforced_concrete.code_checks.ec2_2004.shear_check as sc_mod
+from section_design_checks.reinforced_concrete.code_checks.base_check import CheckResult, CheckStatus
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.shear_check import (
     LoadCase,
     ShearCheck,
 )
-from materials.reinforced_concrete.constitutive import ConcreteModelType
+from section_design_checks.reinforced_concrete.constitutive import ConcreteModelType
 
 
 def _make_stub_shear_check() -> ShearCheck:
@@ -1051,7 +1051,7 @@ class TestPlotWrappers:
         fake_module = types.SimpleNamespace(ShearViewer=_FakeViewer)
         monkeypatch.setitem(
             sys.modules,
-            "materials.reinforced_concrete.analysis.shear_viewer",
+            "section_design_checks.reinforced_concrete.analysis.shear_viewer",
             fake_module,
         )
 

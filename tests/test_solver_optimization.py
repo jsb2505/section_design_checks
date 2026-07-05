@@ -8,11 +8,11 @@ compression face.
 
 from unittest.mock import patch
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
-from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from section_design_checks.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
 
 
 def test_solver_not_called_when_M_zero():

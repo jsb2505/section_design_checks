@@ -5,10 +5,10 @@ Verifies that _estimate_initial_strains() provides guesses in the correct
 quadrant that are reasonably close to the final solution.
 """
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
-from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+from section_design_checks.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 
 def create_test_section():

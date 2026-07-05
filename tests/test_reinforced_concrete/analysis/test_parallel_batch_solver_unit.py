@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from materials.reinforced_concrete.analysis import parallel_batch_solver as pbs
+from section_design_checks.reinforced_concrete.analysis import parallel_batch_solver as pbs
 
 
 class _FakeDiagram:
@@ -159,7 +159,7 @@ def test_module_main_block_prints_usage(capsys):
     """Test module main block prints usage."""
     import runpy
 
-    runpy.run_module("materials.reinforced_concrete.analysis.parallel_batch_solver", run_name="__main__")
+    runpy.run_module("section_design_checks.reinforced_concrete.analysis.parallel_batch_solver", run_name="__main__")
     out = capsys.readouterr().out
     assert "Parallel batch solver module for M-N interaction diagrams" in out
     assert "Example usage" in out

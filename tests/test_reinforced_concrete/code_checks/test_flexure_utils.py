@@ -8,14 +8,14 @@ import warnings
 
 import pytest
 
-from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
-from materials.reinforced_concrete.constitutive import SteelModelType
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
+from section_design_checks.reinforced_concrete.constitutive import SteelModelType
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import Rebar
-from materials.reinforced_concrete.ndp import ndp_override
+from section_design_checks.reinforced_concrete.materials import Rebar
+from section_design_checks.reinforced_concrete.ndp import ndp_override
 
 
 def _make_section(*, include_top: bool = True, include_bottom: bool = True):

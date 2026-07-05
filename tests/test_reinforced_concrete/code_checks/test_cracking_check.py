@@ -11,22 +11,22 @@ import types
 import numpy as np
 import pytest
 
-from materials.core.units import ForceUnit, from_kn
-from materials.reinforced_concrete.code_checks.base_check import CheckStatus
-from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
+from section_design_checks.core.units import ForceUnit, from_kn
+from section_design_checks.reinforced_concrete.code_checks.base_check import CheckStatus
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
     CrackingCheck,
     CrackingResult,
     LoadDuration,
 )
-from materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check import (
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.stress_limits_check import (
     compute_nonlinear_creep_coefficient,
 )
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import Rebar
-from materials.reinforced_concrete.ndp import ndp_override
+from section_design_checks.reinforced_concrete.materials import Rebar
+from section_design_checks.reinforced_concrete.ndp import ndp_override
 
 
 def _make_section(
@@ -641,7 +641,7 @@ class TestCrackingFaceAndMainFlow:
         fake_module = types.SimpleNamespace(CrackWidthViewer=_FakeViewer)
         monkeypatch.setitem(
             sys.modules,
-            "materials.reinforced_concrete.analysis.crack_width_viewer",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer",
             fake_module,
         )
 

@@ -8,12 +8,12 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from materials.reinforced_concrete.analysis.biaxial_interaction import (
+from section_design_checks.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialInteractionPoint,
     BiaxialMNInteractionSurface,
     create_biaxial_interaction_surface,
 )
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )

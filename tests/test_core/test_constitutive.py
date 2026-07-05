@@ -1,4 +1,4 @@
-"""Tests for :mod:`materials.core.constitutive` base abstractions."""
+"""Tests for :mod:`section_design_checks.core.constitutive` base abstractions."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from materials.core.constitutive import BaseConstitutiveModel, StressStrainRelationship
+from section_design_checks.core.constitutive import BaseConstitutiveModel, StressStrainRelationship
 
 
 class LinearQuadraticModel(BaseConstitutiveModel):

@@ -55,5 +55,5 @@ pytest tests/test_reinforced_concrete/materials/test_concrete_material.py::TestC
 ## Coverage
 
 ```bash
-pytest --cov=materials --cov-report=term-missing
+pytest --cov=section_design_checks --cov-report=term-missing
 ```

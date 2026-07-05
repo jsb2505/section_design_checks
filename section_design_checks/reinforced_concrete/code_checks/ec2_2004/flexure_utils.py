@@ -1,0 +1,741 @@
+"""
+Shared utility functions for flexure-related code checks (bending, cracking).
+
+Contains geometry helpers and EC2 formula implementations used by both
+BendingCheck and CrackingCheck.
+"""
+
+import warnings
+from math import hypot
+from typing import TYPE_CHECKING, Any, Literal, Optional
+
+import numpy as np
+from pydantic import BaseModel, Field, computed_field, model_validator
+
+from section_design_checks.reinforced_concrete.constitutive import SteelModelType
+from section_design_checks.reinforced_concrete.ndp import get_ndp_callable
+
+# Public type alias for the fallback policy
+EffectiveDepthFallback = Literal["ratio_of_h", "centroid"]
+BiaxialEffectiveDepthPolicy = Literal["centroid_normal", "extreme_fibre"]
+
+if TYPE_CHECKING:
+    from section_design_checks.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+    from section_design_checks.reinforced_concrete.analysis.strain_state import StrainState
+    from section_design_checks.reinforced_concrete.geometry import RCSection
+
+
+class LoadCase(BaseModel):
+    """
+    Single load case for design checks.
+
+    Axis convention (subscripts name the *direction* a shear force acts, but the
+    *axis* a moment acts about — which is why the major-axis pair reads Vz/My):
+
+    Attributes:
+        Vz_Ed: Major axis shear force — acts along the vertical (z) axis (kN).
+               For the common case, just pass the resultant ``V_Ed`` instead; it
+               maps to this major-axis component. Default 0.
+        Vy_Ed: Minor axis shear force — acts along the horizontal (y) axis (kN,
+               default 0).
+        My_Ed: Major axis design moment — bending about the horizontal (y) axis
+               (kN·m, default 0). Pairs with the major-axis shear ``Vz_Ed``.
+        Mz_Ed: Minor axis design moment — bending about the vertical (z) axis
+               (kN·m, default 0). Pairs with the minor-axis shear ``Vy_Ed``.
+        N_Ed: Design axial force (kN, compression positive, default 0).
+        V_Ed: Direction-agnostic resultant shear; accepted as a convenience input
+              (maps to the major axis ``Vz_Ed``) and also exposed as a computed
+              field ``hypot(Vy_Ed, Vz_Ed)``.
+    """
+    Vy_Ed: float = Field(default=0.0, description="Minor axis (horizontal/y) shear force in kN")
+    Vz_Ed: float = Field(default=0.0, description="Major axis (vertical/z) shear force in kN")
+    My_Ed: float = Field(default=0.0, description="Major axis design moment (about horizontal y-axis) in kN·m")
+    Mz_Ed: float = Field(default=0.0, description="Minor axis design moment (about vertical z-axis) in kN·m")
+    N_Ed: float = Field(default=0.0, description="Design axial force in kN (compression positive)")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def V_Ed(self) -> float:
+        """Resultant shear force (kN)."""
+        return hypot(self.Vy_Ed, self.Vz_Ed)
+
+    @property
+    def M_Ed(self) -> float:
+        """Agnostic alias for the major-axis moment ``My_Ed``."""
+        return self.My_Ed
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compat_legacy_fields(cls, values: Any) -> Any:
+        """Accept the agnostic-resultant ``V_Ed`` and ``M_Ed`` convenience inputs.
+
+        Both are direction-agnostic scalars that mean "the major-axis value", so
+        they map to the major-axis components (``Vz_Ed`` / ``My_Ed``). Explicit
+        components always win — ``V_Ed`` is only applied when neither shear
+        component is supplied.
+        """
+        if not isinstance(values, dict):
+            return values
+        # Resultant V_Ed → Vz_Ed (major / vertical axis). Only when no explicit
+        # shear component is given, so LoadCase(Vy_Ed=..., Vz_Ed=...) is honoured.
+        if "V_Ed" in values and "Vy_Ed" not in values and "Vz_Ed" not in values:
+            values["Vz_Ed"] = values.pop("V_Ed")
+        # Agnostic M_Ed → My_Ed (major axis moment).
+        if "M_Ed" in values and "My_Ed" not in values:
+            values["My_Ed"] = values.pop("M_Ed")
+        return values
+
+
+def calculate_section_height(section: "RCSection") -> float:
+    """
+    Section height from bounding box.
+
+    Args:
+        section: RCSection object
+
+    Returns:
+        Section height in mm
+    """
+    bounds = section.outline.bounds  # (minx, miny, maxx, maxy)
+    return float(bounds[3] - bounds[1])
+
+
+def calculate_section_breadth(section: "RCSection") -> float:
+    """
+    Section breadth (width) from bounding box.
+
+    Args:
+        section: RCSection object
+
+    Returns:
+        Section breadth in mm
+    """
+    bounds = section.outline.bounds  # (minx, miny, maxx, maxy)
+    return float(bounds[2] - bounds[0])
+
+
+def calculate_modular_ratio(E_s: float, E_cm: float) -> float:
+    """
+    Modular ratio alpha_e = E_s / E_cm.
+
+    Args:
+        E_s: Steel elastic modulus in MPa.
+        E_cm: Concrete elastic modulus in MPa.
+
+    Returns:
+        Modular ratio (dimensionless).
+    """
+    if E_cm <= 0:
+        raise ValueError("E_cm must be > 0 to compute modular ratio.")
+    return E_s / E_cm
+
+
+def calculate_neutral_axis_depth_from_strains(
+    eps_top: float,
+    eps_bottom: float,
+    section_height: float,
+) -> float | None:
+    """
+    Calculate neutral axis depth from top face given strain profile.
+
+    The neutral axis is where strain = 0 (transition from compression to tension).
+    Uses linear interpolation (plane sections assumption).
+
+    Sign convention: compression positive, tension negative.
+
+    Args:
+        eps_top: Strain at top fibre (compression positive)
+        eps_bottom: Strain at bottom fibre (compression positive)
+        section_height: Total section height in mm
+
+    Returns:
+        Neutral axis depth from top (mm), or None if:
+        - Section is fully in compression (both strains positive)
+        - Section is fully in tension (both strains negative)
+        - Strains are equal (no curvature)
+    """
+    # Check for uniform strain (no neutral axis)
+    strain_diff = eps_top - eps_bottom
+    if abs(strain_diff) < 1e-12:
+        return None
+
+    # If both positive (compression) or both negative (tension), NA outside section
+    if eps_top > 0 and eps_bottom > 0:
+        return None  # Fully in compression
+    if eps_top < 0 and eps_bottom < 0:
+        return None  # Fully in tension
+
+    # Linear interpolation: find where strain = 0
+    # y measured from top: strain(y) = eps_top + (eps_bottom - eps_top) * y / h
+    # Set strain = 0: y_NA = eps_top * h / (eps_top - eps_bottom)
+    x = eps_top * section_height / strain_diff
+
+    # Sanity check: NA should be within section
+    if x < 0 or x > section_height:
+        return None
+
+    return x
+
+
+def calculate_compression_face_from_strains(
+    eps_top: float,
+    eps_bottom: float,
+    strain_tol: float = 1e-12,
+) -> Literal["top", "bottom"] | None:
+    """
+    Determine which face is in compression from strain state.
+
+    Sign convention: compression positive, tension negative.
+
+    Returns a compression face only when the section has a clear
+    compression/tension split (one face positive, one negative).
+    Returns None for net tension (both ≤ 0) and net compression (both ≥ 0),
+    since effective depth is physically undefined in those cases.
+
+    Args:
+        eps_top: Strain at top fibre
+        eps_bottom: Strain at bottom fibre
+        strain_tol: Tolerance for considering strains as zero
+
+    Returns:
+        "top" if top face is in compression and bottom is in tension
+        "bottom" if bottom face is in compression and top is in tension
+        None if both faces have the same sign (no compression/tension split)
+    """
+    # Both in tension → no compression face
+    if eps_top <= strain_tol and eps_bottom <= strain_tol:
+        return None
+
+    # Both in compression → no tension face, d is undefined
+    if eps_top >= -strain_tol and eps_bottom >= -strain_tol:
+        return None
+
+    # Clear split: return the more compressive face
+    return "top" if eps_top >= eps_bottom else "bottom"
+
+
+def _get_section_height(section: "RCSection") -> float:
+    """Section height from bounding box (mm)."""
+    _, min_y, _, max_y = section.get_bounding_box()
+    return max_y - min_y
+
+
+def _try_centroid_depth(
+    section: "RCSection",
+    compression_face: Literal["top", "bottom"],
+) -> float | None:
+    """Try to get effective depth for a given compression face, return None on failure."""
+    try:
+        return float(section.get_effective_depth(compression_face=compression_face))
+    except ValueError:
+        return None
+
+
+def _apply_d_fallback(
+    section: "RCSection",
+    d_fallback: EffectiveDepthFallback,
+    d_ratio: float,
+    reason: str,
+    warn_on_fallback: bool,
+    _stacklevel: int,
+) -> float:
+    """
+    Return a fallback effective depth when strain-based derivation is not possible.
+
+    Triggered when the section is in net compression, net tension, pure axial,
+    or when the strain solver fails — i.e. whenever there is no clear
+    compression/tension split.
+
+    Policies:
+        "ratio_of_h": d = d_ratio * h  (default 0.9h). Always available.
+        "centroid":   min(d_top, d_bot) from rebar centroids.
+                      Falls back to ratio_of_h if rebar is missing on a face.
+    """
+    if d_fallback == "centroid":
+        d_top = _try_centroid_depth(section, "top")
+        d_bot = _try_centroid_depth(section, "bottom")
+        if d_top is not None and d_bot is not None:
+            d = min(d_top, d_bot)
+        elif d_top is not None:
+            d = d_top
+        elif d_bot is not None:
+            d = d_bot
+        else:
+            # No rebar on either face — ultimate fallback to ratio_of_h
+            d = d_ratio * _get_section_height(section)
+    else:
+        # "ratio_of_h" (default)
+        d = d_ratio * _get_section_height(section)
+
+    if warn_on_fallback:
+        warnings.warn(
+            f"Effective depth fallback ({reason}): d = {d:.1f} mm",
+            stacklevel=_stacklevel,
+        )
+    return d
+
+
+def _compute_biaxial_effective_depth(
+    section: "RCSection",
+    strain_state: "StrainState",
+    diagram: Optional["MNInteractionDiagram"],
+    policy: BiaxialEffectiveDepthPolicy = "centroid_normal",
+) -> float | None:
+    """
+    Compute effective depth perpendicular to a rotated neutral axis.
+
+    Args:
+        section: RCSection with rebar groups.
+        strain_state: Biaxial StrainState with compression_direction.
+        diagram: Optional diagram for fibre force computation (needed for
+            ``"centroid_normal"`` policy).
+        policy: ``"centroid_normal"`` or ``"extreme_fibre"``.
+
+    Returns:
+        Effective depth in mm, or None if computation fails.
+    """
+    from shapely.geometry import LineString
+
+    dx, dy = strain_state.compression_direction
+    if abs(dx) < 1e-18 and abs(dy) < 1e-18:
+        return None
+
+    cx, cy = section.get_centroid()
+
+    # Identify tension rebars and compute area-weighted centroid projection
+    tension_proj_sum = 0.0
+    tension_area_sum = 0.0
+    for group in section.rebar_groups:
+        a_bar = float(group.rebar.area)
+        for pos in group.positions:
+            xr, yr = float(pos.x) - cx, float(pos.y) - cy
+            if strain_state.is_tension_at(xr, yr):
+                proj = dx * xr + dy * yr
+                tension_proj_sum += a_bar * proj
+                tension_area_sum += a_bar
+
+    if tension_area_sum <= 0:
+        return None
+
+    proj_T = tension_proj_sum / tension_area_sum
+
+    if policy == "extreme_fibre":
+        # Project section boundary vertices onto compression direction
+        coords = list(section.outline.exterior.coords)
+        projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
+        proj_comp_extreme = max(projections)
+        return float(abs(proj_comp_extreme - proj_T))
+
+    # "centroid_normal" policy: find compression zone centroid, draw line
+    # through it along compression direction, intersect with section boundary.
+    if diagram is None:
+        # Fall back to extreme_fibre if no diagram available
+        coords = list(section.outline.exterior.coords)
+        projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
+        proj_comp_extreme = max(projections)
+        return float(abs(proj_comp_extreme - proj_T))
+
+    forces, x_coords, y_coords, _ = diagram.get_fibre_forces_from_strain_state(
+        strain_state,
+    )
+
+    compression_mask = forces > 0
+    if not np.any(compression_mask):
+        return None
+
+    C_total = float(np.sum(forces[compression_mask]))
+    if C_total <= 0:
+        return None
+
+    # Compression zone centroid (absolute coords)
+    x_C = float(np.sum(forces[compression_mask] * x_coords[compression_mask]) / C_total)
+    y_C = float(np.sum(forces[compression_mask] * y_coords[compression_mask]) / C_total)
+
+    # Draw a line through compression centroid along compression direction
+    # and find where it intersects the section boundary on the compression side
+    line_length = _get_section_height(section) * 2.0  # generous extent
+    line = LineString([
+        (x_C - dx * line_length, y_C - dy * line_length),
+        (x_C + dx * line_length, y_C + dy * line_length),
+    ])
+
+    intersection = section.outline.exterior.intersection(line)
+    if intersection.is_empty:
+        # Fallback to extreme fibre
+        coords = list(section.outline.exterior.coords)
+        projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
+        proj_comp_extreme = max(projections)
+        return float(abs(proj_comp_extreme - proj_T))
+
+    # Find the intersection point furthest along compression direction
+    from shapely.geometry import GeometryCollection, MultiPoint
+    from shapely.geometry import Point as ShapelyPoint
+
+    if isinstance(intersection, ShapelyPoint):
+        pts = [intersection]
+    elif isinstance(intersection, MultiPoint):
+        pts = list(intersection.geoms)
+    elif isinstance(intersection, GeometryCollection):
+        pts = [g for g in intersection.geoms if isinstance(g, ShapelyPoint)]
+    else:
+        pts = []
+
+    if not pts:
+        coords = list(section.outline.exterior.coords)
+        projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
+        proj_comp_extreme = max(projections)
+        return float(abs(proj_comp_extreme - proj_T))
+
+    boundary_projs = [dx * (p.x - cx) + dy * (p.y - cy) for p in pts]
+    proj_boundary = max(boundary_projs)
+
+    return float(abs(proj_boundary - proj_T))
+
+
+def find_effective_depth_for_flexure(
+    section: "RCSection",
+    diagram: Optional["MNInteractionDiagram"],
+    M_Ed: float,
+    N_Ed: float,
+    eps_top: float | None = None,
+    eps_bottom: float | None = None,
+    *,
+    strain_state: Optional["StrainState"] = None,
+    biaxial_d_policy: BiaxialEffectiveDepthPolicy = "centroid_normal",
+    m_tol: float = 1e-6,
+    strain_tol: float = 1e-15,
+    warn_on_fallback: bool = True,
+    d_fallback: EffectiveDepthFallback = "ratio_of_h",
+    d_ratio: float = 0.9,
+    _stacklevel: int = 2,
+) -> float:
+    """
+    Effective depth d (mm) measured from the governing compression face.
+
+    This is the single source of truth used by ShearCheck, BendingCheck,
+    MNInteractionDiagram, and CircularSectionCheck.
+
+    When the strain state allows (clear compression/tension split), d is
+    computed from rebar centroid geometry via ``section.get_effective_depth()``.
+
+    When *strain_state* is biaxial (rotated NA), d is computed geometrically
+    perpendicular to the neutral axis using the ``biaxial_d_policy``.
+
+    When the strain state is ambiguous (net compression, net tension, pure
+    axial, solver failure), the ``d_fallback`` policy is applied:
+        - ``"ratio_of_h"``: d = d_ratio * h  (default 0.9h, always available)
+        - ``"centroid"``:   min(d_top, d_bot) from rebar centroids, with
+          ultimate fallback to ratio_of_h if rebar missing on a face.
+
+    Args:
+        section: RCSection object.
+        diagram: MNInteractionDiagram for strain solving (optional).
+        M_Ed: Design moment in kN·m.
+        N_Ed: Design axial force in kN (compression positive).
+        eps_top: Pre-computed top strain (optional).
+        eps_bottom: Pre-computed bottom strain (optional).
+        strain_state: Full 2D strain state (optional). When biaxial,
+            triggers perpendicular-to-NA effective depth computation.
+        biaxial_d_policy: Policy for biaxial effective depth:
+            - ``"centroid_normal"`` (default): d measured from the section
+              boundary (along a line through the compression zone centroid,
+              perpendicular to the NA) to the tension rebar centroid.
+            - ``"extreme_fibre"``: d measured from the extreme compression
+              fibre to the tension rebar centroid, both projected onto the
+              compression direction.
+        m_tol: Tolerance for considering moment as zero.
+        strain_tol: Tolerance for strain comparisons.
+        warn_on_fallback: Whether to emit warnings when using fallback.
+        d_fallback: Fallback policy — ``"ratio_of_h"`` or ``"centroid"``.
+        d_ratio: Ratio of section height h used for ``"ratio_of_h"`` policy.
+        _stacklevel: Warning stacklevel (internal, for wrapper call depth).
+
+    Returns:
+        Effective depth d in mm.
+    """
+    sl = _stacklevel + 1  # adjust for this frame
+
+    def _fallback(reason: str) -> float:
+        return _apply_d_fallback(
+            section=section,
+            d_fallback=d_fallback,
+            d_ratio=d_ratio,
+            reason=reason,
+            warn_on_fallback=warn_on_fallback,
+            _stacklevel=sl + 1,
+        )
+
+    # Pure shear / pure axial / no clear bending → fallback
+    if abs(M_Ed) <= m_tol:
+        return _fallback("no bending (|M_Ed| ≈ 0)")
+
+    # Biaxial path: perpendicular-to-NA geometric computation
+    if strain_state is not None and strain_state.is_biaxial:
+        d_biaxial = _compute_biaxial_effective_depth(
+            section=section,
+            strain_state=strain_state,
+            diagram=diagram,
+            policy=biaxial_d_policy,
+        )
+        if d_biaxial is not None and d_biaxial > 0:
+            return d_biaxial
+        return _fallback("biaxial effective depth computation failed")
+
+    # If strains missing, try to solve via diagram
+    if (eps_top is None or eps_bottom is None) and diagram is not None:
+        try:
+            eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed)
+        except Exception:
+            eps_top, eps_bottom = None, None
+
+    # Still missing → fallback
+    if eps_top is None or eps_bottom is None:
+        return _fallback("strain state unavailable")
+
+    # Determine compression face from strains
+    compression_face = calculate_compression_face_from_strains(
+        eps_top, eps_bottom, strain_tol=strain_tol,
+    )
+
+    # No compression face (both in tension or both in compression) → fallback
+    if compression_face is None:
+        return _fallback("no compression/tension split")
+
+    # Have a compression face — try to get d from rebar geometry
+    d = _try_centroid_depth(section, compression_face)
+    if d is not None:
+        return d
+
+    # Compression face known but no rebar in the corresponding tension zone → fallback
+    return _fallback("no rebar in tension zone for this compression face")
+
+
+def find_mean_effective_depth(
+    section: "RCSection",
+    tension_face: Literal["top", "bottom"] = "bottom",
+    zone_fraction: float = 0.5,
+) -> float:
+    """
+    Mean effective depth to tension reinforcement centroid.
+
+    This returns the same as get_effective_depth but with clearer naming for
+    serviceability checks like cracking.
+
+    Args:
+        section: RCSection object
+        tension_face: Which face is in tension ("top" or "bottom")
+        zone_fraction: Fraction of section depth considered as tension zone
+
+    Returns:
+        Mean effective depth in mm
+    """
+    # compression_face is opposite of tension_face
+    compression_face: Literal["top", "bottom"] = "top" if tension_face == "bottom" else "bottom"
+    return section.get_effective_depth(
+        compression_face=compression_face,
+        zone_fraction=zone_fraction,
+    )
+
+
+def find_equivalent_diameter(
+    bars: list[tuple[float, int]],
+) -> float:
+    """
+    Equivalent bar diameter for mixed bar sizes (EC2 §7.3.4(3), Eq. 7.12).
+
+    For a section with n₁ bars of diameter φ₁ and n₂ bars of diameter φ₂:
+        φ_eq = (n₁·φ₁² + n₂·φ₂²) / (n₁·φ₁ + n₂·φ₂)
+
+    This generalises to multiple bar sizes.
+
+    Args:
+        bars: List of tuples (diameter_mm, count) for each bar size
+
+    Returns:
+        Equivalent diameter in mm
+
+    Example:
+        >>> # 4 x 16mm bars and 2 x 20mm bars
+        >>> phi_eq = find_equivalent_diameter([(16, 4), (20, 2)])
+        >>> print(f"φ_eq = {phi_eq:.1f} mm")
+    """
+    if not bars:
+        raise ValueError("No bars provided for equivalent diameter calculation")
+
+    # Check for single bar size (or all same diameter)
+    diameters = set(d for d, n in bars if n > 0)
+    if len(diameters) == 1:
+        return diameters.pop()
+
+    numerator = 0.0
+    denominator = 0.0
+
+    for diameter, count in bars:
+        if count <= 0:
+            continue
+        numerator += count * diameter ** 2
+        denominator += count * diameter
+
+    if denominator <= 0:
+        raise ValueError("Total bar count is zero")
+
+    return numerator / denominator
+
+
+def get_tension_rebars_from_strain_state(
+    section: "RCSection",
+    eps_top: float,
+    eps_bottom: float,
+    strain_state: Optional["StrainState"] = None,
+) -> list[tuple[float, int, float]]:
+    """
+    Identify rebars in the tension zone based on strain state.
+
+    Returns rebars where the strain at their location is negative (tension).
+
+    When *strain_state* is provided and biaxial, the full 2D strain plane is
+    used to evaluate strain at each bar's (x, y) position.  Otherwise the
+    legacy y-only linear interpolation is used.
+
+    Args:
+        section: RCSection object
+        eps_top: Strain at top fibre (compression positive)
+        eps_bottom: Strain at bottom fibre (compression positive)
+        strain_state: Optional full 2D strain state for biaxial evaluation.
+
+    Returns:
+        List of tuples (diameter_mm, count, y_position) for each tension rebar group
+    """
+    use_biaxial = (
+        strain_state is not None and strain_state.is_biaxial
+    )
+
+    if use_biaxial:
+        cx, cy = section.get_centroid()
+    else:
+        cx, cy = 0.0, 0.0  # unused
+
+    bounds = section.outline.bounds
+    h = bounds[3] - bounds[1]  # section height
+    y_min = bounds[1]
+
+    tension_rebars = []
+
+    for group in section.rebar_groups:
+        diameter = float(group.rebar.diameter)
+        for pos in group.positions:
+            if use_biaxial:
+                strain_at_bar = strain_state.strain_at(  # type: ignore[union-attr]
+                    float(pos.x) - cx, float(pos.y) - cy,
+                )
+            else:
+                y_rel = (pos.y - y_min) / h
+                strain_at_bar = eps_bottom + (eps_top - eps_bottom) * y_rel
+
+            # Tension is negative strain
+            if strain_at_bar < 0:
+                tension_rebars.append((diameter, 1, pos.y))
+
+    return tension_rebars
+
+
+def calculate_rebar_characteristic_stress_from_strain(
+    strain: float,
+    *,
+    steel_model_type: SteelModelType = SteelModelType.INCLINED,
+    E_s: float = 200_000,
+    f_yk: float = 500,
+    k: float = 1.0,
+    epsilon_uk: float = 0.05,
+) -> float:
+    """
+    Calculate stress in rebar for a given strain (SLS - characteristic).
+
+    Uses bilinear stress-strain with hardening for serviceability.
+
+    Args:
+        strain: Strain at rebar location (tension negative, compression positive)
+        steel_model_type: SteelModelType.INCLINED or SteelModelType.HORIZONTAL
+        E_s: Steel elastic modulus in MPa
+        f_yk: Characteristic yield strength in MPa
+        k: Hardening ratio (f_t/f_y, typically 1.0 to 1.08) - only used if steel model type is 'inclined'
+        epsilon_uk: Ultimate strain (typically 0.05 for Class B) - only used if steel model type is 'inclined'
+
+    Returns:
+        Stress in MPa (tension negative, compression positive)
+    """
+    # Yield strain
+    epsilon_yk = f_yk / E_s
+
+    # Absolute strain for calculation
+    abs_strain = abs(strain)
+
+    if abs_strain <= epsilon_yk:
+        # Elastic region
+        stress = E_s * abs_strain
+    else:
+        if steel_model_type is SteelModelType.HORIZONTAL:
+            # perfectly plastic post-yield
+            stress = f_yk
+
+        elif steel_model_type is SteelModelType.INCLINED:
+            # hardening up to k*f_yk at epsilon_uk
+            if abs_strain <= epsilon_uk:
+                # Plastic region with hardening
+                f_t = k * f_yk
+                stress = f_yk + (f_t - f_yk) * (abs_strain - epsilon_yk) / (epsilon_uk - epsilon_yk)
+            else:
+                # Beyond ultimate - cap at ultimate stress
+                stress = k * f_yk
+        else:
+            raise ValueError(f"Unsupported steel model type: {steel_model_type!r}")
+
+    # Apply sign (tension negative, compression positive)
+    return stress if strain >= 0 else -stress
+
+
+def find_area_of_steel_minimum(b: float, d: float, f_ctm: float, f_yk: float) -> float:
+    '''
+    Minimum area of longitudinal tension reinforcement in mm².
+    Ref: EC2 §9.2.1.1(1) (9.1N)
+
+    Args:
+        b: Mean breadth of the section in the tensile zone
+        d: Effective depth to tensile reinforcement
+        f_ctm: The mean tensile strength of concrete
+        f_yk: The characteristic yield strength of the rebar
+
+    Returns:
+        A_s,min: The minimum amount of longitudinal reinforcement allowed
+    '''
+    if b <= 0:
+        raise ValueError(f"b must be > 0, got {b}")
+    if d <= 0:
+        raise ValueError(f"d must be > 0, got {d}")
+    if f_ctm < 0:
+        raise ValueError(f"f_ctm must be >= 0, got {f_ctm}")
+    if f_yk <= 0:
+        raise ValueError(f"f_yk must be > 0, got {f_yk}")
+
+    ratio_fn = get_ndp_callable("as_min_flexural_ratio")
+    ratio = float(ratio_fn(f_ctm=float(f_ctm), f_yk=float(f_yk)))
+    return ratio * float(b) * float(d)
+
+
+def find_area_of_steel_maximum(section_area: float) -> float:
+    '''
+    Maximum area of longitudinal tension or compression reinforcement in mm².
+    Ref: EC2 §9.2.1.1(3)
+
+    Args:
+        section_area: The cross-sectional area of the section
+
+    Returns:
+        A_s,max: The maximum amount of longitudinal reinforcement allowed
+    '''
+    if section_area < 0:
+        raise ValueError(f"section_area must be >= 0, got {section_area}")
+
+    ratio_fn = get_ndp_callable("as_max_flexural_ratio")
+    ratio = float(ratio_fn(section_area=float(section_area)))
+    return ratio * float(section_area)

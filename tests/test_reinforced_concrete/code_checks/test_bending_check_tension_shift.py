@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
 
 # -------------------------
 # Test doubles / stubs
@@ -79,7 +79,7 @@ class DummyDiagram:
         """Stub for MNInteractionDiagram.apply_tension_shift."""
         from math import copysign
 
-        from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
+        from section_design_checks.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
 
         self.apply_tension_shift_calls += 1
 
@@ -124,7 +124,7 @@ def make_check(*, diagram: DummyDiagram) -> BendingCheck:
     2. Setting all required attributes directly
     3. Injecting our stub diagram
     """
-    from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
+    from section_design_checks.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
 
     concrete = SimpleNamespace(
         f_ck=30.0,
@@ -194,7 +194,7 @@ def patch_shear_utils(monkeypatch):
     """
     Patch shear_utils functions so the tests don't depend on real implementation or RCSection geometry.
     """
-    import materials.reinforced_concrete.code_checks.ec2_2004.shear_utils as shear_utils
+    import section_design_checks.reinforced_concrete.code_checks.ec2_2004.shear_utils as shear_utils
 
     monkeypatch.setattr(shear_utils, "sigma_cp_from_N_and_area", lambda *, N_Ed, A_mm2: 1.0)
     monkeypatch.setattr(shear_utils, "cap_sigma_cp_upper", lambda *, sigma_cp, f_cd: sigma_cp)

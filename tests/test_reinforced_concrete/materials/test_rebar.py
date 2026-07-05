@@ -8,8 +8,8 @@ import warnings
 import pytest
 from pydantic import ValidationError
 
-from materials.core.units import LENGTH_TO_MM, LengthUnit
-from materials.reinforced_concrete.materials import (
+from section_design_checks.core.units import LENGTH_TO_MM, LengthUnit
+from section_design_checks.reinforced_concrete.materials import (
     Rebar,
     ShearRebar,
 )

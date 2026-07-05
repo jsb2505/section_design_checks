@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import materials.reinforced_concrete.code_checks.ec2_2004.bending_check as bending_mod
-from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
-from materials.reinforced_concrete.constitutive import ConcreteModelType
+import section_design_checks.reinforced_concrete.code_checks.ec2_2004.bending_check as bending_mod
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
+from section_design_checks.reinforced_concrete.constitutive import ConcreteModelType
 
 
 class _FakeDiagram:

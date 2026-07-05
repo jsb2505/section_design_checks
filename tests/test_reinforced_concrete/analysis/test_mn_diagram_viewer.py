@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from materials.reinforced_concrete.analysis.mn_diagram_viewer import MNDiagramViewer
+from section_design_checks.reinforced_concrete.analysis.mn_diagram_viewer import MNDiagramViewer
 
 
 class _FakeFigure:

@@ -7,15 +7,15 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import materials.reinforced_concrete.analysis.interaction_diagram as interaction_diagram
-from materials.reinforced_concrete.analysis.interaction_diagram import (
+import section_design_checks.reinforced_concrete.analysis.interaction_diagram as interaction_diagram
+from section_design_checks.reinforced_concrete.analysis.interaction_diagram import (
     InteractionPoint,
     MNInteractionDiagram,
     _ray_segment_intersection_alpha,
 )
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
-from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
+from section_design_checks.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
@@ -1130,7 +1130,7 @@ def test_plot_stress_strain_wrapper_calls_viewer(
     diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Test plot stress strain wrapper calls viewer."""
-    import materials.reinforced_concrete.analysis.stress_strain_viewer as ss_viewer
+    import section_design_checks.reinforced_concrete.analysis.stress_strain_viewer as ss_viewer
 
     seen: dict[str, object] = {}
 
@@ -1201,7 +1201,7 @@ def test_apply_tension_shift_basic_no_shear(
     diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Test apply tension shift basic no shear."""
-    import materials.reinforced_concrete.code_checks.ec2_2004.shear_utils as shear_utils
+    import section_design_checks.reinforced_concrete.code_checks.ec2_2004.shear_utils as shear_utils
 
     seen: dict[str, object] = {}
     monkeypatch.setattr(diagram, "_compute_z_d_for_moment", lambda **_kwargs: (300.0, 500.0))
@@ -1229,7 +1229,7 @@ def test_apply_tension_shift_iterative_with_shear_reinforcement(
     diagram: MNInteractionDiagram, shear_links, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Test apply tension shift iterative with shear reinforcement."""
-    import materials.reinforced_concrete.code_checks.ec2_2004.shear_utils as shear_utils
+    import section_design_checks.reinforced_concrete.code_checks.ec2_2004.shear_utils as shear_utils
 
     z_d_values = iter([(300.0, 500.0), (330.0, 510.0), (331.0, 511.0)])
     monkeypatch.setattr(diagram, "_compute_z_d_for_moment", lambda **_kwargs: next(z_d_values))
@@ -1364,7 +1364,7 @@ class TestLinearElasticTensionConvergence:
 
     def test_viewer_equilibrium_round_trip(self, beam_top_and_bottom, concrete_c30):
         """Verify that the viewer's stress output matches equilibrium for the solved strains."""
-        from materials.reinforced_concrete.analysis.stress_strain_viewer import StressStrainViewer
+        from section_design_checks.reinforced_concrete.analysis.stress_strain_viewer import StressStrainViewer
 
         diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=False)
         viewer = StressStrainViewer(diag)
@@ -1373,6 +1373,6 @@ class TestLinearElasticTensionConvergence:
         assert abs(state.M_Ed - 45.0) < 1e-6
         # The achieved N from the stress integration should be near zero
         forces = state.forces_N
-        from materials.reinforced_concrete.analysis.interaction_diagram import ForceUnit, to_kn
+        from section_design_checks.reinforced_concrete.analysis.interaction_diagram import ForceUnit, to_kn
         achieved_N = to_kn(float(np.sum(forces)), ForceUnit.N)
         assert abs(achieved_N) < 0.5, f"Viewer equilibrium N error: {achieved_N:.3f} kN"

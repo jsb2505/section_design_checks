@@ -7,16 +7,16 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import materials.reinforced_concrete.code_checks.ec2_2004.cracking_check as cc_mod
-from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
+import section_design_checks.reinforced_concrete.code_checks.ec2_2004.cracking_check as cc_mod
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
     CrackingCheck,
     CrackingResult,
 )
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import Rebar
+from section_design_checks.reinforced_concrete.materials import Rebar
 
 
 def _make_section(
@@ -1061,7 +1061,7 @@ class TestBiaxialNetCompression:
     as uncracked (non-conservative)."""
 
     def test_corner_tension_is_not_net_compression(self, concrete_c30):
-        from materials.reinforced_concrete.analysis.strain_state import StrainState
+        from section_design_checks.reinforced_concrete.analysis.strain_state import StrainState
 
         check = CrackingCheck(section=_make_section(width=300.0, height=500.0), concrete=concrete_c30)
         # Uniform vertical strain (both faces in compression, +100e-6) but a horizontal

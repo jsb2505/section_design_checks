@@ -9,9 +9,9 @@ from math import exp, sqrt
 import pytest
 from pydantic import ValidationError
 
-import materials.reinforced_concrete.materials.concrete_age as concrete_age_mod
-from materials.reinforced_concrete.materials import ConcreteMaterial
-from materials.reinforced_concrete.materials.concrete_age import CementClass, ConcreteAge
+import section_design_checks.reinforced_concrete.materials.concrete_age as concrete_age_mod
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial
+from section_design_checks.reinforced_concrete.materials.concrete_age import CementClass, ConcreteAge
 
 
 class TestCementClass:

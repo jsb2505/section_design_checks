@@ -18,18 +18,18 @@ jobs:
       # code, minus E501 (line-length is enforced via pyproject line-length=120
       # but kept advisory — the few residual long lines are long HTML/annotation
       # strings). The test tree is clean of every other rule, so it blocks too.
-      - name: ruff (blocking, materials + tests)
-        run: ruff check materials tests --extend-ignore E501
+      - name: ruff (blocking, package + tests)
+        run: ruff check section_design_checks tests --extend-ignore E501
       # Advisory: the same trees incl. E501 (surfaces residual line-length only).
       - name: ruff (line-length, advisory)
-        run: ruff check materials tests
+        run: ruff check section_design_checks tests
         continue-on-error: true
       # mypy: the whole package is now type-clean and BLOCKS (the backlog was
       # cleared). --ignore-missing-imports silences third-party stub noise
       # (scipy/shapely/plotly); the pydantic plugin + py3.11 target live in
       # pyproject [tool.mypy].
       - name: mypy (blocking)
-        run: mypy materials --ignore-missing-imports
+        run: mypy section_design_checks --ignore-missing-imports
 
   test:
     runs-on: ubuntu-latest

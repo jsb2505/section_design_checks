@@ -7,13 +7,13 @@ from __future__ import annotations
 import sys
 import types
 
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_box_section,
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.geometry.section_viewer import SectionViewer
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.reinforced_concrete.geometry.section_viewer import SectionViewer
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 
 class _FakeFigure:
@@ -141,7 +141,7 @@ class TestSectionPlotWrapper:
         fake_mod = types.SimpleNamespace(SectionViewer=_FakeViewer)
         monkeypatch.setitem(
             sys.modules,
-            "materials.reinforced_concrete.geometry.section_viewer",
+            "section_design_checks.reinforced_concrete.geometry.section_viewer",
             fake_mod,
         )
 

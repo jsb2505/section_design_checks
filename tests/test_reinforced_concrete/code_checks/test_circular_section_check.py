@@ -6,17 +6,17 @@ from math import sqrt
 
 import pytest
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.circular_section_check import (
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.circular_section_check import (
     CircularSectionCheck,
 )
-from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+from section_design_checks.reinforced_concrete.geometry import (
     RebarGroup,
     create_circular_perimeter_rebars,
     create_circular_section,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
 
 
 def _make_circular_section(diameter: float = 600.0):
@@ -233,7 +233,7 @@ class TestUncrackedVRdcEq65Cap:
     V_Rd,c (0.5·b_w·d·ν·f_cd), which the docstring promised but never did."""
 
     def test_uncracked_vrdc_capped(self):
-        from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import find_nu_factor
+        from section_design_checks.reinforced_concrete.code_checks.ec2_2004.shear_utils import find_nu_factor
 
         section = _make_circular_section()
         check = CircularSectionCheck(

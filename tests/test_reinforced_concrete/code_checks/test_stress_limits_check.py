@@ -9,8 +9,8 @@ import warnings
 import numpy as np
 import pytest
 
-from materials.reinforced_concrete.code_checks.base_check import CheckStatus
-from materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check import (
+from section_design_checks.reinforced_concrete.code_checks.base_check import CheckStatus
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.stress_limits_check import (
     StressLimitResult,
     StressLimitsCheck,
     check_characteristic_concrete_stress,
@@ -20,12 +20,12 @@ from materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check impo
     check_reinforcement_yielding,
     compute_nonlinear_creep_coefficient,
 )
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import Rebar
-from materials.reinforced_concrete.ndp import get_ndp
+from section_design_checks.reinforced_concrete.materials import Rebar
+from section_design_checks.reinforced_concrete.ndp import get_ndp
 
 
 def _make_section(
@@ -181,7 +181,7 @@ class TestStressLimitsHelpersAndCaching:
             return obj
 
         monkeypatch.setattr(
-            "materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check.create_interaction_diagram",
+            "section_design_checks.reinforced_concrete.code_checks.ec2_2004.stress_limits_check.create_interaction_diagram",
             _fake_factory,
         )
 
@@ -249,7 +249,7 @@ class TestStressLimitsHelpersAndCaching:
             return "diagram"
 
         monkeypatch.setattr(
-            "materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check.create_interaction_diagram",
+            "section_design_checks.reinforced_concrete.code_checks.ec2_2004.stress_limits_check.create_interaction_diagram",
             _fake_factory,
         )
 
@@ -386,7 +386,7 @@ class TestStressLimitsDetailedAndPerform:
         monkeypatch.setattr(StressLimitsCheck, "_get_peak_concrete_stress", lambda *args, **kwargs: concrete_c30.f_ck * 0.8)
         monkeypatch.setattr(StressLimitsCheck, "_get_max_steel_stress", lambda *args, **kwargs: 100.0)
         monkeypatch.setattr(
-            "materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check.compute_nonlinear_creep_coefficient",
+            "section_design_checks.reinforced_concrete.code_checks.ec2_2004.stress_limits_check.compute_nonlinear_creep_coefficient",
             lambda sigma_c, f_ck, creep_coefficient: creep_coefficient,
         )
         build_calls = {"n": 0}

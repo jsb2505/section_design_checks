@@ -1,4 +1,4 @@
-"""Tests for :mod:`materials.utils.helpers` utility functions."""
+"""Tests for :mod:`section_design_checks.utils.helpers` utility functions."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import math
 import numpy as np
 import pytest
 
-from materials.utils.helpers import as_float, cot
+from section_design_checks.utils.helpers import as_float, cot
 
 
 def test_cot_regular_angle_matches_trig_identity():

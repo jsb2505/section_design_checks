@@ -5,7 +5,7 @@ Tests for reinforced_concrete.code_checks.base_check module.
 import pytest
 from pydantic import ValidationError
 
-from materials.reinforced_concrete.code_checks.base_check import (
+from section_design_checks.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
     CheckResult,
     CheckStatus,

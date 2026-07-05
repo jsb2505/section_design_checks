@@ -7,12 +7,12 @@ This script shows how to:
 3. Visualize the surface in 3D using matplotlib
 """
 
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.reinforced_concrete.geometry import (
     create_rectangular_section,
     create_linear_rebar_layer,
 )
-from materials.reinforced_concrete.analysis import create_biaxial_interaction_surface
+from section_design_checks.reinforced_concrete.analysis import create_biaxial_interaction_surface
 
 
 def main():

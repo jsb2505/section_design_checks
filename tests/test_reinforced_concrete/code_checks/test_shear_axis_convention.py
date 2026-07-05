@@ -18,11 +18,11 @@ from math import hypot
 
 import pytest
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
-from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from section_design_checks.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 # 300 (width) × 500 (height): deliberately non-square so the major-axis (vertical)
 # breadth (≈ width 300) differs from the minor-axis (horizontal) breadth (≈ height 500).

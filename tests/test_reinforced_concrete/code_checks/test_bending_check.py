@@ -9,14 +9,14 @@ import warnings
 import numpy as np
 import pytest
 
-from materials.reinforced_concrete.code_checks.base_check import CheckStatus
-from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.code_checks.base_check import CheckStatus
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
-from materials.reinforced_concrete.ndp import CountryCode, get_ndp_context, set_ndp_context
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
+from section_design_checks.reinforced_concrete.ndp import CountryCode, get_ndp_context, set_ndp_context
 
 
 @pytest.fixture
@@ -783,7 +783,7 @@ class TestConcreteAndSteelModels:
 
     def test_different_concrete_models(self, test_beam, concrete_c30):
         """Test with different concrete model types."""
-        from materials.reinforced_concrete.constitutive import ConcreteModelType
+        from section_design_checks.reinforced_concrete.constitutive import ConcreteModelType
 
         for model_type in [
             ConcreteModelType.PARABOLA_RECTANGLE,
@@ -802,7 +802,7 @@ class TestConcreteAndSteelModels:
 
     def test_different_steel_models(self, test_beam, concrete_c30):
         """Test with different steel model types."""
-        from materials.reinforced_concrete.constitutive import SteelModelType
+        from section_design_checks.reinforced_concrete.constitutive import SteelModelType
 
         for model_type in [SteelModelType.INCLINED, SteelModelType.HORIZONTAL]:
             check = BendingCheck(
@@ -877,7 +877,7 @@ class TestStrainSolveExceptionNarrowing:
     silently swallowed into a None strain state."""
 
     def test_non_valueerror_in_strain_state_solve_propagates(self, test_beam, concrete_c30, monkeypatch):
-        from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+        from section_design_checks.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 

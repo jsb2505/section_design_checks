@@ -9,14 +9,14 @@ Run with: ``pytest -m slow tests/integration/test_biaxial_utilization_vector.py`
 
 import pytest
 
-from materials.reinforced_concrete.analysis.biaxial_interaction import (
+from section_design_checks.reinforced_concrete.analysis.biaxial_interaction import (
     create_biaxial_interaction_surface,
 )
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 

@@ -5,6 +5,30 @@ All notable changes to this project are recorded here. The project is in early
 
 ## [Unreleased]
 
+### Changed — BREAKING: import package renamed `materials` → `section_design_checks`
+
+In preparation for a PyPI listing the distribution is now named
+**`section-design-checks`** (the previous distribution name `materials` is
+already taken on PyPI by an unrelated project, whose import package would also
+collide on disk) and the import package is renamed to match:
+
+```python
+# before
+from materials.reinforced_concrete.materials import ConcreteMaterial
+# after
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial
+```
+
+**Migration:** replace the `materials.` prefix with `section_design_checks.` in
+imports (the `reinforced_concrete.materials` *sub*-package keeps its name), and
+reinstall the environment: `pip uninstall materials` then `pip install -e .`.
+
+### Added — PyPI release workflow
+
+`.github/workflows/release.yml` builds and publishes to PyPI via Trusted
+Publishing (OIDC) whenever a GitHub Release is published. See the comment in
+the workflow for the one-time pending-publisher setup on pypi.org.
+
 ### Fixed — biaxial surface plotting crash on sparse grids
 
 `BiaxialMNInteractionSurface._downsample_surface` now selects points via the

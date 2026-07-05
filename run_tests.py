@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Test runner script for the materials library.
+Test runner script for the section design checks library.
 
 Usage:
     python run_tests.py              # Run all tests
@@ -22,7 +22,7 @@ def main():
         args = [
             "-v",
             "--tb=short",
-            "--cov=materials",
+            "--cov=section_design_checks",
             "--cov-report=html",
             "--cov-report=term-missing",
         ]

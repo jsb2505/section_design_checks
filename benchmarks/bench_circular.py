@@ -40,14 +40,14 @@ def _make_check(
     link_spacing: float = 200.0,
 ):
     """Build a representative CircularSectionCheck (C30/37, D=600, 12×T20, T12@200)."""
-    from materials.reinforced_concrete.code_checks.ec2_2004.circular_section_check import (
+    from section_design_checks.reinforced_concrete.code_checks.ec2_2004.circular_section_check import (
         CircularSectionCheck,
     )
-    from materials.reinforced_concrete.geometry import (
+    from section_design_checks.reinforced_concrete.geometry import (
         create_circular_section,
         create_circular_perimeter_rebars,
     )
-    from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
+    from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
 
     section = create_circular_section(diameter=diameter, hook_ref=0)
     perimeter = create_circular_perimeter_rebars(
@@ -98,7 +98,7 @@ def _bending_loads(n: int, seed: int = 42) -> list[dict]:
 # ------------------------------------------------------------------ timing helpers
 
 def _run_shear(check, load: dict) -> None:
-    from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+    from section_design_checks.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 
     check.perform_shear_check(
         load_case=LoadCase(**load),
@@ -157,7 +157,7 @@ def bench_warm_cache(
     _strain_cache and skips scipy.  This measures the per-call floor when
     geometry and loads are stable.
     """
-    from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+    from section_design_checks.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 
     shear_lc = LoadCase(**shear_load)
 
@@ -196,7 +196,7 @@ def bench_cold_cache(
     Every (M, N) pair is distinct so _strain_cache misses and scipy runs.
     This measures the realistic cost when iterating over many load combinations.
     """
-    from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+    from section_design_checks.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 
     shear_lcs = [LoadCase(**lc) for lc in shear_loads[:n_cold]]
     shear_times = _time_ms(
@@ -234,7 +234,7 @@ def bench_config_sweep(n_configs: int, n_checks_per_config: int = 5) -> dict[str
 
     This gates ARCH-401 (shared diagram registry).
     """
-    from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+    from section_design_checks.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 
     base_check = _make_check()
     reference_load = LoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
@@ -243,7 +243,7 @@ def bench_config_sweep(n_configs: int, n_checks_per_config: int = 5) -> dict[str
     # (i.e. new shear_reinforcement objects — triggers sub-check rebuild)
     spacings = np.linspace(100.0, 400.0, n_configs)
 
-    from materials.reinforced_concrete.materials import ShearRebar
+    from section_design_checks.reinforced_concrete.materials import ShearRebar
 
     construct_times: list[float] = []
     first_check_times: list[float] = []
@@ -500,7 +500,7 @@ def main() -> None:
     # Force diagram build on all 4 sub-checks before timing begins
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+        from section_design_checks.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
         _warmup_lc = LoadCase(**shear_loads[0])
         check.perform_shear_check(load_case=_warmup_lc, suppress_warnings=True)
         check.perform_bending_check(

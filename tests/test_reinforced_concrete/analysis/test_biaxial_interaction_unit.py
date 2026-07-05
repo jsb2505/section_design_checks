@@ -13,12 +13,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import materials.reinforced_concrete.analysis.biaxial_interaction as biax
-from materials.reinforced_concrete.analysis.biaxial_interaction import (
+import section_design_checks.reinforced_concrete.analysis.biaxial_interaction as biax
+from section_design_checks.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialInteractionPoint,
     BiaxialMNInteractionSurface,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial
 
 
 def _pt(N: float, My: float, Mz: float, depth: float = 100.0, angle: float = 0.0) -> BiaxialInteractionPoint:
