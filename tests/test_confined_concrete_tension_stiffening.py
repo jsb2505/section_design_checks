@@ -147,8 +147,8 @@ class TestConfinedConcrete:
         )
 
         # Generate diagrams to find maximum moment
-        points_std = diagram_standard.generate_diagram(n_points=30)
-        points_conf = diagram_confined.generate_diagram(n_points=30)
+        points_std = diagram_standard.generate_diagram_points(n_points=30)
+        points_conf = diagram_confined.generate_diagram_points(n_points=30)
 
         max_M_std = max(abs(p.M) for p in points_std)
         max_M_conf = max(abs(p.M) for p in points_conf)
@@ -260,7 +260,7 @@ class TestConfinedConcreteAndTensionStiffening:
         )
 
         # Should be able to generate diagram without errors
-        points = diagram.generate_diagram(n_points=20)
+        points = diagram.generate_diagram_points(n_points=20)
 
         assert len(points) > 0, "Should generate points with both features"
 
@@ -329,7 +329,7 @@ class TestConfinedConcreteAndTensionStiffening:
 
         # All should be able to generate diagrams
         for i, diagram in enumerate(diagrams):
-            points = diagram.generate_diagram(n_points=15)
+            points = diagram.generate_diagram_points(n_points=15)
             assert len(points) > 0, f"Combination {i} should generate points"
 
 
@@ -417,7 +417,7 @@ class TestConfinementParameters:
             confinement_f_yh=500.0,
         )
 
-        points = diagram.generate_diagram(n_points=15)
+        points = diagram.generate_diagram_points(n_points=15)
         assert len(points) > 0
 
     def test_high_confinement_ratio(self, standard_section, concrete_c30):
@@ -430,7 +430,7 @@ class TestConfinementParameters:
             confinement_f_yh=500.0,
         )
 
-        points = diagram.generate_diagram(n_points=15)
+        points = diagram.generate_diagram_points(n_points=15)
         assert len(points) > 0
 
     def test_different_confinement_yield_strengths(self, standard_section, concrete_c30):
@@ -470,7 +470,7 @@ class TestCharacteristicAndAccidentalCombinations:
             confinement_f_yh=500.0,
         )
 
-        points = diagram.generate_diagram(n_points=15)
+        points = diagram.generate_diagram_points(n_points=15)
         assert len(points) > 0
 
     def test_confined_with_accidental_loads(self, standard_section, concrete_c30):
@@ -484,7 +484,7 @@ class TestCharacteristicAndAccidentalCombinations:
             confinement_f_yh=500.0,
         )
 
-        points = diagram.generate_diagram(n_points=15)
+        points = diagram.generate_diagram_points(n_points=15)
         assert len(points) > 0
 
     def test_tension_stiffening_with_characteristic(self, standard_section, concrete_c30):
@@ -496,5 +496,5 @@ class TestCharacteristicAndAccidentalCombinations:
             tension_stiffening=True,
         )
 
-        points = diagram.generate_diagram(n_points=15)
+        points = diagram.generate_diagram_points(n_points=15)
         assert len(points) > 0

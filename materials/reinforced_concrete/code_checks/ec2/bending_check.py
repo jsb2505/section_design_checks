@@ -6,6 +6,7 @@ Uses the fibre-based M-N interaction diagram infrastructure.
 """
 
 from typing import Optional
+from dataclasses import dataclass
 from math import copysign
 from pydantic import Field, PrivateAttr
 import numpy as np
@@ -41,7 +42,7 @@ class BendingCheck(BaseCodeCheck):
         section: RC section geometry with reinforcement
         concrete: Concrete material (with γ_c factor)
         concrete_model_type: EC2 constitutive model to use
-        steel_branch_type: Steel post-yield behaviour
+        steel_model_type: Steel post-yield behaviour
         n_fibres_width: Mesh resolution (width)
         n_fibres_height: Mesh resolution (height)
 
@@ -78,7 +79,7 @@ class BendingCheck(BaseCodeCheck):
         description="EC2 concrete stress-strain model (Fig 3.3, 3.4, 3.2)",
     )
 
-    steel_branch_type: SteelModelType = Field(
+    steel_model_type: SteelModelType = Field(
         default=SteelModelType.INCLINED,
         description="Steel post-yield behaviour (Fig 3.8)",
     )
@@ -128,7 +129,7 @@ class BendingCheck(BaseCodeCheck):
             section=self.section,
             concrete=self.concrete,
             concrete_model_type=self.concrete_model_type,
-            steel_branch_type=self.steel_branch_type,
+            steel_model_type=self.steel_model_type,
             n_fibres_width=self.n_fibres_width,
             n_fibres_height=self.n_fibres_height,
             use_accidental=self.use_accidental,
@@ -147,11 +148,6 @@ class BendingCheck(BaseCodeCheck):
     def f_cd_design(self) -> float:
         """Design concrete strength (accidental or persistent) in MPa."""
         return self.concrete.f_cd_accidental if self.use_accidental else self.concrete.f_cd
-
-    @property  # TODO needed?
-    def gamma_c_design(self) -> float:
-        """Partial factor for concrete (accidental or persistent)."""
-        return self.concrete.gamma_c_accidental if self.use_accidental else self.concrete.gamma_c
 
 
     def perform_check(
@@ -204,137 +200,77 @@ class BendingCheck(BaseCodeCheck):
         # Validate tension shift inputs
         # If M_cap provided, tension shift is enabled
         apply_tension_shift = M_cap is not None
+        if apply_tension_shift and V_Ed is None:
+            raise ValueError("V_Ed must be provided when M_cap is provided (tension shift enabled)")
 
-        if apply_tension_shift:
-            if V_Ed is None:
-                raise ValueError("V_Ed must be provided when M_cap is provided (tension shift enabled)")
+        return self._check_single_case(
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            V_Ed=V_Ed,
+            M_cap=M_cap,
+            shear_reinforcement=shear_reinforcement,
+            warning_threshold=warning_threshold,
+        )
 
-        # Apply tension shift rule if requested
-        M_Ed_original = M_Ed
-        M_add = 0.0
-        z_ec2 = None
-        cot_theta = None
-        shift_distance_a_l = None
 
-        if apply_tension_shift and V_Ed is not None:
-            # Use diagram methods to calculate effective depth and lever arm
+    def _check_single_case(
+        self,
+        *,
+        M_Ed: float,
+        N_Ed: float,
+        V_Ed: Optional[float],
+        M_cap: Optional[float],
+        shear_reinforcement: Optional[ShearRebar],
+        warning_threshold: float,
+    ) -> CheckResult:
+        apply_tension_shift = M_cap is not None
 
-            # Solve strains once if it helps (moment is what determines compression face)
-            if abs(M_Ed_original) > 1e-6:
-                eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed_original, N_Ed)
-            else:
-                eps_top, eps_bottom = None, None
+        M_Ed_original = float(M_Ed)
 
-            # Get effective depth from diagram (accounts for compression face)
-            d = self._diagram.get_effective_depth(
-                M_Ed=M_Ed_original,
-                N_Ed=N_Ed,
-                eps_top=eps_top,
-                eps_bottom=eps_bottom,
-            )
+        # --- Step 1: tension shift (pure-ish, easy to test) ---
+        shift = self._apply_tension_shift_if_enabled(
+            M_Ed_original=M_Ed_original,
+            N_Ed=float(N_Ed),
+            V_Ed=float(V_Ed) if V_Ed is not None else None,
+            M_cap=float(M_cap) if M_cap is not None else None,
+            shear_reinforcement=shear_reinforcement,
+            enabled=apply_tension_shift,
+        )
 
-            z_ec2, _ = self._diagram.get_lever_arm(
-                M_Ed=M_Ed_original,
-                N_Ed=N_Ed,
-                d=d,
-                eps_top=eps_top,
-                eps_bottom=eps_bottom,
-                prefer_rigorous=False,  # for tension shift
-                cap_to_09d=True,
-                warn_on_fallback=False,
-            )
+        # shift.M_design is the moment used for the capacity check
+        M_design = shift.M_design
 
-            if shear_reinforcement is not None:
-                # With shear reinforcement - calculate cot_theta from V_Ed
-                
-                f_cd = self.f_cd_design  # N/mm²
+        # --- Step 2: capacity check against diagram ---
+        cap = self._diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_design, return_details=False)
+        N_Rd, M_Rd, is_safe, utilization = cap.N_Rd, cap.M_Rd, cap.is_safe, cap.utilization
 
-                # Hard-coded using transformed area and allowing negative N_Ed into Sigma_cp calculation
-                sigma_cp_uncapped = shear_utils.sigma_cp_from_N_and_area(N_Ed=N_Ed, A_mm2=self._A_transformed)  # N/mm²
-                sigma_cp = shear_utils.cap_sigma_cp_upper(sigma_cp=sigma_cp_uncapped, f_cd=f_cd)  # N/mm²
-
-                alpha_cw = shear_utils.find_alpha_cw(f_cd=f_cd, sigma_cp=sigma_cp)
-                nu = shear_utils.find_nu_factor(f_ck=self.concrete.f_ck)
-                b_w = shear_utils.calculate_section_breadth(section=self.section)  # mm
-
-                # K = alpha_cw * b_w * z * nu * f_cd
-                K = alpha_cw * b_w * z_ec2 * nu * f_cd 
-
-                # Calculate optimal cot_theta from V_Ed. Is clamped to [1.0, 2.5] internally
-                cot_theta = shear_utils.find_cot_theta_for_V_Ed(
-                    V_Ed=V_Ed,
-                    K=K,
-                    link_angle_degrees=shear_reinforcement.angle
-                )
-
-                # EC2 §9.2.1.3(2): a_l = 0.5 · z · cot(θ) for vertical links
-                shift_distance_a_l = 0.5 * z_ec2 * cot_theta
-            else:
-                # Without shear reinforcement - use a_l = d
-                # EC2 §9.2.1.3(2): For members without shear reinforcement, a_l = d
-                shift_distance_a_l = d
-                cot_theta = None  # Not applicable without shear reinforcement
-
-            # Calculate additional moment from shear
-            # M_add = V_Ed · a_l (shift distance)
-            # Convert: V_Ed in kN, a_l in mm -> M_add in kN·m
-            
-            # 1. Calculate the additive moment magnitude
-            # V_Ed should be absolute as the shift is always additive to the demand
-            M_add = abs(V_Ed) * (shift_distance_a_l / 1000.0)
-
-            # 2. Work with the magnitude (absolute value)
-            # This ensures the 'cap' and 'addition' logic works the same for +/-
-            abs_M_Ed_orig = abs(M_Ed_original)
-            abs_M_cap = abs(M_cap)
-
-            # 3. Add the shift and apply the cap to the magnitude
-            # The moment cannot exceed the maximum moment in the span (M_cap)
-            abs_M_Ed_shifted = min(abs_M_cap, abs_M_Ed_orig + M_add)
-
-            # 4. Restore the original sign
-            M_Ed = copysign(abs_M_Ed_shifted, M_Ed_original)
-
-        # Use cached diagram for capacity check (created in model_post_init)
-        # Perform capacity check with (potentially modified) M_Ed
-        capacity = self._diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed, return_details=False)
-        N_Rd, M_Rd, is_safe, utilization = capacity.N_Rd, capacity.M_Rd, capacity.is_safe, capacity.utilization
-
-        demand_components = {"N": float(N_Ed), "M": float(M_Ed_original)}  # Show original demand
+        demand_components = {"N": float(N_Ed), "M": float(M_Ed_original)}
         units_components = {"N": "kN", "M": "kN·m"}
 
-        # Outside diagram / no intersection
+        # --- Step 3: handle “no intersection / invalid” outcome ---
         if (
             N_Rd is None
             or M_Rd is None
-            or is_safe == False
+            or is_safe is False
             or utilization is None
             or utilization == float("inf")
-            or utilization != utilization  # NaN check without numpy
+            or utilization != utilization  # NaN
         ):
             message = "Load point outside interaction diagram domain (no capacity found)"
             details = {
                 "N_Ed": float(N_Ed),
                 "M_Ed_original": float(M_Ed_original),
-                "M_Ed_design": float(M_Ed),
-                "M_add": float(M_add) if apply_tension_shift else None,
-                "V_Ed": float(V_Ed) if V_Ed is not None else None,
-                "cot_theta": float(cot_theta) if cot_theta is not None else None,
-                "shift_distance_a_l_mm": float(shift_distance_a_l) if shift_distance_a_l is not None else None,
-                "z_lever_arm_mm": float(z_ec2) if z_ec2 is not None else None,
-                "M_cap": float(M_cap) if M_cap is not None else None,
-                "tension_shift_applied": apply_tension_shift,
-                "shear_reinforcement_provided": shear_reinforcement is not None,
+                "M_Ed_design": float(M_design),
+                **shift.details_dict(),  # <- includes M_add, z, cot_theta, etc (or None)
                 "N_Rd": N_Rd,
                 "M_Rd": M_Rd,
                 "utilization": float(utilization) if utilization is not None else None,
                 "concrete_model": self.concrete_model_type,
-                "steel_model": self.steel_branch_type,
+                "steel_model": self.steel_model_type,
                 "section_name": self.section.section_name or "unnamed",
                 "concrete_grade": self.concrete.grade,
                 "reinforcement_ratio": self.section.reinforcement_ratio,
             }
-
             return self._create_result(
                 check_name="Bending check (EC2 §6.1)",
                 code_reference="EC2 §6.1",
@@ -350,7 +286,6 @@ class BendingCheck(BaseCodeCheck):
         utilization_f = float(utilization)
         capacity_components = {"N": float(N_Rd), "M": float(M_Rd)}
 
-        # Messaging (optional; base_check will set status based on utilization)
         if utilization_f <= 1.0:
             message = (
                 "High utilization - consider increasing section or reinforcement"
@@ -364,20 +299,13 @@ class BendingCheck(BaseCodeCheck):
         details = {
             "N_Ed": float(N_Ed),
             "M_Ed_original": float(M_Ed_original),
-            "M_Ed_design": float(M_Ed),
-            "M_add": float(M_add) if apply_tension_shift else None,
-            "V_Ed": float(V_Ed) if V_Ed is not None else None,
-            "cot_theta": float(cot_theta) if cot_theta is not None else None,
-            "shift_distance_a_l_mm": float(shift_distance_a_l) if shift_distance_a_l is not None else None,
-            "z_lever_arm_mm": float(z_ec2) if z_ec2 is not None else None,
-            "M_cap": float(M_cap) if M_cap is not None else None,
-            "tension_shift_applied": apply_tension_shift,
-            "shear_reinforcement_provided": shear_reinforcement is not None,
+            "M_Ed_design": float(M_design),
+            **shift.details_dict(),
             "N_Rd": float(N_Rd),
             "M_Rd": float(M_Rd),
             "utilization": utilization_f,
             "concrete_model": self.concrete_model_type,
-            "steel_model": self.steel_branch_type,
+            "steel_model": self.steel_model_type,
             "section_name": self.section.section_name or "unnamed",
             "concrete_grade": self.concrete.grade,
             "reinforcement_ratio": self.section.reinforcement_ratio,
@@ -393,6 +321,155 @@ class BendingCheck(BaseCodeCheck):
             units_components=units_components,
             message=message,
             details=details,
+        )
+    
+
+    @dataclass(frozen=True)
+    class _TensionShiftResult:
+        """Internal container for tension shift rule outputs (EC2 §9.2.1.3)."""
+
+        M_design: float
+        applied: bool
+
+        # Optional details (None when not applied)
+        M_add: Optional[float] = None
+        V_Ed: Optional[float] = None
+        M_cap: Optional[float] = None
+        cot_theta: Optional[float] = None
+        shift_distance_a_l_mm: Optional[float] = None
+        z_lever_arm_mm: Optional[float] = None
+        shear_reinforcement_provided: bool = False
+
+        def details_dict(self) -> dict:
+            """Serialize shift info into the `details` dict format used by the check result."""
+            return {
+                "tension_shift_applied": self.applied,
+                "M_add": float(self.M_add) if self.M_add is not None else None,
+                "V_Ed": float(self.V_Ed) if self.V_Ed is not None else None,
+                "M_cap": float(self.M_cap) if self.M_cap is not None else None,
+                "cot_theta": float(self.cot_theta) if self.cot_theta is not None else None,
+                "shift_distance_a_l_mm": float(self.shift_distance_a_l_mm)
+                if self.shift_distance_a_l_mm is not None
+                else None,
+                "z_lever_arm_mm": float(self.z_lever_arm_mm) if self.z_lever_arm_mm is not None else None,
+                "shear_reinforcement_provided": self.shear_reinforcement_provided,
+            }
+
+
+    def _solve_strains_if_helpful(self, *, M_Ed: float, N_Ed: float) -> tuple[Optional[float], Optional[float]]:
+        """
+        Solve strains once (if moment is meaningful) to determine compression face etc.
+
+        Returns:
+            (eps_top, eps_bottom) or (None, None) if not solved.
+        """
+        if abs(M_Ed) > 1e-6:
+            return self._diagram.find_strains_for_MN(M_Ed, N_Ed)
+        return (None, None)
+
+
+    def _apply_tension_shift_if_enabled(
+        self,
+        *,
+        M_Ed_original: float,
+        N_Ed: float,
+        V_Ed: Optional[float],
+        M_cap: Optional[float],
+        shear_reinforcement: Optional[ShearRebar],
+        enabled: bool,
+    ) -> _TensionShiftResult:
+        """
+        Apply EC2 §9.2.1.3 tension shift rule if enabled (i.e., M_cap is provided).
+
+        Behaviour matches your previous inline implementation:
+        - Computes d and z (capped to 0.9d) from the diagram.
+        - With shear reinforcement: computes cot(theta) from V_Ed via V_Rd,max-form K term.
+        - Without shear reinforcement: uses a_l = d.
+        - Adds M_add = |V_Ed| * a_l and caps magnitude by |M_cap|, then restores sign of M_Ed_original.
+        """
+        if not enabled:
+            return self._TensionShiftResult(M_design=float(M_Ed_original), applied=False)
+
+        # By contract: wrapper validated these when enabled
+        if V_Ed is None or M_cap is None:
+            raise ValueError("Internal error: V_Ed and M_cap must be provided when tension shift is enabled")
+
+        # 1) Solve strains once (moment determines compression face; axial alone doesn't)
+        eps_top, eps_bottom = self._solve_strains_if_helpful(M_Ed=float(M_Ed_original), N_Ed=float(N_Ed))
+
+        # 2) Effective depth
+        d = self._diagram.get_effective_depth(
+            M_Ed=float(M_Ed_original),
+            N_Ed=float(N_Ed),
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+        )
+
+        # 3) Lever arm for tension shift: prefer approximate ok, cap to 0.9d
+        z_ec2, _ = self._diagram.get_lever_arm(
+            M_Ed=float(M_Ed_original),
+            N_Ed=float(N_Ed),
+            d=d,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+            prefer_rigorous=False,
+            cap_to_09d=True,
+            warn_on_fallback=False,
+        )
+
+        cot_theta: Optional[float]
+        shift_distance_a_l_mm: float
+
+        if shear_reinforcement is not None:
+            # With shear reinforcement - calculate cot(theta) from V_Ed
+
+            f_cd = self.f_cd_design  # N/mm² (MPa)
+
+            # Allow negative N_Ed into sigma_cp (compression positive)
+            sigma_cp_uncapped = shear_utils.sigma_cp_from_N_and_area(N_Ed=float(N_Ed), A_mm2=float(self._A_transformed))
+            sigma_cp = shear_utils.cap_sigma_cp_upper(sigma_cp=sigma_cp_uncapped, f_cd=f_cd)
+
+            alpha_cw = shear_utils.find_alpha_cw(f_cd=f_cd, sigma_cp=sigma_cp)
+            nu = shear_utils.find_nu_factor(f_ck=self.concrete.f_ck)
+            b_w = shear_utils.calculate_section_breadth(section=self.section)  # mm
+
+            # K = alpha_cw * b_w * z * nu * f_cd
+            K = alpha_cw * b_w * z_ec2 * nu * f_cd
+
+            cot_theta = shear_utils.find_cot_theta_for_V_Ed(
+                V_Ed=float(V_Ed),
+                K=K,
+                link_angle_degrees=shear_reinforcement.angle,
+            )
+
+            # EC2 §9.2.1.3(2): a_l = 0.5 * z * cot(theta) for vertical links
+            shift_distance_a_l_mm = 0.5 * z_ec2 * cot_theta
+
+        else:
+            # Without shear reinforcement: EC2 §9.2.1.3(2): a_l = d
+            cot_theta = None
+            shift_distance_a_l_mm = d
+
+        # 4) Additional moment magnitude (V in kN, a_l in mm -> kN·m)
+        M_add = abs(float(V_Ed)) * (shift_distance_a_l_mm / 1000.0)
+
+        # 5) Apply cap to magnitude and restore sign of original
+        abs_M_Ed_orig = abs(float(M_Ed_original))
+        abs_M_cap = abs(float(M_cap))
+
+        abs_M_Ed_shifted = min(abs_M_cap, abs_M_Ed_orig + M_add)
+        M_design = copysign(abs_M_Ed_shifted, float(M_Ed_original))
+
+        return self._TensionShiftResult(
+            M_design=float(M_design),
+            applied=True,
+            M_add=float(M_add),
+            V_Ed=float(V_Ed),
+            M_cap=float(M_cap),
+            cot_theta=float(cot_theta) if cot_theta is not None else None,
+            shift_distance_a_l_mm=float(shift_distance_a_l_mm),
+            z_lever_arm_mm=float(z_ec2),
+            shear_reinforcement_provided=(shear_reinforcement is not None),
         )
 
 

@@ -153,10 +153,10 @@ def test_rigorous_mode_with_optional_M():
     result = check.perform_check(load_case=load_case)
 
     print(f"Result: {result.status}")
-    print(f"Mode: {result.details['mode']}")
+    print(f"Mode: {result.details['z_mode']}")
     print(f"d: {result.details['d']:.1f} mm, z: {result.details['z']:.1f} mm")
 
-    assert result.details['mode'] == "rigorous"
+    assert result.details['z_mode'] == "rigorous"
     assert result.status in [CheckStatus.PASS, CheckStatus.WARNING]
 
     print("[OK] Rigorous mode works with optional M_Ed!")

@@ -250,7 +250,7 @@ class TestDiagramGeneration:
 
     def test_generate_with_minimum_points(self, standard_diagram):
         """Test diagram generation with minimum number of points."""
-        points = standard_diagram.generate_diagram(n_points=5)
+        points = standard_diagram.generate_diagram_points(n_points=5)
 
         assert len(points) >= 5, "Should generate at least requested number of points"
 
@@ -264,7 +264,7 @@ class TestDiagramGeneration:
     def test_generate_with_large_number_points(self, standard_diagram):
         """Test diagram generation with large number of points."""
         # This tests performance and memory handling
-        points = standard_diagram.generate_diagram(n_points=200)
+        points = standard_diagram.generate_diagram_points(n_points=200)
 
         assert len(points) > 0, "Should generate points"
 
@@ -274,7 +274,7 @@ class TestDiagramGeneration:
 
     def test_generate_diagram_is_ordered(self, standard_diagram):
         """Test that generated diagram points are properly ordered."""
-        points = standard_diagram.generate_diagram(n_points=30)
+        points = standard_diagram.generate_diagram_points(n_points=30)
 
         # Points should trace a continuous path (no jumps)
         for i in range(len(points) - 1):
@@ -316,7 +316,7 @@ class TestCapacityChecks:
     def test_capacity_check_inside_envelope(self, standard_diagram):
         """Test capacity check for point inside envelope."""
         # Get a point on the diagram
-        points = standard_diagram.generate_diagram(n_points=20)
+        points = standard_diagram.generate_diagram_points(n_points=20)
         test_point = points[len(points) // 2]  # Middle point
 
         # Scale down to get a point inside envelope
@@ -426,7 +426,7 @@ class TestFactoryFunction:
         # Verify diagram was created successfully
         assert isinstance(diagram, MNInteractionDiagram)
         # Parameters are passed to internal models, verify diagram is functional
-        points = diagram.generate_diagram(n_points=10)
+        points = diagram.generate_diagram_points(n_points=10)
         assert len(points) > 0, "Should generate points with all options enabled"
 
     def test_factory_with_invalid_section_raises_error(self):

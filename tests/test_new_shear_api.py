@@ -45,7 +45,7 @@ def test_new_api_single_case():
     print(f"Utilization: {result.utilization:.1%}")
     print(f"Message: {result.message}")
     print(f"Details: d={result.details['d']:.1f} mm, z={result.details['z']:.1f} mm")
-    print(f"Mode: {result.details['mode']}")
+    print(f"Mode: {result.details['z_mode']}")
     print(f"rho_l: {result.details['rho_l']:.4f}")
 
     assert result.status in [CheckStatus.PASS, CheckStatus.WARNING], f"Unexpected status: {result.status}"
@@ -124,8 +124,8 @@ def test_approximate_mode():
     result = check.perform_check(load_case=load_case)
 
     print(f"\nResult: {result.status}")
-    print(f"Mode: {result.details['mode']}")
-    assert result.details['mode'] == "approximate"
+    print(f"Mode: {result.details['z_mode']}")
+    assert result.details['z_mode'] == 'approximate'
 
     print("\n[OK] Approximate mode test passed!")
 

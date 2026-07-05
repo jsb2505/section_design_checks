@@ -61,7 +61,7 @@ class TestInverseSolverOutsideEnvelope:
     def test_extremely_high_moment_finds_boundary(self, test_diagram):
         """Test that extremely high moment (beyond capacity) finds boundary point."""
         # Generate diagram to know approximate capacity
-        points = test_diagram.generate_diagram(n_points=20)
+        points = test_diagram.generate_diagram_points(n_points=20)
         max_M = max(abs(p.M) for p in points)
 
         # Try to find strains for moment way beyond capacity
@@ -81,7 +81,7 @@ class TestInverseSolverOutsideEnvelope:
     def test_extremely_high_axial_force_finds_boundary(self, test_diagram):
         """Test that extremely high axial force (beyond capacity) finds boundary point."""
         # Generate diagram to know approximate capacity
-        points = test_diagram.generate_diagram(n_points=20)
+        points = test_diagram.generate_diagram_points(n_points=20)
         max_N = max(p.N for p in points)
 
         # Try to find strains for axial force way beyond capacity
@@ -99,7 +99,7 @@ class TestInverseSolverOutsideEnvelope:
     def test_combined_extreme_loads_find_boundary(self, test_diagram):
         """Test that combined loads beyond envelope find boundary point."""
         # Generate diagram to know approximate capacity
-        points = test_diagram.generate_diagram(n_points=20)
+        points = test_diagram.generate_diagram_points(n_points=20)
         max_M = max(abs(p.M) for p in points)
         max_N = max(p.N for p in points)
 
@@ -289,7 +289,7 @@ class TestInverseSolverRoundTrip:
     def test_round_trip_many_random_points(self, test_diagram):
         """Test round-trip for many random points within envelope."""
         # Generate envelope
-        points = test_diagram.generate_diagram(n_points=30)
+        points = test_diagram.generate_diagram_points(n_points=30)
 
         # Extract N and M ranges
         N_values = [p.N for p in points]
@@ -385,7 +385,7 @@ class TestInverseSolverEdgeCases:
     def test_maximum_moment_capacity(self, test_diagram):
         """Test solver can find strains for near-maximum moment capacity."""
         # Generate envelope to find max moment
-        points = test_diagram.generate_diagram(n_points=50)
+        points = test_diagram.generate_diagram_points(n_points=50)
 
         # Find point with maximum moment
         max_M_point = max(points, key=lambda p: abs(p.M))

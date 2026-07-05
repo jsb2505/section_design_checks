@@ -128,8 +128,8 @@ class TestMNInteractionDiagram:
         return MNInteractionDiagram(
             section=simple_beam,
             concrete=concrete_c30,
-            n_fibers_width=10,
-            n_fibers_height=20,
+            n_fibres_width=10,
+            n_fibres_height=20,
         )
 
     def test_create_diagram(self, diagram):
@@ -208,7 +208,7 @@ class TestMNInteractionDiagram:
 
     def test_generate_diagram_returns_points(self, diagram):
         """Test that generate_diagram returns list of points."""
-        points = diagram.generate_diagram(n_points=30)
+        points = diagram.generate_diagram_points(n_points=30)
 
         assert len(points) > 0
         assert all(isinstance(p, InteractionPoint) for p in points)
@@ -216,7 +216,7 @@ class TestMNInteractionDiagram:
     def test_generate_diagram_covers_full_range(self, diagram):
         """Test that diagram covers compression to tension."""
         # New API always generates full closed envelope
-        points = diagram.generate_diagram(n_points=50)
+        points = diagram.generate_diagram_points(n_points=50)
 
         N_values = [p.N for p in points]
 
@@ -231,7 +231,7 @@ class TestMNInteractionDiagram:
     def test_generate_diagram_is_closed_loop(self, diagram):
         """Test that generated diagram forms a closed loop."""
         # New API always generates full closed envelope
-        points = diagram.generate_diagram(n_points=30)
+        points = diagram.generate_diagram_points(n_points=30)
 
         N_values = [p.N for p in points]
         M_values = [p.M for p in points]
@@ -362,14 +362,14 @@ class TestMNInteractionDiagram:
         diag1 = MNInteractionDiagram(
             section=simple_beam,
             concrete=concrete_c30,
-            steel_branch_type="inclined",
+            steel_model_type="inclined",
         )
 
         # Horizontal (perfectly plastic)
         diag2 = MNInteractionDiagram(
             section=simple_beam,
             concrete=concrete_c30,
-            steel_branch_type="horizontal",
+            steel_model_type="horizontal",
         )
 
         # Both should produce valid diagrams - test with same strains
@@ -396,12 +396,12 @@ class TestMNInteractionDiagram:
         diagram = MNInteractionDiagram(
             section=simple_beam,
             concrete=concrete_c30,
-            n_fibers_width=30,
-            n_fibers_height=50,
+            n_fibres_width=30,
+            n_fibres_height=50,
         )
 
         # Should have many fibers
-        assert diagram.mesh.total_fibers > 1000
+        assert diagram.mesh.total_fibres > 1000
 
         # Should still calculate correctly
         eps_cu = diagram.concrete_model.get_ultimate_strain()
@@ -415,12 +415,12 @@ class TestMNInteractionDiagram:
         diagram = MNInteractionDiagram(
             section=simple_beam,
             concrete=concrete_c30,
-            n_fibers_width=5,
-            n_fibers_height=10,
+            n_fibres_width=5,
+            n_fibres_height=10,
         )
 
         # Should have fewer fibers
-        assert diagram.mesh.total_fibers < 100
+        assert diagram.mesh.total_fibres < 100
 
         # Should still calculate (less accurate)
         eps_cu = diagram.concrete_model.get_ultimate_strain()
@@ -448,7 +448,7 @@ class TestCreateInteractionDiagram:
             section=rectangular_beam_with_rebars,
             concrete=concrete_c30,
             concrete_model_type="bilinear",
-            n_fibers_width=15,
+            n_fibres_width=15,
         )
 
         assert isinstance(diagram, MNInteractionDiagram)
@@ -565,8 +565,8 @@ class TestExportFunctionality:
         return MNInteractionDiagram(
             section=rectangular_beam_with_rebars,
             concrete=concrete_c30,
-            n_fibers_width=10,
-            n_fibers_height=20,
+            n_fibres_width=10,
+            n_fibres_height=20,
         )
 
     def test_export_to_json(self, diagram, tmp_path):
@@ -600,7 +600,7 @@ class TestExportFunctionality:
         metadata = data["metadata"]
         assert "concrete_grade" in metadata
         assert "concrete_fck" in metadata
-        assert "n_fibers" in metadata
+        assert "n_fibres" in metadata
         assert metadata["concrete_grade"] == "C30/37"
 
     def test_export_to_json_without_metadata(self, diagram, tmp_path):
@@ -744,7 +744,7 @@ class TestExportFunctionality:
         diagram.export_to_csv(output_file, n_points=20)
 
         # Get reference data
-        points = diagram.generate_diagram(n_points=20)
+        points = diagram.generate_diagram_points(n_points=20)
 
         # Read CSV
         with open(output_file, 'r', newline='', encoding='utf-8') as f:
@@ -908,7 +908,7 @@ class TestNonSymmetricSections:
             concrete=concrete_c30,
         )
 
-        points = diagram.generate_diagram(n_points=100)
+        points = diagram.generate_diagram_points(n_points=100)
         M_values = [p.M for p in points]
 
         # Should have both positive and negative moments
@@ -1043,7 +1043,7 @@ class TestTensionStiffening:
             tension_stiffening=True,
         )
 
-        points = diagram.generate_diagram(n_points=50)
+        points = diagram.generate_diagram_points(n_points=50)
 
         # Should generate valid points
         assert len(points) > 0
@@ -1205,7 +1205,7 @@ class TestConfinedConcrete:
             confinement_rho_s=0.015,
         )
 
-        points = diagram.generate_diagram(n_points=50)
+        points = diagram.generate_diagram_points(n_points=50)
 
         # Should generate valid points
         assert len(points) > 0
@@ -1231,7 +1231,7 @@ class TestConfinedConcrete:
         )
 
         # Should work without errors
-        points = diagram.generate_diagram(n_points=30)
+        points = diagram.generate_diagram_points(n_points=30)
         assert len(points) > 0
 
     def test_get_capacity_vector_safe_load(
@@ -1247,9 +1247,10 @@ class TestConfinedConcrete:
         N_Ed = 500.0  # kN
         M_Ed = 100.0  # kN·m
 
-        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+        result = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=100
         )
+        N_Rd, M_Rd, is_safe, utilization = result.N_Rd, result.M_Rd, result.is_safe, result.utilization
 
         # Check results
         assert N_Rd is not None
@@ -1281,9 +1282,10 @@ class TestConfinedConcrete:
         N_Ed = 10000.0  # kN - very high
         M_Ed = 1000.0   # kN·m - very high
 
-        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+        result = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=100
         )
+        N_Rd, M_Rd, is_safe, utilization = result.N_Rd, result.M_Rd, result.is_safe, result.utilization
 
         # Check results
         assert N_Rd is not None
@@ -1304,9 +1306,10 @@ class TestConfinedConcrete:
             concrete=concrete_c30
         )
 
-        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+        result = diagram.get_capacity_vector(
             N_Ed=0.0, M_Ed=0.0, n_points=100
         )
+        N_Rd, M_Rd, is_safe, utilization = result.N_Rd, result.M_Rd, result.is_safe, result.utilization
 
         assert N_Rd == 0.0
         assert M_Rd == 0.0
@@ -1325,9 +1328,10 @@ class TestConfinedConcrete:
         N_Ed = 1000.0  # kN
         M_Ed = 0.0     # No moment
 
-        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+        result = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=100
         )
+        N_Rd, M_Rd, is_safe, utilization = result.N_Rd, result.M_Rd, result.is_safe, result.utilization
 
         assert N_Rd is not None
         assert M_Rd is not None
@@ -1346,9 +1350,10 @@ class TestConfinedConcrete:
         N_Ed = 0.0      # No axial
         M_Ed = 150.0    # kN·m
 
-        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+        result = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=100
         )
+        N_Rd, M_Rd, is_safe, utilization = result.N_Rd, result.M_Rd, result.is_safe, result.utilization
 
         assert N_Rd is not None
         assert M_Rd is not None
@@ -1505,18 +1510,20 @@ class TestVectorMethodRobustness:
         M_Ed = point.M
 
         # Get utilization at the full point
-        N_Rd_full, M_Rd_full, is_safe_full, util_full = diagram.get_capacity_vector(
+        result_full = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=120
         )
+        N_Rd_full, M_Rd_full, is_safe_full, util_full = result_full.N_Rd, result_full.M_Rd, result_full.is_safe, result_full.utilization
 
         # Scale the point by 0.5
         N_Ed_half = N_Ed * 0.5
         M_Ed_half = M_Ed * 0.5
 
         # Get utilization at half point
-        N_Rd_half, M_Rd_half, is_safe_half, util_half = diagram.get_capacity_vector(
+        result_half = diagram.get_capacity_vector(
             N_Ed=N_Ed_half, M_Ed=M_Ed_half, n_points=120
         )
+        N_Rd_half, M_Rd_half, is_safe_half, util_half = result_half.N_Rd, result_half.M_Rd, result_half.is_safe, result_half.utilization
 
         # Both should be safe (inside envelope)
         assert is_safe_full is True
@@ -1552,7 +1559,7 @@ class TestVectorMethodRobustness:
 
         # Generate a coarse diagram which might have local non-convexity
         # or self-intersection due to numerical issues
-        points = diagram.generate_diagram(n_points=20)  # Coarse for potential issues
+        points = diagram.generate_diagram_points(n_points=20)  # Coarse for potential issues
 
         # Test a load case that might intersect the curve multiple times
         # Use a point near the envelope where discretization might cause issues
@@ -1568,9 +1575,10 @@ class TestVectorMethodRobustness:
         M_Ed = point_near_envelope.M * 0.95
 
         # Get capacity - should use minimum positive intersection
-        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+        result = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=20
         )
+        N_Rd, M_Rd, is_safe, utilization = result.N_Rd, result.M_Rd, result.is_safe, result.utilization
 
         # Should be safe (we scaled down from envelope)
         assert is_safe is True
@@ -1584,9 +1592,10 @@ class TestVectorMethodRobustness:
             assert M_Rd / M_Ed >= 0.95
 
         # Test with a finer diagram for comparison
-        N_Rd_fine, M_Rd_fine, is_safe_fine, util_fine = diagram.get_capacity_vector(
+        result_fine = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=200
         )
+        N_Rd_fine, M_Rd_fine, is_safe_fine, util_fine = result_fine.N_Rd, result_fine.M_Rd, result_fine.is_safe, result_fine.utilization
 
         # Coarse and fine should give consistent results (within tolerance)
         # Coarse might be slightly more conservative

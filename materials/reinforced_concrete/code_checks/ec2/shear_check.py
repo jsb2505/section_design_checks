@@ -83,7 +83,7 @@ class ShearCheck(BaseCodeCheck):
         use_rigorous: Use solver-based approach for NA and lever arm (default: True)
         cap_lever_arm: Cap lever arm to 0.9d per EC2 (default: True, rigorous mode only)
         concrete_model_type: Concrete stress-strain model (for rigorous mode)
-        steel_branch_type: Steel stress-strain branch (for rigorous mode)
+        steel_model_type: Steel stress-strain branch (for rigorous mode)
 
     Example:
         >>> from materials.reinforced_concrete.geometry import create_rectangular_section
@@ -298,12 +298,38 @@ class ShearCheck(BaseCodeCheck):
         - If both faces are in tension (eps_top<=0 and eps_bottom<=0), compression face is
             physically undefined; fallback is used.
         """
-        d_top = float(self.section.get_effective_depth(compression_face="top"))
-        d_bot = float(self.section.get_effective_depth(compression_face="bottom"))
+        # Get effective depths for each compression face assumption
+        # Handle case where no rebar exists in the tension zone for one face
+        d_top: Optional[float] = None
+        d_bot: Optional[float] = None
+
+        try:
+            d_top = float(self.section.get_effective_depth(compression_face="top"))
+        except ValueError:
+            pass  # No rebar in bottom tension zone
+
+        try:
+            d_bot = float(self.section.get_effective_depth(compression_face="bottom"))
+        except ValueError:
+            pass  # No rebar in top tension zone
+
+        # If neither worked, we have a problem
+        if d_top is None and d_bot is None:
+            raise ValueError("Cannot compute effective depth: no rebars found in either tension zone")
+
+        # Helper to get conservative depth (handles one being None)
+        def _get_conservative_d() -> float:
+            if d_top is not None and d_bot is not None:
+                return min(d_top, d_bot)
+            elif d_top is not None:
+                return d_top
+            else:
+                assert d_bot is not None  # Can't be None, checked above
+                return d_bot
 
         # Pure shear / pure axial / no clear bending => conservative depth
         if abs(M_Ed) <= m_tol:
-            return min(d_top, d_bot)
+            return _get_conservative_d()
 
         # If strains missing, try to solve if you can (robust helper)
         if (eps_top is None or eps_bottom is None) and self._diagram:
@@ -320,7 +346,7 @@ class ShearCheck(BaseCodeCheck):
                     "Returning conservative min(d_top, d_bottom).",
                     stacklevel=2,
                 )
-            return min(d_top, d_bot)
+            return _get_conservative_d()
 
         # If there is no compression anywhere, compression face is undefined -> fallback
         if eps_top <= strain_tol and eps_bottom <= strain_tol:
@@ -330,11 +356,31 @@ class ShearCheck(BaseCodeCheck):
                     "Returning conservative min(d_top, d_bottom).",
                     stacklevel=2,
                 )
-            return min(d_top, d_bot)
+            return _get_conservative_d()
 
         # Otherwise: choose the more compressive face (bigger + strain)
         compression_face = "top" if eps_top >= eps_bottom else "bottom"
-        return d_top if compression_face == "top" else d_bot
+
+        if compression_face == "top":
+            if d_top is not None:
+                return d_top
+            # Compression at top but no rebar in bottom (tension) zone - use fallback
+            if warn_on_fallback:
+                warnings.warn(
+                    "Effective depth fallback used (no rebar in tension zone for this compression face).",
+                    stacklevel=2,
+                )
+            return _get_conservative_d()
+        else:
+            if d_bot is not None:
+                return d_bot
+            # Compression at bottom but no rebar in top (tension) zone - use fallback
+            if warn_on_fallback:
+                warnings.warn(
+                    "Effective depth fallback used (no rebar in tension zone for this compression face).",
+                    stacklevel=2,
+                )
+            return _get_conservative_d()
 
 
     def find_lever_arm(

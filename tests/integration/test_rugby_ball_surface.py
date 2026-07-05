@@ -43,8 +43,8 @@ print()
 surface = create_biaxial_interaction_surface(
     section=column,
     concrete=concrete,
-    n_fibers_width=30,
-    n_fibers_height=30,
+    n_fibres_width=30,
+    n_fibres_height=30,
 )
 
 print("Generating surface using corrected method...")
