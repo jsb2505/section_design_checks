@@ -394,7 +394,7 @@ class TestCrackingAdditionalBranches:
 
         monkeypatch.setattr(CrackingCheck, "_get_tension_rebar_info", _get_tension)
         monkeypatch.setattr(type(check.section), "get_effective_depth", lambda self, compression_face, zone_fraction=None: 450.0)
-        monkeypatch.setattr(CrackingCheck, "find_h_c_ef", lambda self, d, x=None: 10.0)
+        monkeypatch.setattr(CrackingCheck, "find_h_c_ef", lambda self, d, x=None, **kw: 10.0)
         monkeypatch.setattr(CrackingCheck, "find_rho_p_eff", lambda self, A_s_tension, h_c_ef, xi_1=0.0, A_p=0.0, A_c_eff=None: 0.02)
         monkeypatch.setattr(CrackingCheck, "_get_steel_stress", lambda self, eps_top, eps_bottom, face=None, h_c_ef_limit=None, **kw: 200.0)
         monkeypatch.setattr(CrackingCheck, "find_k_2", lambda self, eps_top, eps_bottom: 0.5)
@@ -429,7 +429,7 @@ class TestCrackingAdditionalBranches:
 
         monkeypatch.setattr(CrackingCheck, "_get_tension_rebar_info", _get_tension)
         monkeypatch.setattr(type(check.section), "get_effective_depth", lambda self, compression_face, zone_fraction=None: 450.0)
-        monkeypatch.setattr(CrackingCheck, "find_h_c_ef", lambda self, d, x=None: 10.0)
+        monkeypatch.setattr(CrackingCheck, "find_h_c_ef", lambda self, d, x=None, **kw: 10.0)
         monkeypatch.setattr(CrackingCheck, "find_rho_p_eff", lambda self, A_s_tension, h_c_ef, xi_1=0.0, A_p=0.0, A_c_eff=None: 0.02)
         monkeypatch.setattr(CrackingCheck, "_get_steel_stress", lambda self, eps_top, eps_bottom, face=None, h_c_ef_limit=None, **kw: 200.0)
         monkeypatch.setattr(CrackingCheck, "find_k_2", lambda self, eps_top, eps_bottom: 0.5)
@@ -464,7 +464,7 @@ class TestCrackingAdditionalBranches:
 
         monkeypatch.setattr(CrackingCheck, "_get_tension_rebar_info", _get_tension)
         monkeypatch.setattr(type(check.section), "get_effective_depth", lambda self, compression_face, zone_fraction=None: 450.0)
-        monkeypatch.setattr(CrackingCheck, "find_h_c_ef", lambda self, d, x=None: 120.0)
+        monkeypatch.setattr(CrackingCheck, "find_h_c_ef", lambda self, d, x=None, **kw: 120.0)
 
         result = check._calculate_face_crack_width(
             eps_top=0.001,
@@ -967,7 +967,7 @@ class TestCrackingAdditionalBranches:
         monkeypatch.setattr(
             CrackingCheck,
             "_is_cracked_by_solver",
-            lambda self, M_Ed, N_Ed, ignore_compression_steel=False: (
+            lambda self, M_Ed, N_Ed, ignore_compression_steel=False, _mz_kw=None: (
                 True, 0.0008, -0.0008, -0.00012, -0.00010
             ),
         )

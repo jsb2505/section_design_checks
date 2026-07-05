@@ -58,7 +58,7 @@ class TestBasicBendingCheck:
     def test_basic_check_safe(self, test_beam, concrete_c30):
         """Test basic bending check for safe load."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
-        result = check.perform_check(M_Ed=100.0, N_Ed=500.0)
+        result = check.perform_check(My_Ed=100.0, N_Ed=500.0)
 
         assert result.status.name == "PASS"
         assert 0 < result.utilization < 1.0
@@ -68,7 +68,7 @@ class TestBasicBendingCheck:
     def test_basic_check_failing(self, test_beam, concrete_c30):
         """Test basic bending check for failing load."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
-        result = check.perform_check(M_Ed=500.0, N_Ed=500.0)
+        result = check.perform_check(My_Ed=500.0, N_Ed=500.0)
 
         assert result.status.name == "FAIL"
         assert result.utilization > 1.0
@@ -84,7 +84,7 @@ class TestTensionShiftRuleSimplified:
 
         with pytest.raises(ValueError, match="V_Ed must be provided when M_cap is provided"):
             check.perform_check(
-                M_Ed=100.0,
+                My_Ed=100.0,
                 N_Ed=500.0,
                 M_cap=200.0,  # Enables tension shift
                 # V_Ed not provided
@@ -95,7 +95,7 @@ class TestTensionShiftRuleSimplified:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         result = check.perform_check(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=300.0,
@@ -110,7 +110,7 @@ class TestTensionShiftRuleSimplified:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         result = check.perform_check(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,  # V_Ed provided but M_cap is not
         )
@@ -123,7 +123,7 @@ class TestTensionShiftRuleSimplified:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         result = check.perform_check(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=300.0,
@@ -146,7 +146,7 @@ class TestTensionShiftRuleSimplified:
         shear_rebar = ShearRebar(grade="B500B", diameter=10, link_spacing=200, n_legs=2)
 
         result = check.perform_check(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=300.0,
@@ -166,7 +166,7 @@ class TestTensionShiftRuleSimplified:
 
         # Use a low M_cap that will limit M_Ed + M_add
         result = check.perform_check(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=120.0,  # Low cap
@@ -186,11 +186,11 @@ class TestTensionShiftRuleSimplified:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         # Without tension shift
-        result_no_shift = check.perform_check(M_Ed=100.0, N_Ed=500.0)
+        result_no_shift = check.perform_check(My_Ed=100.0, N_Ed=500.0)
 
         # With tension shift (high M_cap won't limit)
         result_with_shift = check.perform_check(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=300.0,
@@ -204,7 +204,7 @@ class TestTensionShiftRuleSimplified:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         result = check.perform_check(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=500.0,
             V_Ed=0.0,
             M_cap=300.0,
@@ -219,7 +219,7 @@ class TestTensionShiftRuleSimplified:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         result = check.perform_check(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=200.0,
@@ -249,7 +249,7 @@ class TestNegativeMoment:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         result = check.perform_check(
-            M_Ed=-100.0,  # Negative moment
+            My_Ed=-100.0,  # Negative moment
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=-300.0,  # Negative cap
@@ -266,7 +266,7 @@ class TestNegativeMoment:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         result = check.perform_check(
-            M_Ed=-100.0,
+            My_Ed=-100.0,
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=-120.0,  # Low cap (in magnitude)
@@ -280,10 +280,10 @@ class TestNegativeMoment:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         result_pos = check.perform_check(
-            M_Ed=100.0, N_Ed=500.0, V_Ed=150.0, M_cap=300.0
+            My_Ed=100.0, N_Ed=500.0, V_Ed=150.0, M_cap=300.0
         )
         result_neg = check.perform_check(
-            M_Ed=-100.0, N_Ed=500.0, V_Ed=150.0, M_cap=-300.0
+            My_Ed=-100.0, N_Ed=500.0, V_Ed=150.0, M_cap=-300.0
         )
 
         # M_add magnitude should be the same (it's always positive)
@@ -299,7 +299,7 @@ class TestWarningThreshold:
 
         # Find a load that gives ~96% utilization
         # Start with a moderate load and adjust
-        result = check.perform_check(M_Ed=200.0, N_Ed=200.0, warning_threshold=0.90)
+        result = check.perform_check(My_Ed=200.0, N_Ed=200.0, warning_threshold=0.90)
 
         # If utilization is between 0.90 and 1.0, should be WARNING
         if 0.90 <= result.utilization <= 1.0:
@@ -311,8 +311,8 @@ class TestWarningThreshold:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         # Same load, different thresholds
-        result_low = check.perform_check(M_Ed=100.0, N_Ed=500.0, warning_threshold=0.30)
-        result_high = check.perform_check(M_Ed=100.0, N_Ed=500.0, warning_threshold=0.99)
+        result_low = check.perform_check(My_Ed=100.0, N_Ed=500.0, warning_threshold=0.30)
+        result_high = check.perform_check(My_Ed=100.0, N_Ed=500.0, warning_threshold=0.99)
 
         # With low threshold, likely to hit warning
         # With high threshold, likely to pass cleanly
@@ -378,7 +378,7 @@ class TestLongitudinalReinforcementLimits:
         check = BendingCheck(section=section, concrete=concrete)
 
         with pytest.warns(UserWarning, match="Minimum tension reinforcement not satisfied"):
-            result = check.perform_check(M_Ed=120.0, N_Ed=200.0)
+            result = check.perform_check(My_Ed=120.0, N_Ed=200.0)
 
         assert result.details["A_s_min_check_applicable"] is True
         assert result.details["A_s_min_satisfied"] is False
@@ -394,7 +394,7 @@ class TestLongitudinalReinforcementLimits:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            result = check.perform_check(M_Ed=120.0, N_Ed=200.0, suppress_warnings=True)
+            result = check.perform_check(My_Ed=120.0, N_Ed=200.0, suppress_warnings=True)
 
         assert len(caught) == 0
         assert result.details["A_s_min_satisfied"] is False
@@ -406,7 +406,7 @@ class TestLongitudinalReinforcementLimits:
         check = BendingCheck(section=section, concrete=concrete)
 
         with pytest.warns(UserWarning, match="Maximum longitudinal reinforcement exceeded"):
-            result = check.perform_check(M_Ed=100.0, N_Ed=200.0)
+            result = check.perform_check(My_Ed=100.0, N_Ed=200.0)
 
         assert result.details["A_s_max_satisfied"] is False
         assert result.details["A_s_total_provided"] > result.details["A_s_max_allowed"]
@@ -419,7 +419,7 @@ class TestLongitudinalReinforcementLimits:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            result = check.perform_check(M_Ed=100.0, N_Ed=200.0, suppress_warnings=True)
+            result = check.perform_check(My_Ed=100.0, N_Ed=200.0, suppress_warnings=True)
 
         assert len(caught) == 0
         assert result.details["A_s_max_satisfied"] is False
@@ -433,7 +433,7 @@ class TestLongitudinalReinforcementLimits:
         old_code, old_country = get_ndp_context()
         try:
             set_ndp_context(country=CountryCode.EU_DE)
-            result = check.perform_check(M_Ed=120.0, N_Ed=200.0, suppress_warnings=True)
+            result = check.perform_check(My_Ed=120.0, N_Ed=200.0, suppress_warnings=True)
         finally:
             set_ndp_context(code=old_code, country=old_country)
 
@@ -540,8 +540,8 @@ class TestAccidentalLimitState:
         )
 
         # Same load
-        result_persistent = check_persistent.perform_check(M_Ed=150.0, N_Ed=500.0)
-        result_accidental = check_accidental.perform_check(M_Ed=150.0, N_Ed=500.0)
+        result_persistent = check_persistent.perform_check(My_Ed=150.0, N_Ed=500.0)
+        result_accidental = check_accidental.perform_check(My_Ed=150.0, N_Ed=500.0)
 
         # Accidental should have lower utilization (higher capacity)
         assert result_accidental.utilization < result_persistent.utilization
@@ -566,7 +566,7 @@ class TestPureAxialAndBending:
         """Test pure bending with zero axial force."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        result = check.perform_check(M_Ed=150.0, N_Ed=0.0)
+        result = check.perform_check(My_Ed=150.0, N_Ed=0.0)
 
         assert result.utilization > 0
         assert result.details["N_Ed"] == 0.0
@@ -576,7 +576,7 @@ class TestPureAxialAndBending:
         """Test pure axial with zero moment."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        result = check.perform_check(M_Ed=0.0, N_Ed=500.0)
+        result = check.perform_check(My_Ed=0.0, N_Ed=500.0)
 
         assert result.utilization > 0
         assert result.details["N_Ed"] == 500.0
@@ -586,7 +586,7 @@ class TestPureAxialAndBending:
         """Test pure axial tension."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        result = check.perform_check(M_Ed=0.0, N_Ed=-200.0)  # Tension
+        result = check.perform_check(My_Ed=0.0, N_Ed=-200.0)  # Tension
 
         assert result.utilization > 0
         assert result.details["N_Ed"] == -200.0
@@ -600,7 +600,7 @@ class TestOutsideDiagramDomain:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         # Very high axial - well beyond capacity but still calculable
-        result = check.perform_check(M_Ed=10.0, N_Ed=50000.0)
+        result = check.perform_check(My_Ed=10.0, N_Ed=50000.0)
 
         assert result.status == CheckStatus.FAIL
         # Now returns actual utilization (not inf) - load is ~16x beyond capacity
@@ -617,7 +617,7 @@ class TestOutsideDiagramDomain:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         # Very high tension - well beyond capacity but still calculable
-        result = check.perform_check(M_Ed=10.0, N_Ed=-10000.0)
+        result = check.perform_check(My_Ed=10.0, N_Ed=-10000.0)
 
         assert result.status == CheckStatus.FAIL
         # Now returns actual utilization (not inf) - load is ~16x beyond capacity
@@ -633,7 +633,7 @@ class TestCheckResultDetails:
     def test_all_details_present_basic_check(self, test_beam, concrete_c30):
         """Test all expected details are present for basic check."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
-        result = check.perform_check(M_Ed=100.0, N_Ed=500.0)
+        result = check.perform_check(My_Ed=100.0, N_Ed=500.0)
 
         expected_keys = [
             "N_Ed",
@@ -677,7 +677,7 @@ class TestCheckResultDetails:
         shear_rebar = ShearRebar(grade="B500B", diameter=10, link_spacing=200, n_legs=2)
 
         result = check.perform_check(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=300.0,
@@ -697,14 +697,16 @@ class TestCheckResultDetails:
     def test_demand_and_capacity_components(self, test_beam, concrete_c30):
         """Test demand and capacity components in result."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
-        result = check.perform_check(M_Ed=100.0, N_Ed=500.0)
+        result = check.perform_check(My_Ed=100.0, N_Ed=500.0)
 
         # Check demand components
         assert result.demand_components is not None
         assert "N" in result.demand_components
-        assert "M" in result.demand_components
+        assert "My" in result.demand_components
+        assert "Mz" in result.demand_components
         assert result.demand_components["N"] == 500.0
-        assert result.demand_components["M"] == 100.0
+        assert result.demand_components["My"] == 100.0
+        assert result.demand_components["Mz"] == 0.0
 
         # Check capacity components
         assert result.capacity_components is not None
@@ -714,7 +716,7 @@ class TestCheckResultDetails:
         # Check units
         assert result.units_components is not None
         assert result.units_components["N"] == "kN"
-        assert result.units_components["M"] == "kN·m"
+        assert result.units_components["My"] == "kN·m"
 
 
 class TestTensionShiftResultDataclass:
@@ -726,7 +728,7 @@ class TestTensionShiftResultDataclass:
 
         # When tension shift is not applied, _check_single_case creates a disabled result
         # We can test this by checking the result details from perform_check without M_cap
-        result = check.perform_check(M_Ed=100.0, N_Ed=500.0)  # No M_cap, no tension shift
+        result = check.perform_check(My_Ed=100.0, N_Ed=500.0)  # No M_cap, no tension shift
 
         assert result.details["tension_shift_applied"] is False
         assert result.details["M_add"] is None
@@ -791,7 +793,7 @@ class TestConcreteAndSteelModels:
                 concrete=concrete_c30,
                 concrete_model_type=model_type,
             )
-            result = check.perform_check(M_Ed=100.0, N_Ed=500.0)
+            result = check.perform_check(My_Ed=100.0, N_Ed=500.0)
 
             assert result.status in [CheckStatus.PASS, CheckStatus.WARNING]
             assert result.details["concrete_model"] == model_type
@@ -806,7 +808,7 @@ class TestConcreteAndSteelModels:
                 concrete=concrete_c30,
                 steel_model_type=model_type,
             )
-            result = check.perform_check(M_Ed=100.0, N_Ed=500.0)
+            result = check.perform_check(My_Ed=100.0, N_Ed=500.0)
 
             assert result.status in [CheckStatus.PASS, CheckStatus.WARNING]
             assert result.details["steel_model"] == model_type
@@ -818,7 +820,7 @@ class TestCheckResultStringRepresentation:
     def test_result_string_contains_status(self, test_beam, concrete_c30):
         """Test that result string contains status."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
-        result = check.perform_check(M_Ed=100.0, N_Ed=500.0)
+        result = check.perform_check(My_Ed=100.0, N_Ed=500.0)
 
         result_str = str(result)
         assert "PASS" in result_str or "FAIL" in result_str or "WARNING" in result_str
@@ -826,7 +828,7 @@ class TestCheckResultStringRepresentation:
     def test_result_string_contains_utilization(self, test_beam, concrete_c30):
         """Test that result string contains utilization."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
-        result = check.perform_check(M_Ed=100.0, N_Ed=500.0)
+        result = check.perform_check(My_Ed=100.0, N_Ed=500.0)
 
         result_str = str(result)
         assert "utilization" in result_str.lower() or "%" in result_str
@@ -857,11 +859,11 @@ class TestMultipleLoadCases:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         # Trigger lazy diagram creation, then store reference
-        check.perform_check(M_Ed=50.0, N_Ed=200.0)
+        check.perform_check(My_Ed=50.0, N_Ed=200.0)
         diagram_ref = check._diagram
 
         # Perform another check
-        check.perform_check(M_Ed=100.0, N_Ed=500.0)
+        check.perform_check(My_Ed=100.0, N_Ed=500.0)
 
         # Diagram should be the same object (cached, inputs unchanged)
         assert check._diagram is diagram_ref

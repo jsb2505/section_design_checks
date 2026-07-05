@@ -175,7 +175,7 @@ def test_jacobian_convergence_with_options():
     for M_target, N_target, label in test_cases:
         try:
             # Solve using analytical Jacobian
-            eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=M_target, N_target=N_target)
+            eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=M_target, N_target=N_target)
 
             # Verify solution
             point = diagram.calculate_point_from_end_strains(eps_top, eps_bottom)
@@ -234,7 +234,7 @@ def test_confined_concrete_convergence():
 
     for M_target, N_target, label in test_cases:
         try:
-            eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=M_target, N_target=N_target)
+            eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=M_target, N_target=N_target)
             point = diagram.calculate_point_from_end_strains(eps_top, eps_bottom)
 
             error = max(abs(point.M - M_target), abs(point.N - N_target))
@@ -272,7 +272,7 @@ def test_tension_stiffening_branch_selection_regression():
     # Historically problematic seed (all compression under sagging + compression)
     branch_biased_guess = (eps_cu * 0.8, eps_cu * 0.2)
     eps_top, eps_bottom = diagram.find_strains_for_MN(
-        M_target=M_target,
+        My_target=M_target,
         N_target=N_target,
         initial_guess=branch_biased_guess,
     )

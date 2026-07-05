@@ -417,7 +417,7 @@ class CrackWidthViewer:
             )
             hover = (
                 f"<b>{r.name}</b><br>"
-                f"M_Ed: {r.M_Ed:.1f} kN·m<br>"
+                f"My_Ed: {r.M_Ed:.1f} kN·m<br>"
                 f"N_Ed: {r.N_Ed:.1f} kN<br>"
                 f"w_k: {w_k_text} mm<br>"
                 f"Limit: {r.w_k_limit:.2f} mm<br>"
@@ -596,7 +596,7 @@ class CrackWidthViewer:
                 )
                 hover = (
                     f"<b>{r.name}</b><br>"
-                    f"M_Ed: {r.M_Ed:.1f} kN·m<br>"
+                    f"My_Ed: {r.M_Ed:.1f} kN·m<br>"
                     f"N_Ed: {r.N_Ed:.1f} kN<br>"
                     f"w_k: {w_k_text} mm<br>"
                     f"Limit: {r.w_k_limit:.2f} mm<br>"

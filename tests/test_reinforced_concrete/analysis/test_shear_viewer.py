@@ -459,7 +459,7 @@ class TestShearViewer:
         layout = fig.layout_updates[-1]
         _assert_slider_animation_controls_top_right(layout)
         assert "sliders" in layout
-        assert layout.get("yaxis_title") == "Moment M_Ed (kN·m)"
+        assert layout.get("yaxis_title") == "Moment My_Ed (kN·m)"
         assert layout["sliders"][0]["currentvalue"]["prefix"] == "N_Ed (kN): "
         upper_trace = next(t[0] for t in fig.traces if t[0].get("name") == "Upper M-N limit")
         lower_trace = next(t[0] for t in fig.traces if t[0].get("name") == "Lower M-N limit")

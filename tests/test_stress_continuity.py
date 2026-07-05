@@ -183,7 +183,7 @@ def test_newton_behavior_near_cracking():
     print("(This should create small curvature with fibers near cracking)")
     print()
 
-    eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=M_target, N_target=N_target)
+    eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=M_target, N_target=N_target)
 
     # Check fiber strains
     _, y, _, material_type, _, _, _ = diagram.mesh.get_fibre_arrays()

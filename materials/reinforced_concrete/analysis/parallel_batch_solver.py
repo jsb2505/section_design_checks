@@ -91,7 +91,7 @@ def _solve_single_case(diagram: Any, load_case: LoadCase, tol: float) -> SolverR
 
     try:
         eps_top, eps_bottom = diagram.find_strains_for_MN(
-            M_target=M,
+            My_target=M,
             N_target=N,
             tol=tol,
         )
@@ -237,7 +237,7 @@ def solve_batch_serial(
 
         try:
             eps_top, eps_bottom = diagram.find_strains_for_MN(
-                M_target=M,
+                My_target=M,
                 N_target=N,
                 tol=tol,
             )

@@ -307,7 +307,7 @@ class MNInteractionDiagram:
         self._dense_diagram_n: int = 0
         self._diagram_points_cache: dict[int, tuple[InteractionPoint, ...]] = {}
 
-        # Strain-solve result cache keyed by (M_target, N_target, strict, state signature).
+        # Strain-solve result cache keyed by (My_target, N_target, strict, state signature).
         # Naturally invalidated when this diagram instance is rebuilt (new object created).
         # Not keyed on tol/initial_guess — tol is always the default in practice,
         # and initial_guess is an optimizer hint that should not alter the final result.
@@ -1092,7 +1092,7 @@ class MNInteractionDiagram:
 
     def find_strains_for_MN(
         self,
-        M_target: float,
+        My_target: float,
         N_target: float,
         initial_guess: Optional[Tuple[float, float]] = None,
         tol: float = 1e-6,
@@ -1102,13 +1102,13 @@ class MNInteractionDiagram:
         Inverse solver: Find end strains that produce target (M, N).
 
         Uses scipy.optimize.least_squares to solve:
-            calculate_point_from_end_strains(eps_top, eps_bottom) = (N_target, M_target)
+            calculate_point_from_end_strains(eps_top, eps_bottom) = (N_target, My_target)
 
         This method does NOT require generate_diagram_points() to have been called - it only
         needs the fibre mesh and constitutive models (created in __init__).
 
         Args:
-            M_target: Target moment (kN.m)
+            My_target: Target moment (kN.m)
             N_target: Target axial force (kN, compression positive)
             initial_guess: Optional (eps_top, eps_bottom) starting point for optimizer.
                           If None, automatically estimated from (M, N) quadrant.
@@ -1129,18 +1129,18 @@ class MNInteractionDiagram:
             - Typical solve time: 10-50ms per unique (M,N) point
             - Hard points (e.g. near cracking transitions) may run extra fallback
               attempts with alternative starting points and Jacobians
-            - Results are cached by (M_target, N_target, strict, state signature)
+            - Results are cached by (My_target, N_target, strict, state signature)
               per diagram instance. Repeated calls with the same load case and
               state return immediately from cache.
 
         Examples:
             >>> diagram = MNInteractionDiagram(section, concrete)
-            >>> eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=50.0, N_target=100.0)
+            >>> eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=50.0, N_target=100.0)
             >>> point = diagram.calculate_point_from_end_strains(eps_top, eps_bottom)
             >>> assert abs(point.M - 50.0) < 1e-3
             >>> assert abs(point.N - 100.0) < 1e-3
         """
-        _cache_key = (M_target, N_target, strict, self._strain_cache_state_key())
+        _cache_key = (My_target, N_target, strict, self._strain_cache_state_key())
         _cached = self._strain_cache.get(_cache_key)
         if _cached is not None:
             return _cached
@@ -1148,11 +1148,11 @@ class MNInteractionDiagram:
         def residual(eps_pair: npt.NDArray) -> npt.NDArray:
             """Residual function: [N_error, M_error]."""
             point = self.calculate_point_from_end_strains(eps_pair[0], eps_pair[1])
-            return np.array([point.N - N_target, point.M - M_target])
+            return np.array([point.N - N_target, point.M - My_target])
 
         # Estimate initial guess if not provided
         if initial_guess is None:
-            initial_guess = self._estimate_initial_strains(M_target, N_target)
+            initial_guess = self._estimate_initial_strains(My_target, N_target)
 
         # Define strain bounds to prevent solver wandering into absurd strain space
         # This prevents numerical artifacts where extreme strains "match" forces via clipping
@@ -1216,7 +1216,7 @@ class MNInteractionDiagram:
             abs_max = max(abs(n_err), abs(m_err))
 
             n_scale = max(abs(float(N_target)), 1.0)
-            m_scale = max(abs(float(M_target)), 1.0)
+            m_scale = max(abs(float(My_target)), 1.0)
             norm = float(np.hypot(n_err / n_scale, m_err / m_scale))
             return (abs_max, norm)
 
@@ -1246,7 +1246,7 @@ class MNInteractionDiagram:
             # Generous threshold: 5 % of dominant target magnitude.
             _tensile_threshold = max(
                 acceptable_abs_error,
-                0.05 * max(abs(N_target), abs(M_target), 1.0),
+                0.05 * max(abs(N_target), abs(My_target), 1.0),
             )
             # Current best has compression at some face. Look for an
             # all-tensile alternative with acceptable residual.
@@ -1317,7 +1317,7 @@ class MNInteractionDiagram:
         # Near-origin seeds are valuable for small load cases where the true solution
         # is close to zero curvature/strain and for linear-elastic concrete with
         # tension enabled (to avoid converging to a cracked local branch).
-        is_small_load_case = abs(M_target) <= 1.0 and abs(N_target) <= 10.0
+        is_small_load_case = abs(My_target) <= 1.0 and abs(N_target) <= 10.0
         is_linear_elastic_with_tension = (
             isinstance(self.concrete_model, ConcreteStressStrainLinearElastic)
             and bool(getattr(self.concrete_model, "include_tension", False))
@@ -1345,7 +1345,7 @@ class MNInteractionDiagram:
             self.concrete_model, ConcreteStressStrainLinearElastic
         ):
             eps_cr = abs(float(self.concrete_model.cracking_strain))
-            if M_target > 0.0:
+            if My_target > 0.0:
                 elastic_bending_guesses = [
                     (+0.5 * eps_cr, -0.5 * eps_cr),   # sub-cracking
                     (+1.0 * eps_cr, -1.0 * eps_cr),   # at cracking
@@ -1353,7 +1353,7 @@ class MNInteractionDiagram:
                     (+2.0 * eps_cr, -3.0 * eps_cr),   # partially cracked
                     (+3.0 * eps_cr, -5.0 * eps_cr),   # well past cracking
                 ]
-            elif M_target < 0.0:
+            elif My_target < 0.0:
                 elastic_bending_guesses = [
                     (-0.5 * eps_cr, +0.5 * eps_cr),
                     (-1.0 * eps_cr, +1.0 * eps_cr),
@@ -1361,7 +1361,7 @@ class MNInteractionDiagram:
                     (-3.0 * eps_cr, +2.0 * eps_cr),
                     (-5.0 * eps_cr, +3.0 * eps_cr),
                 ]
-            if N_target > 0 and abs(M_target) > 0:
+            if N_target > 0 and abs(My_target) > 0:
                 elastic_bending_guesses.extend([
                     (+2.0 * eps_cr, +0.5 * eps_cr),
                     (+3.0 * eps_cr, +0.2 * eps_cr),
@@ -1376,7 +1376,7 @@ class MNInteractionDiagram:
             # but always include near-origin candidates in pass-1 fallbacks.
             candidate_guesses.extend(near_zero_guesses)
 
-        if abs(M_target) < 1e-9:
+        if abs(My_target) < 1e-9:
             if N_target > 0:
                 candidate_guesses.extend([
                     (+eps_cu * 0.8, +eps_cu * 0.8),
@@ -1389,14 +1389,14 @@ class MNInteractionDiagram:
                 ])
             else:
                 candidate_guesses.append((0.0, 0.0))
-        elif M_target > 0:
+        elif My_target > 0:
             candidate_guesses.extend([
                 (+eps_cu * 0.8, +eps_cu * 0.2),
                 (+eps_cu * 0.8, -eps_y * 1.5),
                 (+eps_cu * 0.6, -eps_y * 0.5),
             ])
             if N_target > 0:
-                eccentricity_mm = abs(M_target) * 1000.0 / max(abs(N_target), 1e-6)
+                eccentricity_mm = abs(My_target) * 1000.0 / max(abs(N_target), 1e-6)
                 if eccentricity_mm > float(self.section_height) * 0.6:
                     candidate_guesses.append((+eps_cu * 0.7, -eps_y * 2.0))
         else:
@@ -1406,7 +1406,7 @@ class MNInteractionDiagram:
                 (-eps_y * 0.5, +eps_cu * 0.6),
             ])
             if N_target > 0:
-                eccentricity_mm = abs(M_target) * 1000.0 / max(abs(N_target), 1e-6)
+                eccentricity_mm = abs(My_target) * 1000.0 / max(abs(N_target), 1e-6)
                 if eccentricity_mm > float(self.section_height) * 0.6:
                     candidate_guesses.append((-eps_y * 2.0, +eps_cu * 0.7))
 
@@ -1415,8 +1415,8 @@ class MNInteractionDiagram:
         # +eps_cu terms) regardless of N sign.  When N < 0, the physically
         # correct solution is often all-tensile; without these candidates the
         # solver may converge exclusively to an eccentric ULS branch.
-        if N_target < 0 and abs(M_target) > 1e-6:
-            if M_target > 0:
+        if N_target < 0 and abs(My_target) > 1e-6:
+            if My_target > 0:
                 # Sagging + tension: bottom more tensile than top.
                 # Cover a range of curvature ratios from nearly uniform
                 # (transition zone near the envelope boundary) through to
@@ -1534,7 +1534,7 @@ class MNInteractionDiagram:
         finite_x = np.all(np.isfinite(np.asarray(best_result.x)))
         if not (np.isfinite(best_abs_error) and finite_x):
             raise ValueError(
-                f"Inverse solver failed for M={M_target:.2f} kN.m, N={N_target:.2f} kN. "
+                f"Inverse solver failed for M={My_target:.2f} kN.m, N={N_target:.2f} kN. "
                 "All solver attempts were numerically unstable."
             )
 
@@ -1543,7 +1543,7 @@ class MNInteractionDiagram:
             n_err = float(fun[0]) if fun.shape == (2,) else float("nan")
             m_err = float(fun[1]) if fun.shape == (2,) else float("nan")
             raise ValueError(
-                f"Inverse solver could not match M={M_target:.2f} kN.m, N={N_target:.2f} kN "
+                f"Inverse solver could not match M={My_target:.2f} kN.m, N={N_target:.2f} kN "
                 f"within tolerance. Best residuals: dN={n_err:.3f} kN, dM={m_err:.3f} kN.m. "
                 "Target may be outside section capacity envelope. "
                 "Use strict=False to return the nearest feasible strain state."
@@ -1862,7 +1862,7 @@ class MNInteractionDiagram:
 
         # Need strains to compute centroid lever arm
         if eps_top is None or eps_bottom is None:
-            eps_top, eps_bottom = self.find_strains_for_MN(M_target=M_Ed, N_target=N_Ed)
+            eps_top, eps_bottom = self.find_strains_for_MN(My_target=M_Ed, N_target=N_Ed)
 
         # Try rigorous centroid-based lever arm
         if force_virtual:
@@ -2075,7 +2075,7 @@ class MNInteractionDiagram:
 
     def find_strain_state_for_MN(
         self,
-        M_target: float,
+        My_target: float,
         N_target: float,
         initial_guess: Optional[Tuple[float, float]] = None,
         tol: float = 1e-6,
@@ -2094,7 +2094,7 @@ class MNInteractionDiagram:
         from materials.reinforced_concrete.analysis.strain_state import StrainState
 
         eps_top, eps_bottom = self.find_strains_for_MN(
-            M_target=M_target,
+            My_target=My_target,
             N_target=N_target,
             initial_guess=initial_guess,
             tol=tol,

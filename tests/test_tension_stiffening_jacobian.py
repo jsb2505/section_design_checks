@@ -124,7 +124,7 @@ def test_analytical_jacobian_used():
 
     # Time the solve (should be fast with analytical Jacobian)
     start = time.perf_counter()
-    eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=M_target, N_target=N_target)
+    eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=M_target, N_target=N_target)
     elapsed = (time.perf_counter() - start) * 1000  # ms
 
     # Verify solution
@@ -186,13 +186,13 @@ def test_performance_vs_numerical():
     for M, N in test_cases:
         # Analytical Jacobian
         start = time.perf_counter()
-        eps_t_a, eps_b_a = diagram_analytical.find_strains_for_MN(M_target=M, N_target=N)
+        eps_t_a, eps_b_a = diagram_analytical.find_strains_for_MN(My_target=M, N_target=N)
         time_analytical = (time.perf_counter() - start) * 1000
         times_analytical.append(time_analytical)
 
         # Numerical Jacobian
         start = time.perf_counter()
-        eps_t_n, eps_b_n = diagram_numerical.find_strains_for_MN(M_target=M, N_target=N)
+        eps_t_n, eps_b_n = diagram_numerical.find_strains_for_MN(My_target=M, N_target=N)
         time_numerical = (time.perf_counter() - start) * 1000
         times_numerical.append(time_numerical)
 
@@ -248,7 +248,7 @@ def test_solution_accuracy():
     print(f"  {'='*60}")
 
     for M_target, N_target in test_cases:
-        eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=M_target, N_target=N_target)
+        eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=M_target, N_target=N_target)
         point = diagram.calculate_point_from_end_strains(eps_top, eps_bottom)
 
         error_M = abs(point.M - M_target)

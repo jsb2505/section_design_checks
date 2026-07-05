@@ -124,7 +124,7 @@ def test_check_single_case_requires_ved_when_mcap():
     with pytest.raises(ValueError, match="V_Ed must be provided when M_cap is provided"):
         BendingCheck._check_single_case(
             check,
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=0.0,
             V_Ed=None,
             M_cap=200.0,
@@ -145,7 +145,7 @@ def test_perform_check_handles_strain_solver_exception_in_as_min_path(
         lambda self, ignore_compression_steel=False: fake,
     )
 
-    result = check.perform_check(M_Ed=100.0, N_Ed=200.0, suppress_warnings=True)
+    result = check.perform_check(My_Ed=100.0, N_Ed=200.0, suppress_warnings=True)
 
     assert result.details["A_s_min_check_applicable"] is False
     assert result.details["A_s_min_required"] is None
@@ -173,7 +173,7 @@ def test_perform_check_handles_effective_depth_value_error_in_as_min_path(
 
     monkeypatch.setattr(bending_mod, "find_effective_depth_for_flexure", _raise_depth)
 
-    result = check.perform_check(M_Ed=100.0, N_Ed=200.0, suppress_warnings=True)
+    result = check.perform_check(My_Ed=100.0, N_Ed=200.0, suppress_warnings=True)
 
     assert result.details["A_s_min_check_applicable"] is False
     assert result.details["A_s_min_effective_depth_d"] is None

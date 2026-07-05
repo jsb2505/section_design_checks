@@ -265,7 +265,8 @@ class BendingCheck(BaseCodeCheck):
     def perform_check(
         self,
         *,
-        M_Ed: float,
+        My_Ed: float = None,  # type: ignore[assignment]
+        Mz_Ed: float = 0.0,
         N_Ed: float = 0.0,
         V_Ed: Optional[float] = None,
         M_cap: Optional[float] = None,
@@ -282,8 +283,8 @@ class BendingCheck(BaseCodeCheck):
         Check section capacity against applied bending moment and axial force.
 
         Uses M–N interaction diagram and ray intersection:
-        - Finds boundary point (N_Rd, M_Rd) along the load vector (M_Ed, N_Ed)
-        - Utilization = 1 / t_cap where (M_Rd, N_Rd) = t_cap * (M_Ed, N_Ed)
+        - Finds boundary point (N_Rd, M_Rd) along the load vector (My_Ed, N_Ed)
+        - Utilization = 1 / t_cap where (M_Rd, N_Rd) = t_cap * (My_Ed, N_Ed)
 
         Tension Shift Rule (EC2 §9.2.1.3):
         When M_cap is provided, automatically applies tension shift rule to account for
@@ -298,14 +299,18 @@ class BendingCheck(BaseCodeCheck):
         - a_l = d  [EC2 §9.2.1.3(2)]
         - M_add = V_Ed · d
 
-        Design moment: M_design = min(M_cap, M_Ed + M_add)
+        Design moment: M_design = min(M_cap, My_Ed + M_add)
 
         Args:
-            M_Ed: Design bending moment (kN·m)
+            My_Ed: Design bending moment about the major axis (kN·m).
+                   Formerly named M_Ed — passing M_Ed=... is still accepted
+                   but will raise a DeprecationWarning.
+            Mz_Ed: Design bending moment about the minor axis (kN·m, default 0).
+                   Requires free_neutral_axis=True when non-zero.
             N_Ed: Design axial force (kN, positive = compression)
             V_Ed: Design shear force (kN) - required if M_cap is provided
             M_cap: Moment capacity cap (kN·m) from envelope analysis.
-                   If provided, enables tension shift rule. Limits M_design = min(M_cap, M_Ed + M_add)
+                   If provided, enables tension shift rule. Limits M_design = min(M_cap, My_Ed + M_add)
             shear_reinforcement: Optional ShearReinforcement object.
                                 If provided, calculates cot(θ) from V_Ed.
                                 If not provided, uses a_l = d (no shear reinforcement)
@@ -326,6 +331,21 @@ class BendingCheck(BaseCodeCheck):
         Returns:
             CheckResult with pass/fail status and utilization
         """
+        # Backwards-compatibility shim: accept legacy M_Ed keyword argument.
+        if "M_Ed" in kwargs:
+            if My_Ed is not None:
+                raise TypeError("Cannot pass both 'M_Ed' and 'My_Ed' to perform_check()")
+            warnings.warn(
+                "The 'M_Ed' parameter of BendingCheck.perform_check() has been renamed to "
+                "'My_Ed'. Please update your call sites. 'M_Ed' will be removed in a future "
+                "version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if My_Ed is None:
+            raise TypeError("perform_check() missing required keyword argument: 'My_Ed'")
+
         # Validate tension shift inputs
         # If M_cap provided, tension shift is enabled
         apply_tension_shift = M_cap is not None
@@ -333,7 +353,8 @@ class BendingCheck(BaseCodeCheck):
             raise ValueError("V_Ed must be provided when M_cap is provided (tension shift enabled)")
 
         return self._check_single_case(
-            M_Ed=M_Ed,
+            My_Ed=My_Ed,
+            Mz_Ed=Mz_Ed,
             N_Ed=N_Ed,
             V_Ed=V_Ed,
             M_cap=M_cap,
@@ -400,7 +421,8 @@ class BendingCheck(BaseCodeCheck):
     def _check_single_case(
         self,
         *,
-        M_Ed: float,
+        My_Ed: float,
+        Mz_Ed: float = 0.0,
         N_Ed: float,
         V_Ed: Optional[float],
         M_cap: Optional[float],
@@ -412,7 +434,20 @@ class BendingCheck(BaseCodeCheck):
         ignore_compression_steel: bool = False,
         iterate_z: bool = False,
     ) -> CheckResult:
+        # Validate Mz_Ed requires free neutral axis
+        if Mz_Ed != 0 and not self.free_neutral_axis:
+            raise ValueError(
+                "Mz_Ed != 0 requires free_neutral_axis=True. "
+                "Set free_neutral_axis=True on the BendingCheck to enable biaxial bending."
+            )
+
+        # Local alias so the rest of the method body can use M_Ed as a working variable
+        # without renaming every internal reference (My_Ed is the public API name).
+        M_Ed = My_Ed
         M_Ed_original = float(M_Ed)
+
+        # Build keyword dict for Mz_target (only passed when non-zero)
+        _mz_kw = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
 
         # --- Step 1: tension shift (only if M_cap is provided) ---
         if M_cap is not None:
@@ -465,7 +500,10 @@ class BendingCheck(BaseCodeCheck):
 
         # --- Step 2: capacity check against diagram ---
         diagram = self._get_diagram(ignore_compression_steel)
-        capacity = diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_design, return_details=False)
+        if abs(Mz_Ed) > 1e-9 and hasattr(diagram, "get_capacity_biaxial"):
+            capacity = diagram.get_capacity_biaxial(N_Ed=N_Ed, My_Ed=M_design, Mz_Ed=Mz_Ed)
+        else:
+            capacity = diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_design, return_details=False)
         N_Rd, M_Rd, utilization = capacity.N_Rd, capacity.M_Rd, capacity.utilization
 
         # --- Step 2a: reinforcement limit checks (EC2 §9.2.1.1) ---
@@ -495,7 +533,7 @@ class BendingCheck(BaseCodeCheck):
                 )
 
             try:
-                eps_top, eps_bottom = diagram.find_strains_for_MN(M_design, N_Ed)
+                eps_top, eps_bottom = diagram.find_strains_for_MN(M_design, N_Ed, **_mz_kw)
             except Exception:
                 eps_top, eps_bottom = None, None
 
@@ -503,7 +541,7 @@ class BendingCheck(BaseCodeCheck):
             strain_state_local: Optional["StrainState"] = None
             if eps_top is not None and eps_bottom is not None:
                 try:
-                    strain_state_local = diagram.find_strain_state_for_MN(M_design, N_Ed)
+                    strain_state_local = diagram.find_strain_state_for_MN(M_design, N_Ed, **_mz_kw)
                 except Exception:
                     pass
 
@@ -556,8 +594,8 @@ class BendingCheck(BaseCodeCheck):
                         # keep A_s,min check as not applicable for this load case.
                         pass
 
-        demand_components = {"N": float(N_Ed), "M": float(M_Ed_original)}
-        units_components = {"N": "kN", "M": "kN·m"}
+        demand_components = {"My": float(M_Ed_original), "Mz": float(Mz_Ed), "N": float(N_Ed)}
+        units_components = {"My": "kN·m", "Mz": "kN·m", "N": "kN"}
 
         # Build base details dict
         base_details = {

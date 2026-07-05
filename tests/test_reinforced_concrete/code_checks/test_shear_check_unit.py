@@ -578,7 +578,7 @@ class TestCotThetaAndNote2:
 
         monkeypatch.setattr(sc_mod, "find_cot_theta_for_V_Ed_from_V_Rd_s", lambda **kwargs: 1.4)
         monkeypatch.setattr(sc_mod, "find_cot_theta_for_V_Ed_from_V_Rd_max", lambda **kwargs: 1.9)
-        monkeypatch.setattr(ShearCheck, "_calculate_K", lambda self, z, sigma_cp, use_note_2=False: 123.0)
+        monkeypatch.setattr(ShearCheck, "_calculate_K", lambda self, z, sigma_cp, use_note_2=False, **kw: 123.0)
 
         out_s = check._find_cot_theta_for_V_Ed(
             V_Ed=100.0,
@@ -615,11 +615,11 @@ class TestCotThetaAndNote2:
     def test_note_2_iteration_branches(self, monkeypatch):
         """Test note 2 iteration branches."""
         check = _make_stub_shear_check()
-        monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed: (1.0, 2.5))
+        monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed, **kw: (1.0, 2.5))
 
         # A: Note 2 not applicable.
         monkeypatch.setattr(ShearCheck, "_find_cot_theta_for_V_Ed", lambda self, **kwargs: 1.5)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_max", lambda self, cot_theta, z, sigma_cp, use_note_2=False: 500.0 if not use_note_2 else 600.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_max", lambda self, cot_theta, z, sigma_cp, use_note_2=False, **kw: 500.0 if not use_note_2 else 600.0)
         monkeypatch.setattr(
             ShearCheck,
             "find_V_Rd_s",
@@ -674,13 +674,13 @@ class TestRemainingPublicHelpers:
         monkeypatch.setattr(ShearCheck, "find_effective_depth", lambda self, M_Ed, N_Ed: 400.0)
         monkeypatch.setattr(ShearCheck, "_find_sigma_cp", lambda self, N_Ed: 1.0)
         monkeypatch.setattr(ShearCheck, "_find_rho_l", lambda self, M_Ed, N_Ed, d: 0.01)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: 200.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 200.0)
         assert check.get_required_shear_reinforcement(V_Ed=150.0, M_Ed=10.0, N_Ed=0.0) == pytest.approx(0.0, rel=1e-12)
 
         # Required reinforcement: needed branch with clamping + min reinforcement.
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: 50.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 50.0)
         monkeypatch.setattr(ShearCheck, "find_lever_arm", lambda self, M_Ed, N_Ed, d: (360.0, None))
-        monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed: (1.0, 2.0))
+        monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed, **kw: (1.0, 2.0))
         monkeypatch.setattr(sc_mod, "clamp_cot_theta", lambda cot_theta, cot_min, cot_max: 2.0)
         monkeypatch.setattr(ShearCheck, "_find_min_a_sw_over_s", lambda self, use_defaults=False: 0.2)
         req = check.get_required_shear_reinforcement(V_Ed=100.0, M_Ed=10.0, N_Ed=0.0, cot_theta=3.0)
@@ -710,9 +710,9 @@ class TestRemainingPublicHelpers:
         monkeypatch.setattr(ShearCheck, "find_effective_depth", lambda self, M_Ed, N_Ed: 400.0)
         monkeypatch.setattr(ShearCheck, "_find_sigma_cp", lambda self, N_Ed: 1.0)
         monkeypatch.setattr(ShearCheck, "_find_rho_l", lambda self, M_Ed, N_Ed, d: 0.01)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: 10.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 10.0)
         monkeypatch.setattr(ShearCheck, "find_lever_arm", lambda self, M_Ed, N_Ed, d: (360.0, None))
-        monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed: (1.0, 2.0))
+        monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed, **kw: (1.0, 2.0))
         monkeypatch.setattr(sc_mod, "clamp_cot_theta", lambda cot_theta, cot_min, cot_max: 1.5)
         monkeypatch.setattr(ShearCheck, "_find_min_a_sw_over_s", lambda self, use_defaults=False: 0.0)
 
@@ -757,17 +757,17 @@ class TestCheckSingleCaseBranching:
             "_find_rho_l",
             lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: vrd_c)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp: vrd_c_un)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: vrd_c)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp, **kw: vrd_c_un)
         monkeypatch.setattr(
             ShearCheck,
             "find_lever_arm",
             lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: (360.0, None),
         )
-        monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed: (1.0, 2.0))
+        monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed, **kw: (1.0, 2.0))
         monkeypatch.setattr(ShearCheck, "_find_cot_theta_for_V_Ed", lambda self, **kwargs: 1.5)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_s", lambda self, cot_theta, z, use_note_2=False: vrd_s)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_max", lambda self, cot_theta, z, sigma_cp, use_note_2=False: vrd_max)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_max", lambda self, cot_theta, z, sigma_cp, use_note_2=False, **kw: vrd_max)
         monkeypatch.setattr(sc_mod, "find_max_allowable_link_spacing", lambda **kwargs: 999.0)
 
     def test_zero_moment_path_sets_none_strains(self, monkeypatch):
@@ -787,9 +787,9 @@ class TestCheckSingleCaseBranching:
             "_find_rho_l",
             lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: 100.0)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp: 90.0)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_max_unreinforced", lambda self, d: 120.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 100.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp, **kw: 90.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_max_unreinforced", lambda self, d, **kw: 120.0)
         monkeypatch.setattr(
             ShearCheck,
             "_get_diagram",
@@ -824,9 +824,9 @@ class TestCheckSingleCaseBranching:
             "_find_rho_l",
             lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: 200.0)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp: 150.0)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_max_unreinforced", lambda self, d: 100.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 200.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp, **kw: 150.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_max_unreinforced", lambda self, d, **kw: 100.0)
 
         out = check._check_single_case(
             V_Ed=150.0,
@@ -980,9 +980,9 @@ class TestCheckSingleCaseBranching:
             lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
         monkeypatch.setattr(ShearCheck, "_find_sigma_cp", lambda self, N_Ed: 1.0)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: 50.0)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp: 40.0)
-        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_max_unreinforced", lambda self, d: 100.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 50.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp, **kw: 40.0)
+        monkeypatch.setattr(ShearCheck, "find_V_Rd_c_max_unreinforced", lambda self, d, **kw: 100.0)
 
         out = check._check_single_case(
             V_Ed=60.0,

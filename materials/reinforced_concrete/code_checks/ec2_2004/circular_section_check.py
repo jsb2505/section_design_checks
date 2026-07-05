@@ -764,8 +764,9 @@ class CircularSectionCheck(BaseModel):
     def perform_bending_check(
         self,
         *,
-        M_Ed: float,
+        My_Ed: Optional[float] = None,
         N_Ed: float = 0.0,
+        Mz_Ed: float = 0.0,
         V_Ed: Optional[float] = None,
         M_cap: Optional[float] = None,
         shear_reinforcement: Optional[ShearRebar] = None,
@@ -775,6 +776,7 @@ class CircularSectionCheck(BaseModel):
         suppress_warnings: bool = False,
         ignore_compression_steel: bool = False,
         iterate_z: bool = True,
+        **kwargs,
     ) -> CheckResult:
         """
         Bending check for circular section.
@@ -786,8 +788,9 @@ class CircularSectionCheck(BaseModel):
         web width internally.
 
         Args:
-            M_Ed: Design bending moment (kN·m)
+            My_Ed: Design bending moment about major axis (kN·m)
             N_Ed: Design axial force (kN, compression positive)
+            Mz_Ed: Design bending moment about minor axis (kN·m)
             V_Ed: Design shear force (kN) — required if M_cap is provided
             M_cap: Moment capacity cap (kN·m) from envelope analysis
             shear_reinforcement: Override for shear reinforcement (defaults to self)
@@ -803,6 +806,18 @@ class CircularSectionCheck(BaseModel):
         Returns:
             CheckResult with bending utilization
         """
+        if "M_Ed" in kwargs:
+            warnings.warn(
+                "M_Ed is deprecated; use My_Ed instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        if My_Ed is None:
+            raise TypeError("perform_bending_check() missing required argument: 'My_Ed'")
+
         self._check_ndp_context()
         shear_reinf = (
             shear_reinforcement
@@ -820,7 +835,7 @@ class CircularSectionCheck(BaseModel):
             and shear_reinf is not None
         ):
             effective_cot_theta = self._compute_cot_theta_for_tension_shift(
-                M_Ed=M_Ed,
+                M_Ed=My_Ed,
                 N_Ed=N_Ed,
                 V_Ed=V_Ed,
                 use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
@@ -829,8 +844,9 @@ class CircularSectionCheck(BaseModel):
 
         assert self._bending_check is not None
         return self._bending_check.perform_check(
-            M_Ed=M_Ed,
+            My_Ed=My_Ed,
             N_Ed=N_Ed,
+            Mz_Ed=Mz_Ed,
             V_Ed=V_Ed,
             M_cap=M_cap,
             shear_reinforcement=shear_reinf,
@@ -846,11 +862,13 @@ class CircularSectionCheck(BaseModel):
     def perform_cracking_check(
         self,
         *,
-        M_Ed: float,
+        My_Ed: Optional[float] = None,
         N_Ed: float = 0.0,
+        Mz_Ed: float = 0.0,
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
+        **kwargs,
     ) -> CheckResult:
         """
         Cracking check for circular section (wrapper — no circular modifications).
@@ -858,8 +876,9 @@ class CircularSectionCheck(BaseModel):
         Forwards to internal CrackingCheck.
 
         Args:
-            M_Ed: Design moment at SLS (kN·m)
+            My_Ed: Design moment at SLS about major axis (kN·m)
             N_Ed: Design axial force at SLS (kN, compression positive)
+            Mz_Ed: Design moment at SLS about minor axis (kN·m)
             warning_threshold: Utilization threshold for warnings
             ignore_compression_steel: If True, ignore compression reinforcement
             force_cracked: If True, skip cracking moment check and proceed
@@ -868,11 +887,24 @@ class CircularSectionCheck(BaseModel):
         Returns:
             CheckResult with crack width utilization
         """
+        if "M_Ed" in kwargs:
+            warnings.warn(
+                "M_Ed is deprecated; use My_Ed instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        if My_Ed is None:
+            raise TypeError("perform_cracking_check() missing required argument: 'My_Ed'")
+
         self._check_ndp_context()
         assert self._cracking_check is not None
         return self._cracking_check.perform_check(
-            M_Ed=M_Ed,
+            My_Ed=My_Ed,
             N_Ed=N_Ed,
+            Mz_Ed=Mz_Ed,
             warning_threshold=warning_threshold,
             ignore_compression_steel=ignore_compression_steel,
             force_cracked=force_cracked,
@@ -882,8 +914,9 @@ class CircularSectionCheck(BaseModel):
     def perform_stress_limits_check(
         self,
         *,
-        M_Ed: float,
+        My_Ed: Optional[float] = None,
         N_Ed: float = 0.0,
+        Mz_Ed: float = 0.0,
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         suppress_warnings: bool = False,
@@ -895,8 +928,9 @@ class CircularSectionCheck(BaseModel):
         Forwards to internal StressLimitsCheck.
 
         Args:
-            M_Ed: Design moment at SLS (kN.m)
+            My_Ed: Design moment at SLS about major axis (kN·m)
             N_Ed: Design axial force at SLS (kN, compression positive)
+            Mz_Ed: Design moment at SLS about minor axis (kN·m)
             warning_threshold: Utilization threshold for warnings
             ignore_compression_steel: If True, ignore compression reinforcement
             suppress_warnings: If True, suppress warnings emitted during this check.
@@ -904,11 +938,22 @@ class CircularSectionCheck(BaseModel):
         Returns:
             CheckResult with governing stress-limit utilization
         """
+        if "M_Ed" in kwargs:
+            warnings.warn(
+                "M_Ed is deprecated; use My_Ed instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if My_Ed is None:
+            raise TypeError("perform_stress_limits_check() missing required argument: 'My_Ed'")
+
         self._check_ndp_context()
         assert self._stress_limits_check is not None
         return self._stress_limits_check.perform_check(
-            M_Ed=M_Ed,
+            My_Ed=My_Ed,
             N_Ed=N_Ed,
+            Mz_Ed=Mz_Ed,
             warning_threshold=warning_threshold,
             ignore_compression_steel=ignore_compression_steel,
             suppress_warnings=suppress_warnings,
@@ -992,7 +1037,7 @@ class CircularSectionCheck(BaseModel):
             diagram = self._shear_check._get_diagram(ignore_compression_steel)
             eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed)
             strain_state_local = diagram.find_strain_state_for_MN(
-                M_target=M_Ed, N_target=N_Ed,
+                My_target=M_Ed, N_target=N_Ed,
             )
         else:
             eps_top, eps_bottom = None, None
@@ -1358,7 +1403,7 @@ class CircularSectionCheck(BaseModel):
             _diagram = self._shear_check._get_diagram(ignore_compression_steel)
             _eps_top, _eps_bottom = _diagram.find_strains_for_MN(M_Ed, N_Ed)
             _strain_state = _diagram.find_strain_state_for_MN(
-                M_target=M_Ed, N_target=N_Ed,
+                My_target=M_Ed, N_target=N_Ed,
             )
         else:
             _eps_top, _eps_bottom = None, None

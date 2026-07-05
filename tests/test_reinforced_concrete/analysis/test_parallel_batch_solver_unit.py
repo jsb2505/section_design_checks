@@ -14,11 +14,11 @@ class _FakeDiagram:
         self.fail_for = fail_for or set()
         self.calls = []
 
-    def find_strains_for_MN(self, *, M_target, N_target, tol):
-        self.calls.append((M_target, N_target, tol))
-        if (M_target, N_target) in self.fail_for:
-            raise RuntimeError(f"failed at M={M_target}, N={N_target}")
-        return (M_target / 1000.0, N_target / 1000.0)
+    def find_strains_for_MN(self, *, My_target, N_target, tol):
+        self.calls.append((My_target, N_target, tol))
+        if (My_target, N_target) in self.fail_for:
+            raise RuntimeError(f"failed at M={My_target}, N={N_target}")
+        return (My_target / 1000.0, N_target / 1000.0)
 
 
 class TestSolveSingleCase:

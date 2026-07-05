@@ -80,7 +80,7 @@ def test_jacobian_accuracy_at_points():
 
     for M_target, N_target, label in test_cases:
         # Get solution
-        eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=M_target, N_target=N_target)
+        eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=M_target, N_target=N_target)
 
         # Analytical Jacobian
         jac_analytical = diagram._compute_analytical_jacobian(eps_top, eps_bottom)
@@ -151,7 +151,7 @@ def test_jacobian_consistency_with_residual():
     N_target = 100.0
 
     # Get solution
-    eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=M_target, N_target=N_target)
+    eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=M_target, N_target=N_target)
 
     def residual(eps_top, eps_bottom):
         point = diagram.calculate_point_from_end_strains(eps_top, eps_bottom)

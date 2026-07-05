@@ -371,8 +371,9 @@ class BeamCheck(BaseModel):
     def perform_bending_check(
         self,
         *,
-        M_Ed: float,
+        My_Ed: Optional[float] = None,
         N_Ed: float = 0.0,
+        Mz_Ed: float = 0.0,
         V_Ed: Optional[float] = None,
         M_cap: Optional[float] = None,
         shear_reinforcement: Optional[ShearRebar] = None,
@@ -387,6 +388,19 @@ class BeamCheck(BaseModel):
         """
         Forward a bending check to the internal BendingCheck delegate.
         """
+        # Backwards-compatibility shim
+        if "M_Ed" in kwargs:
+            if My_Ed is not None:
+                raise TypeError("Cannot pass both 'M_Ed' and 'My_Ed'")
+            warnings.warn(
+                "M_Ed is deprecated; use My_Ed instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if My_Ed is None:
+            raise TypeError("perform_bending_check() missing required keyword argument: 'My_Ed'")
+
         self._check_ndp_context()
         shear_reinf = (
             shear_reinforcement
@@ -395,7 +409,8 @@ class BeamCheck(BaseModel):
         )
         assert self._bending_check is not None
         return self._bending_check.perform_check(
-            M_Ed=M_Ed,
+            My_Ed=My_Ed,
+            Mz_Ed=Mz_Ed,
             N_Ed=N_Ed,
             V_Ed=V_Ed,
             M_cap=M_cap,
@@ -440,8 +455,9 @@ class BeamCheck(BaseModel):
     def perform_cracking_check(
         self,
         *,
-        M_Ed: float,
+        My_Ed: Optional[float] = None,
         N_Ed: float = 0.0,
+        Mz_Ed: float = 0.0,
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
@@ -452,10 +468,24 @@ class BeamCheck(BaseModel):
         """
         Forward a cracking check to the internal CrackingCheck delegate.
         """
+        # Backwards-compatibility shim
+        if "M_Ed" in kwargs:
+            if My_Ed is not None:
+                raise TypeError("Cannot pass both 'M_Ed' and 'My_Ed'")
+            warnings.warn(
+                "M_Ed is deprecated; use My_Ed instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if My_Ed is None:
+            raise TypeError("perform_cracking_check() missing required keyword argument: 'My_Ed'")
+
         self._check_ndp_context()
         assert self._cracking_check is not None
         return self._cracking_check.perform_check(
-            M_Ed=M_Ed,
+            My_Ed=My_Ed,
+            Mz_Ed=Mz_Ed,
             N_Ed=N_Ed,
             warning_threshold=warning_threshold,
             ignore_compression_steel=ignore_compression_steel,
@@ -468,8 +498,9 @@ class BeamCheck(BaseModel):
     def perform_stress_limits_check(
         self,
         *,
-        M_Ed: float,
+        My_Ed: Optional[float] = None,
         N_Ed: float = 0.0,
+        Mz_Ed: float = 0.0,
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         suppress_warnings: bool = False,
@@ -478,10 +509,24 @@ class BeamCheck(BaseModel):
         """
         Forward a stress-limitation check to the internal StressLimitsCheck delegate.
         """
+        # Backwards-compatibility shim
+        if "M_Ed" in kwargs:
+            if My_Ed is not None:
+                raise TypeError("Cannot pass both 'M_Ed' and 'My_Ed'")
+            warnings.warn(
+                "M_Ed is deprecated; use My_Ed instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if My_Ed is None:
+            raise TypeError("perform_stress_limits_check() missing required keyword argument: 'My_Ed'")
+
         self._check_ndp_context()
         assert self._stress_limits_check is not None
         return self._stress_limits_check.perform_check(
-            M_Ed=M_Ed,
+            My_Ed=My_Ed,
+            Mz_Ed=Mz_Ed,
             N_Ed=N_Ed,
             warning_threshold=warning_threshold,
             ignore_compression_steel=ignore_compression_steel,

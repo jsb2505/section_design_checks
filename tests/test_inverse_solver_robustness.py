@@ -85,7 +85,7 @@ class TestInverseSolverOutsideEnvelope:
         max_M = max(abs(p.M) for p in points)
 
         with pytest.raises(ValueError, match="outside section capacity envelope"):
-            test_diagram.find_strains_for_MN(M_target=max_M * 5.0, N_target=0.0, strict=True)
+            test_diagram.find_strains_for_MN(My_target=max_M * 5.0, N_target=0.0, strict=True)
 
     def test_extremely_high_axial_force_finds_boundary(self, test_diagram):
         """Test that extremely high axial force (beyond capacity) finds boundary point."""

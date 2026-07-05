@@ -524,9 +524,10 @@ class StressLimitsCheck(BaseCodeCheck):
 
     def calculate_detailed(
         self,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float = 0.0,
         ignore_compression_steel: bool = False,
+        Mz_Ed: float = 0.0,
     ) -> StressLimitResult:
         """
         Run all enabled stress limitation checks and return detailed results.
@@ -537,17 +538,20 @@ class StressLimitsCheck(BaseCodeCheck):
         used in the given the concrete_model_type (default E_cm).
 
         Args:
-            M_Ed: Design moment at SLS (kN·m).
+            My_Ed: Design moment at SLS (kN·m).
             N_Ed: Design axial force at SLS (kN, compression positive).
             ignore_compression_steel: If True, use conservative diagram.
+            Mz_Ed: Design minor-axis moment at SLS (kN·m, default 0.0).
 
         Returns:
             StressLimitResult with all intermediate values.
         """
+        M_Ed = My_Ed
+        _mz_kw = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
         diagram = self._get_diagram(ignore_compression_steel)
-        eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed, strict=True)
+        eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed, strict=True, **_mz_kw)
         strain_state_local = diagram.find_strain_state_for_MN(
-            M_target=M_Ed, N_target=N_Ed,
+            My_target=M_Ed, N_target=N_Ed, **_mz_kw,
         )
 
         sigma_c = self._get_peak_concrete_stress(
@@ -600,10 +604,10 @@ class StressLimitsCheck(BaseCodeCheck):
                             E_cm_eff_NL, ignore_compression_steel,
                         )
                         eps_top, eps_bottom = diagram_nl.find_strains_for_MN(
-                            M_Ed, N_Ed, strict=True
+                            M_Ed, N_Ed, strict=True, **_mz_kw
                         )
                         strain_state_local = diagram_nl.find_strain_state_for_MN(
-                            M_target=M_Ed, N_target=N_Ed,
+                            My_target=M_Ed, N_target=N_Ed, **_mz_kw,
                         )
                         sigma_c_nl = self._get_peak_concrete_stress(
                             eps_top, eps_bottom, diagram_nl,
@@ -646,8 +650,9 @@ class StressLimitsCheck(BaseCodeCheck):
     def perform_check(
         self,
         *,
-        M_Ed: float,
+        My_Ed: Optional[float] = None,
         N_Ed: float = 0.0,
+        Mz_Ed: float = 0.0,
         ignore_compression_steel: bool = False,
         warning_threshold: float = 0.95,
         suppress_warnings: bool = False,
@@ -657,8 +662,9 @@ class StressLimitsCheck(BaseCodeCheck):
         Perform EC2 §7.2 stress limitation checks.
 
         Args:
-            M_Ed: Design moment at SLS (kN·m).
+            My_Ed: Design major-axis moment at SLS (kN·m).
             N_Ed: Design axial force at SLS (kN, compression positive).
+            Mz_Ed: Design minor-axis moment at SLS (kN·m, default 0.0).
             ignore_compression_steel: If True, use conservative diagram.
             warning_threshold: Utilization ratio triggering warnings.
             suppress_warnings: If True, suppress warnings emitted during this check.
@@ -666,17 +672,27 @@ class StressLimitsCheck(BaseCodeCheck):
         Returns:
             CheckResult with governing stress check utilization.
         """
+        # Legacy support: remap M_Ed kwarg to My_Ed
+        if "M_Ed" in kwargs:
+            warnings.warn(
+                "M_Ed is deprecated; use My_Ed instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if My_Ed is None:
+            raise TypeError("perform_check() missing required keyword argument: 'My_Ed'")
         try:
-            r = self.calculate_detailed(M_Ed, N_Ed, ignore_compression_steel)
+            r = self.calculate_detailed(My_Ed, N_Ed, ignore_compression_steel, Mz_Ed=Mz_Ed)
         except ValueError as e:
             return self._create_result(
                 check_name="Stress limitation check (EC2 §7.2)",
                 code_reference="EC2 §7.2",
                 warning_threshold=warning_threshold,
                 utilization=float("inf"),
-                demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
+                demand_components={"My_Ed": float(My_Ed), "Mz_Ed": float(Mz_Ed), "N_Ed": float(N_Ed)},
                 capacity_components={},
-                units_components={"M_Ed": "kN·m", "N_Ed": "kN"},
+                units_components={"My_Ed": "kN·m", "Mz_Ed": "kN·m", "N_Ed": "kN"},
                 message=f"Failed to solve strain state: {e}",
                 details={"error": str(e)},
             )
@@ -721,7 +737,8 @@ class StressLimitsCheck(BaseCodeCheck):
 
         # Build details
         details: Dict[str, Any] = {
-            "M_Ed": float(M_Ed),
+            "My_Ed": float(My_Ed),
+            "Mz_Ed": float(Mz_Ed),
             "N_Ed": float(N_Ed),
             "sigma_c_peak": r.sigma_c_peak,
             "sigma_s_max": r.sigma_s_max,
@@ -747,9 +764,9 @@ class StressLimitsCheck(BaseCodeCheck):
             code_reference="EC2 §7.2",
             warning_threshold=warning_threshold,
             utilization=governing_util,
-            demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
+            demand_components={"My": float(My_Ed), "Mz": float(Mz_Ed), "N": float(N_Ed)},
             capacity_components={},
-            units_components={"M_Ed": "kN·m", "N_Ed": "kN"},
+            units_components={"My": "kN·m", "Mz": "kN·m", "N": "kN"},
             message=message,
             details=details,
         )

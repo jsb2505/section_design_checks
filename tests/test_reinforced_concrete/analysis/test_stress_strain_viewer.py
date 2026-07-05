@@ -55,7 +55,7 @@ class _FakeDiagram:
         self._fibre_i = np.array([0, 1, 0, 1])
         self._fibre_j = np.array([0, 0, 1, 1])
 
-    def find_strains_for_MN(self, M_target: float, N_target: float):
+    def find_strains_for_MN(self, My_target: float, N_target: float):
         return 0.001, -0.001
 
     def get_fibre_forces_from_end_strains(self, eps_top: float, eps_bottom: float):
@@ -142,7 +142,7 @@ class _FakeGo:
 
 def _make_state(**overrides) -> _StressStrainPlotState:
     base = dict(
-        M_Ed=80.0,
+        My_Ed=80.0,
         N_Ed=150.0,
         eps_top=0.001,
         eps_bottom=-0.001,
@@ -195,7 +195,7 @@ class TestStressStrainViewerHelpers:
     def test_get_capacity_mapping(self):
         """Test get capacity mapping."""
         viewer = StressStrainViewer(_FakeDiagram())
-        cap = viewer._get_capacity(M_Ed=50.0, N_Ed=100.0)
+        cap = viewer._get_capacity(My_Ed=50.0, N_Ed=100.0)
         assert cap["M_Rd_pos"] == pytest.approx(120.0, rel=1e-12)
         assert cap["N_Rd"] == pytest.approx(100.0, rel=1e-12)
         assert cap["utilisation"] == pytest.approx(0.8, rel=1e-12)
@@ -523,19 +523,19 @@ class TestStressStrainViewerHelpers:
     def test_build_plot_state_success_and_solver_failure(self):
         """Test build plot state success and solver failure."""
         viewer = StressStrainViewer(_FakeDiagram())
-        s = viewer._build_stress_strain_plot_state(M_Ed=80.0, N_Ed=150.0)
+        s = viewer._build_stress_strain_plot_state(My_Ed=80.0, N_Ed=150.0)
         assert isinstance(s, _StressStrainPlotState)
-        assert s.M_Ed == pytest.approx(80.0, rel=1e-12)
+        assert s.My_Ed == pytest.approx(80.0, rel=1e-12)
         assert s.N_Ed == pytest.approx(150.0, rel=1e-12)
         assert s.M_Rd_pos == pytest.approx(120.0, rel=1e-12)
 
         class _FailingDiagram(_FakeDiagram):
-            def find_strains_for_MN(self, M_target: float, N_target: float):
+            def find_strains_for_MN(self, My_target: float, N_target: float):
                 raise ValueError("solver fail")
 
         viewer_fail = StressStrainViewer(_FailingDiagram())
         with pytest.raises(ValueError, match="Cannot find strain state"):
-            viewer_fail._build_stress_strain_plot_state(M_Ed=80.0, N_Ed=150.0)
+            viewer_fail._build_stress_strain_plot_state(My_Ed=80.0, N_Ed=150.0)
 
 
 class TestStressStrainViewerPlotFlow:
@@ -553,7 +553,7 @@ class TestStressStrainViewerPlotFlow:
         monkeypatch.setattr(builtins, "__import__", _boom)
         viewer = StressStrainViewer(_FakeDiagram())
         with pytest.raises(ImportError, match="Plotly is required for plotting"):
-            viewer.plot(M_Ed=80.0, N_Ed=150.0, show=False)
+            viewer.plot(My_Ed=80.0, N_Ed=150.0, show=False)
 
     def test_plot_delegates_to_subplot_builders(self, monkeypatch):
         # Fake plotly modules
@@ -581,7 +581,7 @@ class TestStressStrainViewerPlotFlow:
         monkeypatch.setattr(
             StressStrainViewer,
             "_build_stress_strain_plot_state",
-            lambda self, M_Ed, N_Ed: state,
+            lambda self, **kw: state,
         )
         monkeypatch.setattr(
             StressStrainViewer,
@@ -604,7 +604,7 @@ class TestStressStrainViewerPlotFlow:
             lambda self, fig, s, title, width, height: called.__setitem__("layout", called["layout"] + 1),
         )
 
-        fig = viewer.plot(M_Ed=80.0, N_Ed=150.0, show=True)
+        fig = viewer.plot(My_Ed=80.0, N_Ed=150.0, show=True)
         assert isinstance(fig, _FakeFigure)
         assert fig.shown is True
         assert called == {"section": 1, "strain": 1, "stress": 1, "layout": 1}
@@ -629,6 +629,6 @@ class TestStressStrainViewerPlotFlow:
 
         viewer = StressStrainViewer(_FakeDiagram())
         out = tmp_path / "viewer.html"
-        fig = viewer.plot(M_Ed=80.0, N_Ed=150.0, show=False, save_path=out)
+        fig = viewer.plot(My_Ed=80.0, N_Ed=150.0, show=False, save_path=out)
         assert isinstance(fig, _FakeFigure)
         assert fig.saved_path == str(out)

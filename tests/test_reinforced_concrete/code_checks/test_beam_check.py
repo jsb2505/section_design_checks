@@ -98,7 +98,7 @@ def test_wrapper_methods_forward_to_sub_checks():
         suppress_warnings=True,
     )
     assert bend_result.check_name == "bending"
-    assert bending_rec.calls[-1]["M_Ed"] == pytest.approx(120.0, rel=1e-12)
+    assert bending_rec.calls[-1]["My_Ed"] == pytest.approx(120.0, rel=1e-12)
     assert bending_rec.calls[-1]["shear_reinforcement"] is default_shear_reinf
     assert bending_rec.calls[-1]["cot_theta_override"] == pytest.approx(1.4, rel=1e-12)
 

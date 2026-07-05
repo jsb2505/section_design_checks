@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
+import math
 import re
 import warnings
 
@@ -65,6 +66,22 @@ class LoadDuration(StrEnum):
             LoadDuration.LONG_TERM: 0.4,
         }[self]
 
+
+
+class CrackFacePolicy(StrEnum):
+    """
+    Policy for selecting which face(s) to check for crack width.
+
+    Attributes:
+        TOP_BOTTOM: Legacy behaviour — uses eps_top/eps_bottom to pick top or bottom face.
+        NA_NORMAL: Uses the neutral axis normal (compression direction) to identify the
+                   tension region and selects the face perpendicular to it. Required for
+                   biaxial bending with rotated NA.
+        ALL_FACES: Check all bounding faces, worst governs.
+    """
+    TOP_BOTTOM = "top_bottom"
+    NA_NORMAL = "na_normal"
+    ALL_FACES = "all_faces"
 
 
 @dataclass
@@ -254,6 +271,17 @@ class CrackingCheck(BaseCodeCheck):
         ),
     )
 
+    crack_face_policy: CrackFacePolicy = Field(
+        default=CrackFacePolicy.TOP_BOTTOM,
+        description=(
+            "Policy for selecting which face(s) to check for crack width. "
+            "TOP_BOTTOM (default): legacy behaviour using eps_top/eps_bottom. "
+            "NA_NORMAL: uses the neutral axis normal to identify the tension region "
+            "(required for biaxial bending with rotated NA). "
+            "ALL_FACES: check all bounding faces, worst governs."
+        ),
+    )
+
     # =========================
     # Internal state (private)
     # =========================
@@ -439,6 +467,7 @@ class CrackingCheck(BaseCodeCheck):
         self,
         N_Ed: float = 0.0,
         use_f_ctm_fl: bool = False,
+        na_angle_deg: Optional[float] = None,
         ) -> float:
         """
         Cracking moment M_cr (kN·m) - moment at which section first cracks.
@@ -451,6 +480,11 @@ class CrackingCheck(BaseCodeCheck):
         - W_el = elastic section modulus to tension face
         - σ_N = N_Ed / A_transformed (axial stress, compression positive)
 
+        For biaxial bending (``na_angle_deg`` provided and non-zero), the
+        second moment of area about the rotated NA direction is approximated
+        as ``I_eff = I_yy * cos²θ + I_xx * sin²θ``, and the tension face
+        distance is measured along the compression direction.
+
         Compressive axial load increases M_cr (delays cracking).
         Tensile axial load decreases M_cr (promotes cracking).
 
@@ -459,6 +493,9 @@ class CrackingCheck(BaseCodeCheck):
             use_f_ctm_fl:
                 Whether to use the mean flexural tensile strength (f_ctm,fl)
                 or mean tensile strength (f_ctm).
+            na_angle_deg: Angle of the neutral axis from horizontal (degrees).
+                When provided and non-zero, uses the biaxial I_eff
+                approximation instead of I_yy only.
 
         Returns:
             Cracking moment in kN·m
@@ -471,12 +508,42 @@ class CrackingCheck(BaseCodeCheck):
             f_ct_eff = self.concrete.f_ctm
 
         # Elastic section modulus (uncracked transformed section)
-        I_yy, _, _ = self.section.get_transformed_second_moment_area(self.E_c_eff)
+        I_xx, I_yy, _ = self.section.get_transformed_second_moment_area(self.E_c_eff)
         _, c_y, _ = self.section.get_transformed_centroid(self.E_c_eff)
         bounds = self.section.outline.bounds
-        y_tension = c_y - bounds[1]  # Distance to bottom (tension) face
 
-        W_el = I_yy / y_tension if y_tension > 0 else I_yy / (self.height / 2)
+        is_biaxial = na_angle_deg is not None and abs(na_angle_deg) > 1e-6
+
+        if is_biaxial:
+            # Biaxial approximation: I about the rotated NA direction
+            # I_eff = I_xx * cos²θ + I_yy * sin²θ  (Mohr's circle rotation)
+            # where θ is the NA angle from horizontal
+            theta = math.radians(na_angle_deg)  # type: ignore[arg-type]
+            cos_t = math.cos(theta)
+            sin_t = math.sin(theta)
+            I_eff = I_xx * cos_t ** 2 + I_yy * sin_t ** 2
+
+            # Tension face distance along compression direction
+            # Compression direction is perpendicular to NA.
+            # Use section corners projected along the compression direction.
+            dx = math.sin(theta)   # compression_direction x component
+            dy = math.cos(theta)   # compression_direction y component
+            corners = [
+                (bounds[0], bounds[1]),  # min_x, min_y
+                (bounds[2], bounds[1]),  # max_x, min_y
+                (bounds[0], bounds[3]),  # min_x, max_y
+                (bounds[2], bounds[3]),  # max_x, max_y
+            ]
+            # Project corners relative to centroid
+            cx, _, _ = self.section.get_transformed_centroid(self.E_c_eff)
+            projs = [dx * (x - cx) + dy * (y - c_y) for x, y in corners]
+            y_tension = abs(min(projs))  # Distance from centroid to tension face
+
+            W_el = I_eff / y_tension if y_tension > 0 else I_eff / (self.height / 2)
+        else:
+            # Uniaxial: I_xx about horizontal axis
+            y_tension = c_y - bounds[1]  # Distance to bottom (tension) face
+            W_el = I_xx / y_tension if y_tension > 0 else I_xx / (self.height / 2)
 
         # Axial stress contribution (compression positive increases M_cr)
         sigma_N = 0.0
@@ -496,6 +563,8 @@ class CrackingCheck(BaseCodeCheck):
         self,
         d: float,
         x: Optional[float] = None,
+        *,
+        h_override: Optional[float] = None,
     ) -> float:
         """
         Effective height of concrete in tension zone h_c,ef (EC2 §7.3.2(3), Fig 7.1).
@@ -514,11 +583,12 @@ class CrackingCheck(BaseCodeCheck):
         Args:
             d: Effective depth to tension reinforcement (mm)
             x: Neutral axis depth from compression face (mm), or None for uncracked
+            h_override: Optional section height override (for biaxial NA, use ``h_perp``).
 
         Returns:
             Effective concrete height in tension zone (mm)
         """
-        h = self.height
+        h = h_override if h_override is not None else self.height
 
         # NDP-dependent multiplier on (h - d)
         multiplier_func = get_ndp("h_c_ef_multiplier")
@@ -629,6 +699,11 @@ class CrackingCheck(BaseCodeCheck):
         where ε₁ is the greater and ε₂ the lesser tensile strain at the
         section boundaries.
 
+        .. seealso::
+            :meth:`find_k_2_from_strain_state` for biaxial bending, which
+            projects extreme fibre strains along
+            ``strain_state.compression_direction``.
+
         Returns:
             - 0.5 for pure bending (one face in compression)
             - 1.0 for pure tension (uniform tension)
@@ -663,6 +738,62 @@ class CrackingCheck(BaseCodeCheck):
 
         # Clamp to valid range [0.5, 1.0]
         return max(0.5, min(1.0, k_2))
+
+
+    def find_k_2_from_strain_state(
+        self,
+        strain_state: "StrainState",
+    ) -> float:
+        """
+        Strain distribution coefficient k_2 from a 2D strain state (EC2 §7.3.4(3)).
+
+        For biaxial bending the extreme fibre strains are projected along the
+        ``compression_direction`` of the strain state rather than taken from
+        ``eps_top``/``eps_bottom``.  The same k₂ formula applies:
+
+        k_2 = (ε₁ + ε₂) / (2 × ε₁)
+
+        where ε₁ is the greater and ε₂ the lesser tensile strain at the
+        extreme fibres along the compression direction.
+
+        Falls back to ``find_k_2(eps_top, eps_bottom)`` when the strain state
+        is uniaxial.
+
+        Args:
+            strain_state: Full 2D strain state from the solver.
+
+        Returns:
+            k_2 coefficient (0.5 to 1.0)
+        """
+        if not strain_state.is_biaxial:
+            # Uniaxial: fall back to existing method using eps_top/eps_bottom
+            bounds = self.section.outline.bounds  # (minx, miny, maxx, maxy)
+            _, cy, _ = self.section.get_transformed_centroid(self.E_c_eff)
+            eps_top = strain_state.strain_at(0.0, bounds[3] - cy)
+            eps_bottom = strain_state.strain_at(0.0, bounds[1] - cy)
+            return self.find_k_2(eps_top, eps_bottom)
+
+        # Biaxial: project all concrete fibres along compression_direction
+        # to find extreme fibre strains
+        diag = self._get_diagram()
+        fibre_x = diag._concrete_fibre_x
+        fibre_y = diag._concrete_fibre_y
+        cx, cy = diag._centroid_x, diag._centroid_y
+
+        min_proj, max_proj = strain_state.perpendicular_extent(
+            fibre_x, fibre_y, cx, cy,
+        )
+
+        # Strain at extreme fibres along compression direction.
+        # Because the strain field is planar, all points at the same
+        # projection along the gradient have identical strain.
+        dx, dy = strain_state.compression_direction
+        eps_tension = strain_state.strain_at(dx * min_proj, dy * min_proj)
+        eps_compression = strain_state.strain_at(dx * max_proj, dy * max_proj)
+
+        # Reuse existing k_2 formula (eps_compression maps to "top",
+        # eps_tension maps to "bottom" in the projected sense)
+        return self.find_k_2(eps_compression, eps_tension)
 
 
     def find_maximum_crack_spacing(
@@ -1310,7 +1441,8 @@ class CrackingCheck(BaseCodeCheck):
         bar_spacing: float,
         face: Optional[str] = None,
         h_c_ef_limit: Optional[float] = None,
-        strain_state: Optional[StrainState] = None,
+        strain_state: Optional["StrainState"] = None,
+        breadth_override: Optional[float] = None,
     ) -> float:
         """
         Effective concrete area in tension A_c,eff (EC2 §7.3.4, Figure 7.2).
@@ -1333,13 +1465,15 @@ class CrackingCheck(BaseCodeCheck):
             face: For net tension, restrict to bars near this face
             h_c_ef_limit: Only consider bars within this distance of the face
             strain_state: Optional full 2D strain state for biaxial evaluation.
+            breadth_override: Optional breadth override (for biaxial NA, use ``b_perp``).
 
         Returns:
             Effective concrete area in tension (mm²)
         """
+        b_eff = breadth_override if breadth_override is not None else self.breadth
         spacing_limit = 5 * (cover + phi_eq / 2)
         if bar_spacing <= spacing_limit:
-            return h_c_ef * self.breadth
+            return h_c_ef * b_eff
 
         # --- Collect qualifying bars with per-bar properties ---
         use_biaxial = strain_state is not None and strain_state.is_biaxial
@@ -1407,7 +1541,7 @@ class CrackingCheck(BaseCodeCheck):
                 qualifying.append((float(pos.x), diameter, bar_cover))
 
         if not qualifying:
-            return h_c_ef * self.breadth
+            return h_c_ef * b_eff
 
         # Sum per-bar effective zone widths, capped at section edges
         total_width = 0.0
@@ -1418,7 +1552,7 @@ class CrackingCheck(BaseCodeCheck):
             total_width += max(0.0, right - left)
 
         # Cap at full breadth
-        total_width = min(total_width, self.breadth)
+        total_width = min(total_width, b_eff)
 
         return h_c_ef * total_width
 
@@ -1575,6 +1709,7 @@ class CrackingCheck(BaseCodeCheck):
         M_Ed: float,
         N_Ed: float,
         ignore_compression_steel: bool = False,
+        _mz_kw: Optional[dict] = None,
     ) -> Tuple[bool, float, float, Optional[float], Optional[float]]:
         """
         Determine cracked state using an uncracked solver pass.
@@ -1584,9 +1719,10 @@ class CrackingCheck(BaseCodeCheck):
         """
         probe_diagram = self._get_uncracked_diagram(ignore_compression_steel)
         eps_top, eps_bottom = probe_diagram.find_strains_for_MN(
-            M_target=M_Ed,
+            My_target=M_Ed,
             N_target=N_Ed,
             strict=True,
+            **(_mz_kw or {}),
         )
 
         # No concrete tension zone -> uncracked for cracking-width purposes
@@ -1680,6 +1816,88 @@ class CrackingCheck(BaseCodeCheck):
 
 
     # ===============================================
+    # Biaxial geometry helpers
+    # ===============================================
+
+    def _compute_biaxial_section_extents(
+        self,
+        strain_state: "StrainState",
+    ) -> tuple[float, float]:
+        """
+        Compute section height and breadth for a rotated NA.
+
+        Returns:
+            ``(h_perp, b_perp)`` where ``h_perp`` is the section extent along
+            the compression direction (replaces ``self.height``) and ``b_perp``
+            is the extent perpendicular to it (replaces ``self.breadth``).
+        """
+        import numpy as np
+        from shapely.geometry import Polygon
+
+        dx, dy = strain_state.compression_direction
+        if dx == 0.0 and dy == 0.0:
+            return (self.height, self.breadth)
+
+        # Get section boundary vertices
+        outline: Polygon = self.section.outline
+        coords = np.array(outline.exterior.coords)
+        cx, cy = self.section.get_centroid()
+
+        # Project onto compression direction => h_perp
+        proj_comp = dx * (coords[:, 0] - cx) + dy * (coords[:, 1] - cy)
+        h_perp = float(np.max(proj_comp) - np.min(proj_comp))
+
+        # Project onto perpendicular direction => b_perp
+        # Perpendicular to (dx, dy) is (-dy, dx)
+        proj_perp = -dy * (coords[:, 0] - cx) + dx * (coords[:, 1] - cy)
+        b_perp = float(np.max(proj_perp) - np.min(proj_perp))
+
+        return (h_perp, b_perp)
+
+    def _compute_biaxial_bar_face_distance(
+        self,
+        pos: Point2D,
+        strain_state: "StrainState",
+    ) -> float:
+        """
+        Distance from bar to section face along compression direction (tension side).
+
+        For biaxial NA, measures how far the bar is from the tension-side face
+        along the compression direction (replaces ``pos.y - y_min`` / ``y_max - pos.y``).
+        """
+        import numpy as np
+        from shapely.geometry import Polygon
+
+        dx, dy = strain_state.compression_direction
+        cx, cy = self.section.get_centroid()
+
+        outline: Polygon = self.section.outline
+        coords = np.array(outline.exterior.coords)
+
+        # All projections along compression direction
+        proj_comp = dx * (coords[:, 0] - cx) + dy * (coords[:, 1] - cy)
+        min_proj = float(np.min(proj_comp))  # tension extreme
+
+        bar_proj = dx * (float(pos.x) - cx) + dy * (float(pos.y) - cy)
+        return bar_proj - min_proj
+
+    def _compute_biaxial_cover(
+        self,
+        pos: Point2D,
+        diameter: float,
+    ) -> float:
+        """
+        Geometric cover from bar to nearest section boundary (Euclidean).
+
+        Uses Shapely distance from bar centre to section outline minus bar radius.
+        """
+        from shapely.geometry import Point
+
+        bar_centre = Point(float(pos.x), float(pos.y))
+        dist_to_boundary = self.section.outline.exterior.distance(bar_centre)
+        return max(0.0, dist_to_boundary - diameter / 2.0)
+
+    # ===============================================
     # Face-based crack width calculation
     # ===============================================
 
@@ -1694,6 +1912,8 @@ class CrackingCheck(BaseCodeCheck):
         actual_bar_diameter: Optional[float] = None,
         cover_override: Optional[float] = None,
         strain_state: Optional["StrainState"] = None,
+        h_override: Optional[float] = None,
+        breadth_override: Optional[float] = None,
     ) -> CrackingResult:
         """
         Calculate crack width for a single face using iterative h_c,ef.
@@ -1713,11 +1933,13 @@ class CrackingCheck(BaseCodeCheck):
             x: Neutral axis depth from compression face (mm), or None
             is_net_tension: True if both faces are in tension
             suppress_warnings: If True, suppress warnings (used by viewer)
+            h_override: Optional section height override (for biaxial NA, use ``h_perp``).
+            breadth_override: Optional breadth override (for biaxial NA, use ``b_perp``).
 
         Returns:
             CrackingResult with all intermediate values
         """
-        h = self.height
+        h = h_override if h_override is not None else self.height
 
         # --- Step 1: Initial bar set (all tension bars for this face) ---
         A_s, mean_cover, bar_sizes = self._get_tension_rebar_info(
@@ -1764,7 +1986,7 @@ class CrackingCheck(BaseCodeCheck):
                 else:
                     h_c_ef = min(2.5 * d_face, h / 2)
             else:
-                h_c_ef = self.find_h_c_ef(d=d, x=x)
+                h_c_ef = self.find_h_c_ef(d=d, x=x, h_override=h_override)
 
             # Filter bars to those within h_c,ef of the tension face
             A_s_filtered, mean_cover_filtered, bar_sizes_filtered = (
@@ -1885,6 +2107,7 @@ class CrackingCheck(BaseCodeCheck):
             cover=cover, phi_eq=phi_eq, bar_spacing=bar_spacing,
             face=face if is_net_tension else None,
             h_c_ef_limit=h_c_ef,
+            breadth_override=breadth_override,
             strain_state=strain_state,
         )
 
@@ -1899,7 +2122,10 @@ class CrackingCheck(BaseCodeCheck):
         )
 
         # k_2 (strain distribution coefficient)
-        k_2 = self.find_k_2(eps_top, eps_bottom)
+        if strain_state is not None and strain_state.is_biaxial:
+            k_2 = self.find_k_2_from_strain_state(strain_state)
+        else:
+            k_2 = self.find_k_2(eps_top, eps_bottom)
 
         # s_r,max
         has_tension_reinforcement = A_s > 0
@@ -1959,8 +2185,9 @@ class CrackingCheck(BaseCodeCheck):
     def perform_check(
         self,
         *,
-        M_Ed: float,
+        My_Ed: Optional[float] = None,
         N_Ed: float = 0.0,
+        Mz_Ed: float = 0.0,
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
@@ -1973,7 +2200,11 @@ class CrackingCheck(BaseCodeCheck):
         Perform crack width check for applied serviceability loads.
 
         Args:
-            M_Ed: Design moment at SLS (kN·m)
+            My_Ed: Design major-axis moment at SLS (kN·m).
+                   Formerly named M_Ed — passing M_Ed=... is still accepted
+                   but will raise a DeprecationWarning.
+            Mz_Ed: Design minor-axis moment at SLS (kN·m, default 0).
+                   Requires free_neutral_axis=True when non-zero.
             N_Ed: Design axial force at SLS (kN, compression positive)
             warning_threshold: Utilization threshold for warnings
             ignore_compression_steel: If True, ignore compression reinforcement
@@ -1994,8 +2225,24 @@ class CrackingCheck(BaseCodeCheck):
         Returns:
             CheckResult with crack width utilization
         """
+        # Backwards-compatibility shim: accept legacy M_Ed keyword argument.
+        if "M_Ed" in kwargs:
+            if My_Ed is not None:
+                raise TypeError("Cannot pass both 'M_Ed' and 'My_Ed' to perform_check()")
+            warnings.warn(
+                "The 'M_Ed' parameter of CrackingCheck.perform_check() has been renamed to "
+                "'My_Ed'. Please update your call sites. 'M_Ed' will be removed in a future "
+                "version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if My_Ed is None:
+            raise TypeError("perform_check() missing required keyword argument: 'My_Ed'")
+
         return self._check_single_case(
-            M_Ed=M_Ed,
+            My_Ed=My_Ed,
+            Mz_Ed=Mz_Ed,
             N_Ed=N_Ed,
             warning_threshold=warning_threshold,
             ignore_compression_steel=ignore_compression_steel,
@@ -2009,7 +2256,8 @@ class CrackingCheck(BaseCodeCheck):
     def _check_single_case(
         self,
         *,
-        M_Ed: float,
+        My_Ed: float,
+        Mz_Ed: float = 0.0,
         N_Ed: float,
         warning_threshold: float,
         ignore_compression_steel: bool = False,
@@ -2019,6 +2267,19 @@ class CrackingCheck(BaseCodeCheck):
         cover_override: Optional[float] = None,
     ) -> CheckResult:
         """Internal implementation of crack check."""
+        # Validate Mz_Ed requires free neutral axis
+        if abs(Mz_Ed) > 1e-9 and not self.free_neutral_axis:
+            raise ValueError(
+                "Mz_Ed != 0 requires free_neutral_axis=True. "
+                "Set free_neutral_axis=True on the CrackingCheck to enable biaxial bending."
+            )
+
+        # Local alias so the rest of the method body can use M_Ed
+        M_Ed = My_Ed
+
+        # Build keyword dict for Mz_target (only passed when non-zero)
+        _mz_kw = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
+
         if (
             not self.section.rebar_groups
             or sum(len(group.positions) for group in self.section.rebar_groups) == 0
@@ -2050,6 +2311,7 @@ class CrackingCheck(BaseCodeCheck):
                     M_Ed=M_Ed,
                     N_Ed=N_Ed,
                     ignore_compression_steel=ignore_compression_steel,
+                    _mz_kw=_mz_kw,
                 )
             except ValueError as e:
                 # If uncracked-state equilibrium cannot be solved, continue with
@@ -2065,9 +2327,9 @@ class CrackingCheck(BaseCodeCheck):
                 code_reference="EC2 §7.3",
                 warning_threshold=warning_threshold,
                 utilization=0.0,
-                demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
+                demand_components={"My": float(M_Ed), "Mz": float(Mz_Ed), "N": float(N_Ed)},
                 capacity_components={"w_k_limit": self.w_k_limit},
-                units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm"},
+                units_components={"My": "kN·m", "Mz": "kN·m", "N": "kN", "w_k_limit": "mm"},
                 message="Section uncracked (solver: concrete tension <= cracking limit)",
                 details={
                     "M_Ed": float(M_Ed),
@@ -2103,9 +2365,10 @@ class CrackingCheck(BaseCodeCheck):
         diagram_for_check = self._get_diagram(ignore_compression_steel)
         try:
             eps_top, eps_bottom = diagram_for_check.find_strains_for_MN(
-                M_target=M_Ed,
+                My_target=M_Ed,
                 N_target=N_Ed,
                 strict=True,
+                **_mz_kw,
             )
         except ValueError as e:
             solver_error = str(e)
@@ -2116,9 +2379,9 @@ class CrackingCheck(BaseCodeCheck):
                 code_reference="EC2 §7.3",
                 warning_threshold=warning_threshold,
                 utilization=float("inf"),
-                demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
+                demand_components={"My": float(M_Ed), "Mz": float(Mz_Ed), "N": float(N_Ed)},
                 capacity_components={"w_k_limit": self.w_k_limit},
-                units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm"},
+                units_components={"My": "kN·m", "Mz": "kN·m", "N": "kN", "w_k_limit": "mm"},
                 message=f"Failed to solve strain state: {e}",
                 details={
                     "error": solver_error,
@@ -2131,7 +2394,7 @@ class CrackingCheck(BaseCodeCheck):
             )
 
         strain_state_local = diagram_for_check.find_strain_state_for_MN(
-            M_target=M_Ed, N_target=N_Ed,
+            My_target=M_Ed, N_target=N_Ed, **_mz_kw,
         )
 
         # Step 2.5: Stress limitation checks (EC2 §7.2) and non-linear creep
@@ -2166,9 +2429,10 @@ class CrackingCheck(BaseCodeCheck):
                     diagram_nl = self._build_diagram_with_E_c_eff(E_c_eff_NL, ignore_compression_steel)
                     try:
                         eps_top, eps_bottom = diagram_nl.find_strains_for_MN(
-                            M_target=M_Ed,
+                            My_target=M_Ed,
                             N_target=N_Ed,
                             strict=True,
+                            **_mz_kw,
                         )
                     except ValueError as exc:
                         solver_error = str(exc)
@@ -2178,9 +2442,9 @@ class CrackingCheck(BaseCodeCheck):
                             code_reference="EC2 §7.3",
                             warning_threshold=warning_threshold,
                             utilization=float("inf"),
-                            demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
+                            demand_components={"My": float(M_Ed), "Mz": float(Mz_Ed), "N": float(N_Ed)},
                             capacity_components={"w_k_limit": self.w_k_limit},
-                            units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm"},
+                            units_components={"My": "kN·m", "Mz": "kN·m", "N": "kN", "w_k_limit": "mm"},
                             message="Failed to solve strain state after non-linear creep update",
                             details={
                                 "error": solver_error,
@@ -2199,7 +2463,7 @@ class CrackingCheck(BaseCodeCheck):
                     creep_coefficient_used = phi_NL
                     diagram_for_check = diagram_nl
                     strain_state_local = diagram_nl.find_strain_state_for_MN(
-                        M_target=M_Ed, N_target=N_Ed,
+                        My_target=M_Ed, N_target=N_Ed, **_mz_kw,
                     )
                     sigma_c_peak = self._get_peak_concrete_stress(
                         eps_top, eps_bottom, diagram_for_check,
@@ -2214,9 +2478,9 @@ class CrackingCheck(BaseCodeCheck):
                 code_reference="EC2 §7.3",
                 warning_threshold=warning_threshold,
                 utilization=0.0,
-                demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
+                demand_components={"My": float(M_Ed), "Mz": float(Mz_Ed), "N": float(N_Ed)},
                 capacity_components={"w_k_limit": self.w_k_limit},
-                units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm"},
+                units_components={"My": "kN·m", "Mz": "kN·m", "N": "kN", "w_k_limit": "mm"},
                 message="Net compression — no cracking possible",
                 details={
                     "M_Ed": float(M_Ed),
@@ -2254,10 +2518,38 @@ class CrackingCheck(BaseCodeCheck):
         # --- Determine strain regime and delegate to face-based helper ---
         comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
         is_net_tension = comp_face is None
+
+        # Biaxial face policy: auto-upgrade TOP_BOTTOM → NA_NORMAL when biaxial
+        _h_override: Optional[float] = None
+        _b_override: Optional[float] = None
+        effective_policy = self.crack_face_policy
+        if (
+            strain_state_local is not None
+            and strain_state_local.is_biaxial
+            and effective_policy == CrackFacePolicy.TOP_BOTTOM
+        ):
+            effective_policy = CrackFacePolicy.NA_NORMAL
+            if not suppress_warnings:
+                warnings.warn(
+                    "Biaxial strain state detected: auto-upgrading crack_face_policy "
+                    "from TOP_BOTTOM to NA_NORMAL for rotated neutral axis.",
+                    stacklevel=3,
+                )
+
+        if (
+            effective_policy == CrackFacePolicy.NA_NORMAL
+            and strain_state_local is not None
+            and strain_state_local.is_biaxial
+        ):
+            h_perp, b_perp = self._compute_biaxial_section_extents(strain_state_local)
+            _h_override = h_perp
+            _b_override = b_perp
+
+        section_h = _h_override if _h_override is not None else self.height
         x = flexure_utils.calculate_neutral_axis_depth_from_strains(
             eps_top=eps_top,
             eps_bottom=eps_bottom,
-            section_height=self.height,
+            section_height=section_h,
         )
 
         if is_net_tension:
@@ -2282,6 +2574,8 @@ class CrackingCheck(BaseCodeCheck):
                     eps_top, eps_bottom, face=face_candidate,
                     x=x, is_net_tension=True,
                     strain_state=strain_state_local,
+                    h_override=_h_override,
+                    breadth_override=_b_override,
                     **crack_width_kwargs,
                 )
                 candidate_w_k = self._require_result_value(cr_candidate.w_k, "w_k")
@@ -2310,6 +2604,8 @@ class CrackingCheck(BaseCodeCheck):
                 eps_top, eps_bottom, face=tension_face,
                 x=x, is_net_tension=False,
                 strain_state=strain_state_local,
+                h_override=_h_override,
+                breadth_override=_b_override,
                 **crack_width_kwargs,
             )
             cr.governing_face = tension_face
@@ -2353,7 +2649,10 @@ class CrackingCheck(BaseCodeCheck):
 
         # Build utilization and result
         utilization = w_k / self.w_k_limit if self.w_k_limit > 0 else float("inf")
-        k_2 = self.find_k_2(eps_top, eps_bottom)
+        if strain_state_local is not None and strain_state_local.is_biaxial:
+            k_2 = self.find_k_2_from_strain_state(strain_state_local)
+        else:
+            k_2 = self.find_k_2(eps_top, eps_bottom)
 
         details = {
             "M_Ed": float(M_Ed),
@@ -2428,7 +2727,7 @@ class CrackingCheck(BaseCodeCheck):
 
     def calculate_detailed(
         self,
-        M_Ed: float,
+        My_Ed: Optional[float] = None,
         N_Ed: float = 0.0,
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
@@ -2436,6 +2735,8 @@ class CrackingCheck(BaseCodeCheck):
         actual_bar_diameter: Optional[float] = None,
         cover_override: Optional[float] = None,
         skip_stress_checks: bool = False,
+        Mz_Ed: float = 0.0,
+        **kwargs,
     ) -> CrackingResult:
         """
         Calculate detailed cracking results without creating CheckResult.
@@ -2443,8 +2744,10 @@ class CrackingCheck(BaseCodeCheck):
         Useful for parametric studies or when you need the raw values.
 
         Args:
-            M_Ed: Design moment at SLS (kN·m)
+            My_Ed: Design major-axis moment at SLS (kN·m).
+                   Formerly named M_Ed — passing M_Ed=... is still accepted.
             N_Ed: Design axial force at SLS (kN, compression positive)
+            Mz_Ed: Design minor-axis moment at SLS (kN·m, default 0).
             ignore_compression_steel: If True, ignore compression reinforcement
             force_cracked: If True, skip the uncracked solver probe and proceed
                 directly to cracked analysis.
@@ -2463,6 +2766,31 @@ class CrackingCheck(BaseCodeCheck):
             ``solved=False`` with ``solver_error``/residuals populated and
             undefined response quantities set to ``None``.
         """
+        # Backwards-compatibility shim: accept legacy M_Ed positional/keyword argument.
+        if "M_Ed" in kwargs:
+            if My_Ed is not None:
+                raise TypeError("Cannot pass both 'M_Ed' and 'My_Ed' to calculate_detailed()")
+            warnings.warn(
+                "The 'M_Ed' parameter of CrackingCheck.calculate_detailed() has been renamed to "
+                "'My_Ed'. Please update your call sites.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if My_Ed is None:
+            raise TypeError("calculate_detailed() missing required argument: 'My_Ed'")
+
+        # Validate Mz_Ed requires free neutral axis
+        if abs(Mz_Ed) > 1e-9 and not self.free_neutral_axis:
+            raise ValueError(
+                "Mz_Ed != 0 requires free_neutral_axis=True. "
+                "Set free_neutral_axis=True on the CrackingCheck to enable biaxial bending."
+            )
+
+        # Local alias
+        M_Ed = My_Ed
+        _mz_kw = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
+
         # Determine cracked state using an uncracked solver probe.
         if force_cracked:
             is_cracked = True
@@ -2472,6 +2800,7 @@ class CrackingCheck(BaseCodeCheck):
                     M_Ed=M_Ed,
                     N_Ed=N_Ed,
                     ignore_compression_steel=ignore_compression_steel,
+                    _mz_kw=_mz_kw,
                 )
             except ValueError:
                 # If uncracked-state equilibrium cannot be solved, continue with
@@ -2497,7 +2826,7 @@ class CrackingCheck(BaseCodeCheck):
         diagram_for_check = self._get_diagram(ignore_compression_steel)
         try:
             eps_top, eps_bottom = diagram_for_check.find_strains_for_MN(
-                M_Ed, N_Ed, strict=True
+                M_Ed, N_Ed, strict=True, **_mz_kw,
             )
         except ValueError as exc:
             return self._build_unsolved_cracking_result(
@@ -2509,7 +2838,7 @@ class CrackingCheck(BaseCodeCheck):
             )
 
         strain_state_local = diagram_for_check.find_strain_state_for_MN(
-            M_target=M_Ed, N_target=N_Ed,
+            My_target=M_Ed, N_target=N_Ed, **_mz_kw,
         )
 
         # Stress limitation and non-linear creep (same logic as _check_single_case)
@@ -2535,7 +2864,7 @@ class CrackingCheck(BaseCodeCheck):
                         break
                     diagram_nl = self._build_diagram_with_E_c_eff(E_c_eff_NL, ignore_compression_steel)
                     try:
-                        eps_top, eps_bottom = diagram_nl.find_strains_for_MN(M_Ed, N_Ed, strict=True)
+                        eps_top, eps_bottom = diagram_nl.find_strains_for_MN(M_Ed, N_Ed, strict=True, **_mz_kw)
                     except ValueError as exc:
                         return self._build_unsolved_cracking_result(
                             is_cracked=True,
@@ -2549,7 +2878,7 @@ class CrackingCheck(BaseCodeCheck):
                     creep_coefficient_used = phi_NL
                     diagram_for_check = diagram_nl
                     strain_state_local = diagram_nl.find_strain_state_for_MN(
-                        M_target=M_Ed, N_target=N_Ed,
+                        My_target=M_Ed, N_target=N_Ed, **_mz_kw,
                     )
                     sigma_c_peak = self._get_peak_concrete_stress(
                         eps_top, eps_bottom, diagram_nl,
@@ -2571,8 +2900,29 @@ class CrackingCheck(BaseCodeCheck):
         # --- Determine strain regime and delegate to face-based helper ---
         comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
         is_net_tension = comp_face is None
+
+        # Biaxial face policy: auto-upgrade TOP_BOTTOM → NA_NORMAL when biaxial
+        _h_override_d: Optional[float] = None
+        _b_override_d: Optional[float] = None
+        effective_policy_d = self.crack_face_policy
+        if (
+            strain_state_local is not None
+            and strain_state_local.is_biaxial
+            and effective_policy_d == CrackFacePolicy.TOP_BOTTOM
+        ):
+            effective_policy_d = CrackFacePolicy.NA_NORMAL
+        if (
+            effective_policy_d == CrackFacePolicy.NA_NORMAL
+            and strain_state_local is not None
+            and strain_state_local.is_biaxial
+        ):
+            h_perp_d, b_perp_d = self._compute_biaxial_section_extents(strain_state_local)
+            _h_override_d = h_perp_d
+            _b_override_d = b_perp_d
+
+        section_h_d = _h_override_d if _h_override_d is not None else self.height
         x = flexure_utils.calculate_neutral_axis_depth_from_strains(
-            eps_top, eps_bottom, self.height,
+            eps_top, eps_bottom, section_h_d,
         )
 
         if is_net_tension:
@@ -2597,6 +2947,8 @@ class CrackingCheck(BaseCodeCheck):
                     eps_top, eps_bottom, face=face_candidate,
                     x=x, is_net_tension=True,
                     strain_state=strain_state_local,
+                    h_override=_h_override_d,
+                    breadth_override=_b_override_d,
                     **crack_width_kwargs,
                 )
                 candidate_w_k = self._require_result_value(result_candidate.w_k, "w_k")
@@ -2625,6 +2977,8 @@ class CrackingCheck(BaseCodeCheck):
                 eps_top, eps_bottom, face=tension_face,
                 x=x, is_net_tension=False,
                 strain_state=strain_state_local,
+                h_override=_h_override_d,
+                breadth_override=_b_override_d,
                 **crack_width_kwargs,
             )
             result.governing_face = tension_face

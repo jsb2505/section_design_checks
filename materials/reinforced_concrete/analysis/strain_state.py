@@ -95,6 +95,38 @@ class StrainState:
         dx, dy = self.compression_direction
         return dx * x + dy * y
 
+    def perpendicular_extent(
+        self,
+        fibre_x: npt.NDArray[np.float64],
+        fibre_y: npt.NDArray[np.float64],
+        cx: float,
+        cy: float,
+    ) -> Tuple[float, float]:
+        """
+        Range of all fibres projected along :attr:`compression_direction`.
+
+        Returns:
+            ``(min_proj, max_proj)`` where *max_proj* corresponds to the extreme
+            compression fibre and *min_proj* to the extreme tension fibre.
+        """
+        dx, dy = self.compression_direction
+        if dx == 0.0 and dy == 0.0:
+            return (0.0, 0.0)
+        proj = dx * (fibre_x - cx) + dy * (fibre_y - cy)
+        return (float(np.min(proj)), float(np.max(proj)))
+
+    def get_na_angle_deg(self) -> float:
+        """
+        Neutral axis angle from horizontal (degrees).
+
+        Uses :attr:`na_angle_deg` if set, otherwise computes from
+        ``atan2(plane_a, plane_b)`` (the angle the strain gradient makes with
+        the y-axis, which equals the NA rotation from horizontal).
+        """
+        if self.na_angle_deg is not None:
+            return self.na_angle_deg
+        return math.degrees(math.atan2(self.plane_a, self.plane_b))
+
     def to_end_strains(self) -> Tuple[float, float]:
         """Return (eps_top, eps_bottom) for legacy API compatibility."""
         return (self.eps_top, self.eps_bottom)

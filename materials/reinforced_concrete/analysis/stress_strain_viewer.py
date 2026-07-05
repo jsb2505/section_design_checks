@@ -1,9 +1,12 @@
+import math
+import warnings
 from pathlib import Path
 from typing import Any, Optional, Tuple, Literal
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 
 from materials.reinforced_concrete.analysis import MNInteractionDiagram
+from materials.reinforced_concrete.analysis.strain_state import StrainState
 from materials.core.units import FORCE_TO_KN, ForceUnit, MomentUnit, to_kn, to_knm
 
 
@@ -14,70 +17,83 @@ from materials.core.units import FORCE_TO_KN, ForceUnit, MomentUnit, to_kn, to_k
 @dataclass(frozen=True)
 class _StressStrainPlotState:
     # inputs
-    M_Ed: float
+    My_Ed: float
     N_Ed: float
+    Mz_Ed: float = 0.0
 
     # solved end strains
-    eps_top: float
-    eps_bottom: float
+    eps_top: float = 0.0
+    eps_bottom: float = 0.0
 
     # fibre fields (all same length)
-    forces_N: np.ndarray
-    areas: np.ndarray
-    x: np.ndarray
-    y: np.ndarray
-    strains: np.ndarray
-    stresses: np.ndarray
-    conc_mask: np.ndarray
-    steel_mask: np.ndarray
+    forces_N: np.ndarray = field(default_factory=lambda: np.array([]))
+    areas: np.ndarray = field(default_factory=lambda: np.array([]))
+    x: np.ndarray = field(default_factory=lambda: np.array([]))
+    y: np.ndarray = field(default_factory=lambda: np.array([]))
+    strains: np.ndarray = field(default_factory=lambda: np.array([]))
+    stresses: np.ndarray = field(default_factory=lambda: np.array([]))
+    conc_mask: np.ndarray = field(default_factory=lambda: np.array([]))
+    steel_mask: np.ndarray = field(default_factory=lambda: np.array([]))
 
     # section geometry
-    y_top: float
-    y_bottom: float
-    h: float
+    y_top: float = 0.0
+    y_bottom: float = 0.0
+    h: float = 0.0
 
     # neutral axis
-    y_na: float | None
-    na_in_section: bool
+    y_na: float | None = None
+    na_in_section: bool = False
 
     # resultants (kN)
-    F_c_comp: float
-    F_c_tens: float
-    F_s_comp: float
-    F_s_tens: float
+    F_c_comp: float = 0.0
+    F_c_tens: float = 0.0
+    F_s_comp: float = 0.0
+    F_s_tens: float = 0.0
 
-    # centroids (mm)
-    y_c_comp: float | None
-    y_c_tens: float | None
-    y_s_comp: float | None
-    y_s_tens: float | None
+    # centroids (mm) — y-only for uniaxial, (x, y) for biaxial
+    y_c_comp: float | None = None
+    y_c_tens: float | None = None
+    y_s_comp: float | None = None
+    y_s_tens: float | None = None
 
     # overall compression/tension centroids + lever arm
-    y_C: float | None
-    y_T: float | None
-    z: float | None
+    y_C: float | None = None
+    y_T: float | None = None
+    x_C: float | None = None
+    x_T: float | None = None
+    z: float | None = None
 
     # stress range info for scaling / axes
-    max_stress_pos: float
-    min_stress_neg: float
-    force_scale: float
+    max_stress_pos: float = 1.0
+    min_stress_neg: float = -1.0
+    force_scale: float = 0.2
 
-    fibre_i: np.ndarray | None
-    fibre_j: np.ndarray | None
-    bbox: tuple[float, float, float, float]
+    fibre_i: np.ndarray | None = None
+    fibre_j: np.ndarray | None = None
+    bbox: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
 
     # Equilibrium check: if solver hit bounds, the achieved forces won't match applied
-    section_failed: bool  # True if equilibrium cannot be achieved (loads exceed capacity)
-    achieved_N: float  # Actual axial force from the computed strain state
-    achieved_M: float  # Actual moment from the computed strain state
-    equilibrium_error_N: float  # |N_achieved - N_Ed| in kN
-    equilibrium_error_M: float  # |M_achieved - M_Ed| in kN·m
+    section_failed: bool = False
+    achieved_N: float = 0.0
+    achieved_M: float = 0.0
+    equilibrium_error_N: float = 0.0
+    equilibrium_error_M: float = 0.0
 
     # Capacity at the applied axial force level
-    M_Rd_pos: float | None  # positive moment capacity (kN·m)
-    M_Rd_neg: float | None  # negative moment capacity (kN·m)
-    N_Rd: float | None  # capped axial level used (kN)
-    utilisation: float | None  # utilisation ratio
+    M_Rd_pos: float | None = None
+    M_Rd_neg: float | None = None
+    N_Rd: float | None = None
+    utilisation: float | None = None
+
+    # Biaxial / 2D strain state
+    strain_state: Any = None  # StrainState or None
+    is_biaxial: bool = False
+    na_angle_deg: float | None = None
+
+    @property
+    def M_Ed(self) -> float:
+        """Legacy alias for My_Ed."""
+        return self.My_Ed
 
 
 class StressStrainViewer:
@@ -86,20 +102,22 @@ class StressStrainViewer:
  
     def plot(
         self,
-        M_Ed: float,
-        N_Ed: float,
+        My_Ed: Optional[float] = None,
+        N_Ed: float = 0.0,
         *,
+        Mz_Ed: float = 0.0,
         save_path: Optional[str | Path] = None,
         show: bool = True,
         title: Optional[str] = None,
         width: int = 1100,
         height: int = 1000,
         section_render: Literal["points", "filled"] = "points",
+        **kwargs,
     ) -> Any:
         """
         Visualize stress and strain distribution for a given load case.
 
-        Solves for the strain state (ε_top, ε_bottom) that produces the target (M_Ed, N_Ed),
+        Solves for the strain state that produces the target (My_Ed, N_Ed, Mz_Ed),
         then displays in a 2×2 quadrant layout:
         - Top-left: Section cross-section with stress colour map (true 1:1 aspect ratio)
         - Top-right: Results annotation (load case, capacity, resultants)
@@ -107,8 +125,9 @@ class StressStrainViewer:
         - Bottom-right: Stress profile (concrete stress block and steel forces)
 
         Args:
-            M_Ed: Applied moment (kN·m)
+            My_Ed: Applied major-axis moment (kN·m)
             N_Ed: Applied axial force (kN, compression positive)
+            Mz_Ed: Applied minor-axis moment (kN·m), default 0.0
             save_path: If provided, save plot to this file path (HTML format)
             show: If True, display plot (fig.show())
             title: Custom plot title (optional)
@@ -116,6 +135,19 @@ class StressStrainViewer:
             height: Figure height in pixels
             section_render: Concrete rendering mode ('points' or 'filled')
         """
+        # Legacy compat: accept M_Ed as keyword argument
+        if "M_Ed" in kwargs:
+            warnings.warn(
+                "M_Ed is deprecated; use My_Ed instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            My_Ed = kwargs.pop("M_Ed")
+        if kwargs:
+            raise TypeError(f"plot() got unexpected keyword arguments: {list(kwargs)}")
+        if My_Ed is None:
+            raise TypeError("plot() missing required argument: 'My_Ed'")
+
         try:
             import plotly.graph_objects as go
             from plotly.subplots import make_subplots
@@ -124,7 +156,7 @@ class StressStrainViewer:
                 "Plotly is required for plotting. Install with: pip install plotly"
             ) from e
 
-        state = self._build_stress_strain_plot_state(M_Ed=M_Ed, N_Ed=N_Ed)
+        state = self._build_stress_strain_plot_state(My_Ed=My_Ed, N_Ed=N_Ed, Mz_Ed=Mz_Ed)
 
         fig = make_subplots(
             rows=2,
@@ -154,9 +186,12 @@ class StressStrainViewer:
 
         return fig
 
-    def _get_capacity(self, *, M_Ed: float, N_Ed: float) -> dict:
+    def _get_capacity(self, *, My_Ed: float, N_Ed: float, Mz_Ed: float = 0.0) -> dict:
         """Get M_Rd, N_Rd and utilisation via the capacity vector method."""
-        result = self.diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed)
+        if abs(Mz_Ed) > 1e-9 and hasattr(self.diagram, "get_capacity_biaxial"):
+            result = self.diagram.get_capacity_biaxial(N_Ed=N_Ed, My_Ed=My_Ed, Mz_Ed=Mz_Ed)
+        else:
+            result = self.diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=My_Ed)
         return dict(
             M_Rd_pos=float(result.M_Rd) if result.M_Rd is not None else None,
             M_Rd_neg=None,
@@ -167,21 +202,41 @@ class StressStrainViewer:
     # -----------------------------
     # Build plot state
     # -----------------------------
-    def _build_stress_strain_plot_state(self, *, M_Ed: float, N_Ed: float) -> _StressStrainPlotState:
+    def _build_stress_strain_plot_state(
+        self, *, My_Ed: float, N_Ed: float, Mz_Ed: float = 0.0,
+    ) -> _StressStrainPlotState:
         d = self.diagram  # shorthand
+        biaxial = abs(Mz_Ed) > 1e-9
 
         # 1) Solve for strain state
+        mz_kw = {"Mz_target": Mz_Ed} if biaxial else {}
+        strain_state_obj: Optional[StrainState] = None
         try:
-            eps_top, eps_bottom = d.find_strains_for_MN(M_target=M_Ed, N_target=N_Ed)
+            if biaxial and hasattr(d, "find_strain_state_for_MN"):
+                strain_state_obj = d.find_strain_state_for_MN(
+                    My_target=My_Ed, N_target=N_Ed, **mz_kw,
+                )
+                eps_top = strain_state_obj.eps_top
+                eps_bottom = strain_state_obj.eps_bottom
+            else:
+                eps_top, eps_bottom = d.find_strains_for_MN(My_target=My_Ed, N_target=N_Ed)
         except ValueError as e:
             raise ValueError(
-                f"Cannot find strain state for M_Ed={M_Ed:.1f} kN·m, N_Ed={N_Ed:.1f} kN. "
+                f"Cannot find strain state for My_Ed={My_Ed:.1f} kN·m, N_Ed={N_Ed:.1f} kN"
+                f"{f', Mz_Ed={Mz_Ed:.1f} kN·m' if biaxial else ''}. "
                 f"Solver failed numerically. Original error: {e}"
             ) from e
 
         # 2) Fibre-level data
-        forces_N, y_coords, areas = d.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
-        strains = d._strain_field_from_end_strains(eps_top=eps_top, eps_bottom=eps_bottom)
+        if strain_state_obj is not None and hasattr(d, "get_fibre_forces_from_strain_state"):
+            forces_N, y_coords, areas = d.get_fibre_forces_from_strain_state(strain_state_obj)
+            strains = strain_state_obj.strain_field(
+                d._fibre_x - d.section.get_centroid()[0],
+                y_coords - d.section.get_centroid()[1],
+            )
+        else:
+            forces_N, y_coords, areas = d.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
+            strains = d._strain_field_from_end_strains(eps_top=eps_top, eps_bottom=eps_bottom)
         stresses = np.divide(forces_N, areas, out=np.zeros_like(forces_N), where=areas > 0)
 
         material_type = d._fibre_mat
@@ -215,21 +270,16 @@ class StressStrainViewer:
         F_s_tens = float(np.sum(steel_forces[steel_forces < 0.0])) if steel_forces.size else 0.0
 
         # 5b) Equilibrium check: compute achieved N and M from the strain state
-        # This tells us if the solver hit bounds and couldn't find an exact solution
         achieved_N = to_kn(float(np.sum(forces_N)), ForceUnit.N)
-        # Moment about centroid (using section centroid y-coordinate)
         centroid_x, centroid_y = d.section.get_centroid()
         achieved_M_raw = float(np.sum(forces_N * (y_coords - centroid_y)))
         achieved_M = to_knm(achieved_M_raw, MomentUnit.NMM)
 
         equilibrium_error_N = abs(achieved_N - N_Ed)
-        equilibrium_error_M = abs(achieved_M - M_Ed)
+        equilibrium_error_M = abs(achieved_M - My_Ed)
 
-        # Determine if section failed: if errors exceed small tolerance, the solver
-        # hit strain bounds and couldn't achieve equilibrium with the applied loads
-        # Use relative tolerance where possible, absolute for near-zero values
         tol_N = max(1.0, 0.01 * abs(N_Ed))  # 1% or 1 kN
-        tol_M = max(1.0, 0.01 * abs(M_Ed))  # 1% or 1 kN·m
+        tol_M = max(1.0, 0.01 * abs(My_Ed))  # 1% or 1 kN·m
         section_failed = equilibrium_error_N > tol_N or equilibrium_error_M > tol_M
 
         # 6) Centroids (mm) — weight by forces in N
@@ -243,12 +293,21 @@ class StressStrainViewer:
         y_s_comp = self._weighted_centroid_y(forces_N, y_coords, steel_comp_mask)
         y_s_tens = self._weighted_centroid_y(forces_N, y_coords, steel_tens_mask)
 
-        # 7) Overall C/T centroids & lever arm
+        # 7) Overall C/T centroids & lever arm (2D for biaxial)
         comp_mask = forces_N > 0.0
         tens_mask = forces_N < 0.0
         y_C = self._weighted_centroid_y(forces_N, y_coords, comp_mask)
         y_T = self._weighted_centroid_y(forces_N, y_coords, tens_mask)
-        z = float(abs(y_C - y_T)) if (y_C is not None and y_T is not None) else None
+        x_C = self._weighted_centroid_y(forces_N, x_coords, comp_mask)  # reuse helper for x
+        x_T = self._weighted_centroid_y(forces_N, x_coords, tens_mask)
+
+        if y_C is not None and y_T is not None:
+            if x_C is not None and x_T is not None:
+                z = float(math.hypot(x_C - x_T, y_C - y_T))
+            else:
+                z = float(abs(y_C - y_T))
+        else:
+            z = None
 
         # 8) Stress range (concrete only) + force scaling for arrows
         max_stress_pos, min_stress_neg = self._concrete_stress_range(stresses, conc_mask)
@@ -261,21 +320,26 @@ class StressStrainViewer:
             F_s_tens=F_s_tens,
         )
 
-        # 9) IMPORTANT: pull i/j indices from diagram (for filled render)
+        # 9) Fibre indices + bounding box
         fibre_i = getattr(d, "_fibre_i", None)
         fibre_j = getattr(d, "_fibre_j", None)
 
         min_x, min_y, max_x, max_y = d.section.get_bounding_box()
         bbox: tuple[float, float, float, float] = (
-            float(min_x),
-            float(min_y),
-            float(max_x),
-            float(max_y),
+            float(min_x), float(min_y), float(max_x), float(max_y),
         )
 
+        # 10) Biaxial metadata
+        na_angle_deg: float | None = None
+        is_biaxial = False
+        if strain_state_obj is not None:
+            is_biaxial = strain_state_obj.is_biaxial
+            na_angle_deg = strain_state_obj.get_na_angle_deg()
+
         return _StressStrainPlotState(
-            M_Ed=float(M_Ed),
+            My_Ed=float(My_Ed),
             N_Ed=float(N_Ed),
+            Mz_Ed=float(Mz_Ed),
             eps_top=float(eps_top),
             eps_bottom=float(eps_bottom),
             forces_N=forces_N,
@@ -301,6 +365,8 @@ class StressStrainViewer:
             y_s_tens=y_s_tens,
             y_C=y_C,
             y_T=y_T,
+            x_C=x_C,
+            x_T=x_T,
             z=z,
             max_stress_pos=max_stress_pos,
             min_stress_neg=min_stress_neg,
@@ -313,7 +379,10 @@ class StressStrainViewer:
             achieved_M=achieved_M,
             equilibrium_error_N=equilibrium_error_N,
             equilibrium_error_M=equilibrium_error_M,
-            **self._get_capacity(M_Ed=M_Ed, N_Ed=N_Ed),
+            strain_state=strain_state_obj,
+            is_biaxial=is_biaxial,
+            na_angle_deg=na_angle_deg,
+            **self._get_capacity(My_Ed=My_Ed, N_Ed=N_Ed, Mz_Ed=Mz_Ed),
         )
 
 
@@ -432,7 +501,23 @@ class StressStrainViewer:
                 )
 
         # Neutral axis line on section (clipped)
-        if s.y_na is not None and s.na_in_section:
+        if s.is_biaxial and s.strain_state is not None:
+            na_pts = self._na_line_clipped_to_bbox(s.strain_state, s.bbox)
+            if na_pts is not None:
+                (x0, y0), (x1, y1) = na_pts
+                fig.add_trace(
+                    go.Scatter(
+                        x=[x0, x1],
+                        y=[y0, y1],
+                        mode="lines",
+                        line=dict(color="purple", width=2, dash="dash"),
+                        name="Neutral Axis",
+                        showlegend=True,
+                    ),
+                    row=row,
+                    col=col,
+                )
+        elif s.y_na is not None and s.na_in_section:
             segs = self._section_horizontal_segments_at_y(s.y_na)
             for i, (xa, xb) in enumerate(segs):
                 fig.add_trace(
@@ -447,6 +532,25 @@ class StressStrainViewer:
                     row=row,
                     col=col,
                 )
+
+        # C/T centroid markers and lever arm line (z)
+        if s.x_C is not None and s.y_C is not None and s.x_T is not None and s.y_T is not None:
+            fig.add_trace(
+                go.Scatter(
+                    x=[s.x_C, s.x_T],
+                    y=[s.y_C, s.y_T],
+                    mode="lines+markers",
+                    line=dict(color="dimgray", width=1.5, dash="dashdot"),
+                    marker=dict(size=10, symbol="cross-thin", color=["red", "blue"], line=dict(width=2)),
+                    name=f"z = {s.z:.0f} mm" if s.z is not None else "z",
+                    showlegend=True,
+                    hovertemplate=(
+                        "x: %{x:.1f} mm<br>y: %{y:.1f} mm<extra>C/T Centroid</extra>"
+                    ),
+                ),
+                row=row,
+                col=col,
+            )
 
         # Draw the section boundary last so it stays crisp above the stress field.
         outline_x, outline_y = self._get_outline_xy()
@@ -465,6 +569,9 @@ class StressStrainViewer:
         )
 
     def _add_strain_subplot(self, fig: Any, go: Any, s: _StressStrainPlotState, *, row: int = 2, col: int = 1) -> None:
+        # TODO: When biaxial, project fibres onto compression_direction and use
+        # projected coordinate as the y-axis instead of section y-coordinate.
+        # Currently uses eps_top/eps_bottom (y-axis projection) even for skewed NA.
         eps_bottom_permille = s.eps_bottom * 1000.0
         eps_top_permille = s.eps_top * 1000.0
 
@@ -646,7 +753,10 @@ class StressStrainViewer:
         height: int,
     ) -> None:
         if title is None:
-            title = f"Stress-Strain Distribution: M<sub>Ed</sub> = {s.M_Ed:.1f} kN·m, N<sub>Ed</sub> = {s.N_Ed:.1f} kN"
+            title = f"Stress-Strain Distribution: M<sub>y,Ed</sub> = {s.My_Ed:.1f} kN·m"
+            if abs(s.Mz_Ed) > 1e-9:
+                title += f", M<sub>z,Ed</sub> = {s.Mz_Ed:.1f} kN·m"
+            title += f", N<sub>Ed</sub> = {s.N_Ed:.1f} kN"
             if s.section_failed:
                 title += (
                     "<br><span style='color:red; font-size:11px'><b>"
@@ -886,36 +996,59 @@ class StressStrainViewer:
         # Build Z grid: shape (ny, nx). Keep NaN outside section so nothing renders there.
         Z = np.full((ny, nx), np.nan, dtype=float)
 
-        # Concrete stress in this 2D viewer varies only with y (linear strain field in depth).
-        if s.h > 0.0:
-            row_strains = s.eps_bottom + (s.eps_top - s.eps_bottom) * (
-                (y_centres - s.y_bottom) / s.h
-            )
-        else:
-            row_strains = np.full_like(y_centres, s.eps_bottom, dtype=float)
+        # When biaxial, stress varies with both x and y via the strain plane.
+        # Otherwise, only with y (linear strain field in depth).
+        cx, cy = self.diagram.section.get_centroid()
 
-        row_stresses = self._get_concrete_stress_for_plot(row_strains)
-
-        # Clip each horizontal band to the exact section intersection at that y.
-        for j, y_mid in enumerate(y_centres):
-            segs = self._section_horizontal_segments_at_y(float(y_mid))
-            if not segs:
-                continue
-            sig = float(row_stresses[j])
-            for xa, xb in segs:
-                if xb < xa:
-                    xa, xb = xb, xa
-
-                # Indices of cells whose horizontal span overlaps [xa, xb].
-                # This avoids inset gaps at curved boundaries.
-                i0 = int(np.floor((xa - min_x) / dx))
-                i1 = int(np.ceil((xb - min_x) / dx)) - 1
-                if i1 < 0 or i0 > nx - 1:
+        if s.is_biaxial and s.strain_state is not None:
+            # 2D strain field: compute per-cell strain from plane coefficients
+            for j, y_mid in enumerate(y_centres):
+                segs = self._section_horizontal_segments_at_y(float(y_mid))
+                if not segs:
                     continue
-                i0 = max(i0, 0)
-                i1 = min(i1, nx - 1)
-                if i1 >= i0:
-                    Z[j, i0 : i1 + 1] = sig
+                for xa, xb in segs:
+                    if xb < xa:
+                        xa, xb = xb, xa
+                    i0 = int(np.floor((xa - min_x) / dx))
+                    i1 = int(np.ceil((xb - min_x) / dx)) - 1
+                    if i1 < 0 or i0 > nx - 1:
+                        continue
+                    i0 = max(i0, 0)
+                    i1 = min(i1, nx - 1)
+                    if i1 >= i0:
+                        cell_x = x_centres[i0 : i1 + 1]
+                        cell_strains = s.strain_state.strain_field(
+                            cell_x - cx, np.full_like(cell_x, y_mid - cy),
+                        )
+                        cell_stresses = self._get_concrete_stress_for_plot(cell_strains)
+                        Z[j, i0 : i1 + 1] = cell_stresses
+        else:
+            if s.h > 0.0:
+                row_strains = s.eps_bottom + (s.eps_top - s.eps_bottom) * (
+                    (y_centres - s.y_bottom) / s.h
+                )
+            else:
+                row_strains = np.full_like(y_centres, s.eps_bottom, dtype=float)
+
+            row_stresses = self._get_concrete_stress_for_plot(row_strains)
+
+            # Clip each horizontal band to the exact section intersection at that y.
+            for j, y_mid in enumerate(y_centres):
+                segs = self._section_horizontal_segments_at_y(float(y_mid))
+                if not segs:
+                    continue
+                sig = float(row_stresses[j])
+                for xa, xb in segs:
+                    if xb < xa:
+                        xa, xb = xb, xa
+                    i0 = int(np.floor((xa - min_x) / dx))
+                    i1 = int(np.ceil((xb - min_x) / dx)) - 1
+                    if i1 < 0 or i0 > nx - 1:
+                        continue
+                    i0 = max(i0, 0)
+                    i1 = min(i1, nx - 1)
+                    if i1 >= i0:
+                        Z[j, i0 : i1 + 1] = sig
 
         finite = np.isfinite(Z)
         if not np.any(finite):
@@ -1004,6 +1137,54 @@ class StressStrainViewer:
                 merged.append((a, b))
 
         return merged
+
+    def _na_line_clipped_to_bbox(
+        self,
+        strain_state: StrainState,
+        bbox: tuple[float, float, float, float],
+    ) -> Optional[tuple[tuple[float, float], tuple[float, float]]]:
+        """
+        Compute the NA line clipped to the section bounding box.
+
+        The NA is the locus of points where strain=0:
+            plane_a*(x - cx) + plane_b*(y - cy) + plane_c = 0
+
+        Returns two endpoints or None if the line doesn't intersect the bbox.
+        """
+        a, b, c = strain_state.plane_a, strain_state.plane_b, strain_state.plane_c
+        cx, cy = self.diagram.section.get_centroid()
+        min_x, min_y, max_x, max_y = bbox
+
+        # NA equation in absolute coords: a*(x-cx) + b*(y-cy) + c = 0
+        # => a*x + b*y + (c - a*cx - b*cy) = 0
+        d_const = c - a * cx - b * cy
+
+        # Collect intersection points with the 4 bbox edges
+        pts: list[tuple[float, float]] = []
+
+        if abs(b) > 1e-18:
+            # y = -(a*x + d_const) / b  — intersect with x=min_x and x=max_x
+            for x_val in (min_x, max_x):
+                y_val = -(a * x_val + d_const) / b
+                if min_y - 1e-6 <= y_val <= max_y + 1e-6:
+                    pts.append((x_val, max(min_y, min(max_y, y_val))))
+
+        if abs(a) > 1e-18:
+            # x = -(b*y + d_const) / a  — intersect with y=min_y and y=max_y
+            for y_val in (min_y, max_y):
+                x_val = -(b * y_val + d_const) / a
+                if min_x - 1e-6 <= x_val <= max_x + 1e-6:
+                    pts.append((max(min_x, min(max_x, x_val)), y_val))
+
+        # Deduplicate close points
+        unique: list[tuple[float, float]] = []
+        for p in pts:
+            if not any(abs(p[0] - u[0]) < 1e-6 and abs(p[1] - u[1]) < 1e-6 for u in unique):
+                unique.append(p)
+
+        if len(unique) < 2:
+            return None
+        return (unique[0], unique[1])
 
     @staticmethod
     def _weighted_centroid_y(forces: np.ndarray, y: np.ndarray, mask: np.ndarray, *, tol: float = 1e-9) -> float | None:
@@ -1200,11 +1381,14 @@ class StressStrainViewer:
                 'approximation NOT in equilibrium with applied forces.</b></span>'
             )
 
-        left_blocks.append(
+        load_case_text = (
             "<b>Load Case:</b><br>"
-            f"{indent}M<sub>Ed</sub> = {s.M_Ed:.1f} kN·m<br>"
-            f"{indent}N<sub>Ed</sub> = {s.N_Ed:.1f} kN<br>"
+            f"{indent}M<sub>y,Ed</sub> = {s.My_Ed:.1f} kN·m<br>"
         )
+        if abs(s.Mz_Ed) > 1e-9:
+            load_case_text += f"{indent}M<sub>z,Ed</sub> = {s.Mz_Ed:.1f} kN·m<br>"
+        load_case_text += f"{indent}N<sub>Ed</sub> = {s.N_Ed:.1f} kN<br>"
+        left_blocks.append(load_case_text)
         if s.M_Rd_pos is not None and s.N_Rd is not None:
             right_blocks.append(
                 "<b>Capacity:</b><br>"
@@ -1225,6 +1409,8 @@ class StressStrainViewer:
         if s.y_na is not None:
             x_na = (y_comp_face - s.y_na) if compression_at_top else (s.y_na - y_comp_face)
             na_line = f"<b>Neutral Axis:</b> x = {x_na:.1f} mm"
+            if s.na_angle_deg is not None and abs(s.na_angle_deg) > 0.1:
+                na_line += f" (θ = {s.na_angle_deg:.1f}°)"
             if not s.na_in_section:
                 na_line += " (outside section)"
             section_info_lines.append(na_line)

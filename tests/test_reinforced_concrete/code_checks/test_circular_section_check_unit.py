@@ -45,7 +45,7 @@ def _make_stub_check() -> CircularSectionCheck:
 
     diag = SimpleNamespace(
         find_strains_for_MN=lambda M, N, strict=False: (0.001, -0.001),
-        find_strain_state_for_MN=lambda M_target, N_target: None,
+        find_strain_state_for_MN=lambda My_target, N_target, **kwargs: None,
     )
     shear_check = SimpleNamespace(
         find_effective_depth=lambda M, N, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 500.0,
@@ -599,7 +599,7 @@ class TestIterativeAndRoutingHelpers:
         check = _make_stub_check()
         _cot_diag = SimpleNamespace(
             find_strains_for_MN=lambda M, N, strict=False: (0.001, -0.001),
-            find_strain_state_for_MN=lambda M_target, N_target: None,
+            find_strain_state_for_MN=lambda My_target, N_target, **kwargs: None,
         )
         object.__setattr__(check, "_shear_check", SimpleNamespace(
             find_effective_depth=lambda M, N, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 500.0,
@@ -690,7 +690,7 @@ class TestIterativeAndRoutingHelpers:
         check.shear_reinforcement.leg_spacing = 350.0
         _std_diag = SimpleNamespace(
             find_strains_for_MN=lambda M, N, strict=False: (0.001, -0.001),
-            find_strain_state_for_MN=lambda M_target, N_target: None,
+            find_strain_state_for_MN=lambda My_target, N_target, **kwargs: None,
         )
         object.__setattr__(check, "_shear_check", SimpleNamespace(
             find_effective_depth=lambda M, N, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 500.0,

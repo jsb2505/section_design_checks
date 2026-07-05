@@ -287,7 +287,7 @@ def test_find_strains_fast_path_uses_analytical_jacobian(
         return SimpleNamespace(x=np.array([0.001, -0.001]), fun=np.array([0.1, 0.2]), success=True)
 
     monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
-    eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=10.0, N_target=20.0)
+    eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=10.0, N_target=20.0)
     assert x0_seen
     assert jac_calls
     assert eps_top == pytest.approx(0.001)
@@ -316,7 +316,7 @@ def test_find_strains_copymode_error_falls_back_to_leastsq(
     monkeypatch.setattr(interaction_diagram, "least_squares", _broken_least_squares)
     monkeypatch.setattr(interaction_diagram, "leastsq", _fake_leastsq)
 
-    out = diagram.find_strains_for_MN(M_target=50.0, N_target=25.0, strict=False)
+    out = diagram.find_strains_for_MN(My_target=50.0, N_target=25.0, strict=False)
     assert calls["leastsq"] >= 1
     assert out == pytest.approx((0.0012, -0.0009))
 
@@ -331,7 +331,7 @@ def test_find_strains_non_copymode_value_error_is_propagated(
     monkeypatch.setattr(interaction_diagram, "least_squares", _raise_other_value_error)
 
     with pytest.raises(ValueError, match="other solver error"):
-        diagram.find_strains_for_MN(M_target=25.0, N_target=10.0)
+        diagram.find_strains_for_MN(My_target=25.0, N_target=10.0)
 
 
 def test_find_strains_strict_raises_after_fallback(
@@ -346,7 +346,7 @@ def test_find_strains_strict_raises_after_fallback(
 
     monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
     with pytest.raises(ValueError, match="could not match"):
-        diagram.find_strains_for_MN(M_target=500.0, N_target=100.0, strict=True)
+        diagram.find_strains_for_MN(My_target=500.0, N_target=100.0, strict=True)
     assert calls["n"] > 1
 
 
@@ -363,7 +363,7 @@ def test_find_strains_returns_after_fallback_pass1_success(
         return SimpleNamespace(x=np.array([0.0015, -0.0010]), fun=np.array([0.1, 0.1]), success=True)
 
     monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
-    out = diagram.find_strains_for_MN(M_target=100.0, N_target=50.0, strict=False)
+    out = diagram.find_strains_for_MN(My_target=100.0, N_target=50.0, strict=False)
     assert out == pytest.approx((0.0015, -0.0010))
     assert calls["n"] >= 2
 
@@ -389,7 +389,7 @@ def test_find_strains_tension_stiffening_runs_second_pass(
         return SimpleNamespace(x=np.array([0.0015, -0.0010]), fun=np.array([0.05, 0.05]), success=True)
 
     monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
-    eps_top, eps_bottom = diag.find_strains_for_MN(M_target=60.0, N_target=30.0)
+    eps_top, eps_bottom = diag.find_strains_for_MN(My_target=60.0, N_target=30.0)
     assert any(j == "2-point" for j in jac_args)
     assert eps_top == pytest.approx(0.0015)
     assert eps_bottom == pytest.approx(-0.0010)
@@ -415,7 +415,7 @@ def test_find_strains_confined_uses_numerical_jacobian(
         return SimpleNamespace(x=np.array([0.001, 0.001]), fun=np.array([0.0, 0.0]), success=True)
 
     monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
-    diag.find_strains_for_MN(M_target=50.0, N_target=100.0)
+    diag.find_strains_for_MN(My_target=50.0, N_target=100.0)
     assert seen["jac"] == "2-point"
     assert seen["max_nfev"] == 200
 
@@ -429,7 +429,7 @@ def test_find_strains_unstable_solution_raises(
 
     monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
     with pytest.raises(ValueError, match="numerically unstable"):
-        diagram.find_strains_for_MN(M_target=40.0, N_target=20.0)
+        diagram.find_strains_for_MN(My_target=40.0, N_target=20.0)
 
 
 @pytest.mark.parametrize("n_target", [100.0, -100.0, 0.0])
@@ -444,7 +444,7 @@ def test_find_strains_zero_moment_candidate_branches(
             x=np.array([0.0, 0.0]), fun=np.array([0.0, 0.0]), success=True
         ),
     )
-    out = diagram.find_strains_for_MN(M_target=0.0, N_target=n_target)
+    out = diagram.find_strains_for_MN(My_target=0.0, N_target=n_target)
     assert out == pytest.approx((0.0, 0.0))
 
 
@@ -459,7 +459,7 @@ def test_find_strains_negative_moment_high_eccentricity_branch(
             x=np.array([-0.001, 0.001]), fun=np.array([0.0, 0.0]), success=True
         ),
     )
-    out = diagram.find_strains_for_MN(M_target=-500.0, N_target=100.0)
+    out = diagram.find_strains_for_MN(My_target=-500.0, N_target=100.0)
     assert out == pytest.approx((-0.001, 0.001))
 
 
@@ -486,16 +486,16 @@ def test_find_strains_cache_invalidates_when_crack_policy_changes(
 
     monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
 
-    _ = diag.find_strains_for_MN(M_target=50.0, N_target=0.0, strict=False)
+    _ = diag.find_strains_for_MN(My_target=50.0, N_target=0.0, strict=False)
     assert calls["n"] == 1
 
     # Same state -> should hit cache
-    _ = diag.find_strains_for_MN(M_target=50.0, N_target=0.0, strict=False)
+    _ = diag.find_strains_for_MN(My_target=50.0, N_target=0.0, strict=False)
     assert calls["n"] == 1
 
     # Mutated state -> must re-solve (no stale cache hit)
     diag.crack_to_neutral_axis_on_first_tension_failure = False
-    _ = diag.find_strains_for_MN(M_target=50.0, N_target=0.0, strict=False)
+    _ = diag.find_strains_for_MN(My_target=50.0, N_target=0.0, strict=False)
     assert calls["n"] == 2
 
 
@@ -521,7 +521,7 @@ def test_find_strains_small_loadcase_tries_near_zero_guesses(
 
     monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
 
-    out = diagram.find_strains_for_MN(M_target=0.1, N_target=0.0, strict=False)
+    out = diagram.find_strains_for_MN(My_target=0.1, N_target=0.0, strict=False)
     assert out == pytest.approx(tuple(near_solution))
     assert any(np.max(np.abs(x0)) < 1e-5 for x0 in x0_seen)
 
@@ -550,7 +550,7 @@ def test_find_strains_linear_elastic_tension_prioritises_near_zero_guess(
 
     monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
 
-    _ = diag.find_strains_for_MN(M_target=200.0, N_target=50.0, strict=False)
+    _ = diag.find_strains_for_MN(My_target=200.0, N_target=50.0, strict=False)
     assert x0_seen
     assert np.max(np.abs(x0_seen[0])) < 1e-4
 
@@ -584,7 +584,7 @@ def test_find_strains_linear_elastic_tension_includes_moderate_bending_guesses(
 
     monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
 
-    out = diag.find_strains_for_MN(M_target=160.0, N_target=0.0, strict=False)
+    out = diag.find_strains_for_MN(My_target=160.0, N_target=0.0, strict=False)
     assert out == pytest.approx(tuple(target_guess))
     assert any(np.allclose(x, target_guess, rtol=0.0, atol=1e-12) for x in x0_seen)
 
@@ -1305,7 +1305,7 @@ class TestLinearElasticTensionConvergence:
         """M=45 kN.m, N=0, crack_to_NA=False: solver should converge with
         a moderate NA position (not near the compression face)."""
         diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=False)
-        eps_top, eps_bottom = diag.find_strains_for_MN(M_target=45.0, N_target=0.0)
+        eps_top, eps_bottom = diag.find_strains_for_MN(My_target=45.0, N_target=0.0)
         point = diag.calculate_point_from_end_strains(eps_top, eps_bottom)
 
         assert abs(point.M - 45.0) < 0.5, f"M residual too large: {point.M}"
@@ -1320,7 +1320,7 @@ class TestLinearElasticTensionConvergence:
     def test_partially_cracked_crack_to_na_true(self, beam_top_and_bottom, concrete_c30):
         """M=45 kN.m, N=0, crack_to_NA=True: solver should converge (fully cracked)."""
         diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=True)
-        eps_top, eps_bottom = diag.find_strains_for_MN(M_target=45.0, N_target=0.0)
+        eps_top, eps_bottom = diag.find_strains_for_MN(My_target=45.0, N_target=0.0)
         point = diag.calculate_point_from_end_strains(eps_top, eps_bottom)
 
         assert abs(point.M - 45.0) < 0.5, f"M residual too large: {point.M}"
@@ -1329,7 +1329,7 @@ class TestLinearElasticTensionConvergence:
     def test_sub_cracking_moment(self, beam_top_and_bottom, concrete_c30):
         """M=20 kN.m (below M_cr ~36): section should remain fully elastic."""
         diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=False)
-        eps_top, eps_bottom = diag.find_strains_for_MN(M_target=20.0, N_target=0.0)
+        eps_top, eps_bottom = diag.find_strains_for_MN(My_target=20.0, N_target=0.0)
         point = diag.calculate_point_from_end_strains(eps_top, eps_bottom)
 
         assert abs(point.M - 20.0) < 0.5
@@ -1346,8 +1346,8 @@ class TestLinearElasticTensionConvergence:
         diag_off = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=False)
         diag_on = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=True)
 
-        et_off, eb_off = diag_off.find_strains_for_MN(M_target=20.0, N_target=0.0)
-        et_on, eb_on = diag_on.find_strains_for_MN(M_target=20.0, N_target=0.0)
+        et_off, eb_off = diag_off.find_strains_for_MN(My_target=20.0, N_target=0.0)
+        et_on, eb_on = diag_on.find_strains_for_MN(My_target=20.0, N_target=0.0)
 
         assert et_off == pytest.approx(et_on, rel=1e-3)
         assert eb_off == pytest.approx(eb_on, rel=1e-3)
@@ -1356,7 +1356,7 @@ class TestLinearElasticTensionConvergence:
         """M=30, N=200 (compression + bending): should converge for both policies."""
         for crack_to_na in (False, True):
             diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=crack_to_na)
-            eps_top, eps_bottom = diag.find_strains_for_MN(M_target=30.0, N_target=200.0)
+            eps_top, eps_bottom = diag.find_strains_for_MN(My_target=30.0, N_target=200.0)
             point = diag.calculate_point_from_end_strains(eps_top, eps_bottom)
 
             assert abs(point.M - 30.0) < 0.5, f"M residual: {point.M} (crack_to_na={crack_to_na})"
@@ -1368,7 +1368,7 @@ class TestLinearElasticTensionConvergence:
 
         diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=False)
         viewer = StressStrainViewer(diag)
-        state = viewer._build_stress_strain_plot_state(M_Ed=45.0, N_Ed=0.0)
+        state = viewer._build_stress_strain_plot_state(My_Ed=45.0, N_Ed=0.0)
 
         assert abs(state.M_Ed - 45.0) < 1e-6
         # The achieved N from the stress integration should be near zero

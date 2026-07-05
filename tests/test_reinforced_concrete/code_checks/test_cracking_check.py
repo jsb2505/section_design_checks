@@ -451,7 +451,7 @@ class TestCrackingFaceAndMainFlow:
         result = check.perform_check(M_Ed=80.0, N_Ed=120.0, force_cracked=True, suppress_warnings=True)
 
         assert result is sentinel
-        assert captured["M_Ed"] == pytest.approx(80.0, rel=1e-12)
+        assert captured["My_Ed"] == pytest.approx(80.0, rel=1e-12)
         assert captured["N_Ed"] == pytest.approx(120.0, rel=1e-12)
         assert captured["force_cracked"] is True
         assert captured["suppress_warnings"] is True

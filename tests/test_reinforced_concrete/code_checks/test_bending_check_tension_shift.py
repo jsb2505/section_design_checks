@@ -225,7 +225,7 @@ class TestTensionShiftDisabled:
 
         # Test via _check_single_case with M_cap=None (tension shift disabled)
         res = check._check_single_case(
-            M_Ed=120.0,
+            My_Ed=120.0,
             N_Ed=0.0,
             V_Ed=None,
             M_cap=None,  # No M_cap means no tension shift
@@ -242,7 +242,7 @@ class TestTensionShiftDisabled:
         check = make_check(diagram=diag)
 
         res = check._check_single_case(
-            M_Ed=120.0,
+            My_Ed=120.0,
             N_Ed=0.0,
             V_Ed=None,
             M_cap=None,  # No M_cap means no tension shift
@@ -448,7 +448,7 @@ class TestCheckSingleCaseInvalidCapacity:
         check = make_check(diagram=diag)
 
         res = check._check_single_case(
-            M_Ed=120.0,
+            My_Ed=120.0,
             N_Ed=0.0,
             V_Ed=100.0,
             M_cap=160.0,
@@ -465,7 +465,7 @@ class TestCheckSingleCaseInvalidCapacity:
         check = make_check(diagram=diag)
 
         res = check._check_single_case(
-            M_Ed=120.0,
+            My_Ed=120.0,
             N_Ed=0.0,
             V_Ed=100.0,
             M_cap=160.0,
@@ -485,7 +485,7 @@ class TestCheckSingleCaseInvalidCapacity:
         check = make_check(diagram=diag)
 
         res = check._check_single_case(
-            M_Ed=50.0,
+            My_Ed=50.0,
             N_Ed=0.0,
             V_Ed=None,
             M_cap=None,
@@ -506,4 +506,4 @@ class TestPerformCheckValidation:
         check = make_check(diagram=diag)
 
         with pytest.raises(ValueError, match="V_Ed must be provided"):
-            check.perform_check(M_Ed=10.0, N_Ed=0.0, M_cap=100.0, V_Ed=None)
+            check.perform_check(My_Ed=10.0, N_Ed=0.0, M_cap=100.0, V_Ed=None)

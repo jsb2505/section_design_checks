@@ -159,7 +159,7 @@ def test_tension_branch_prefers_all_tensile():
     )
 
     # M=60, N=-600: well inside the envelope, should be all-tensile
-    eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=60.0, N_target=-600.0)
+    eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=60.0, N_target=-600.0)
     assert eps_top <= 0, f"eps_top={eps_top} should be tensile at N=-600"
     assert eps_bottom <= 0, f"eps_bottom={eps_bottom} should be tensile at N=-600"
 
@@ -184,7 +184,7 @@ def test_tension_branch_monotonic_strain_sweep():
     # once |N| is large enough.  Start from N=-350 where the section is
     # clearly in the all-tensile regime.
     for N in range(-350, -660, -50):
-        eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=60.0, N_target=float(N))
+        eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=60.0, N_target=float(N))
         assert eps_top <= 0, f"N={N}: eps_top={eps_top:.6f} should be tensile"
         assert eps_bottom <= 0, f"N={N}: eps_bottom={eps_bottom:.6f} should be tensile"
 
@@ -200,7 +200,7 @@ def test_eccentric_tension_near_boundary_still_works():
     )
 
     # M=200, N=-10: near pure bending — compression at top is expected
-    eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=200.0, N_target=-10.0)
+    eps_top, eps_bottom = diagram.find_strains_for_MN(My_target=200.0, N_target=-10.0)
     point = diagram.calculate_point_from_end_strains(eps_top, eps_bottom)
     assert abs(point.N - (-10.0)) < 1.0
     assert abs(point.M - 200.0) < 1.0
@@ -227,7 +227,7 @@ def test_tension_boundary_no_compression_spike():
     # Sweep across the boundary region — all should remain tensile
     for N in range(-650, -750, -10):
         eps_top, eps_bottom = diagram.find_strains_for_MN(
-            M_target=60.0, N_target=float(N), strict=False,
+            My_target=60.0, N_target=float(N), strict=False,
         )
         assert eps_top <= 0, (
             f"N={N}: eps_top={eps_top:.6f} should be tensile (no compression spike)"

@@ -2023,8 +2023,8 @@ class ShearViewer:
                 value_min=n_global_min,
                 value_max=n_global_max,
             )
-            y_label = "Moment M_Ed (kN·m)"
-            y_hover_name = "M_Ed"
+            y_label = "Moment My_Ed (kN·m)"
+            y_hover_name = "My_Ed"
             y_hover_format = ".2f"
             y_hover_unit = "kN·m"
             slider_prefix = "N_Ed (kN): "
@@ -2038,7 +2038,7 @@ class ShearViewer:
             y_hover_name = "N_Ed"
             y_hover_format = ".1f"
             y_hover_unit = "kN"
-            slider_prefix = "M_Ed (kN·m): "
+            slider_prefix = "My_Ed (kN·m): "
 
         y_edges = _build_axis_edges(y_vals)
         display_oversample = 3
@@ -2536,7 +2536,7 @@ class ShearViewer:
                 zmax=zmax,
                 colorbar=dict(title="Utilization"),
                 hovertemplate=(
-                    "M_Ed: %{x:.2f} kN·m<br>"
+                    "My_Ed: %{x:.2f} kN·m<br>"
                     "N_Ed: %{y:.1f} kN<br>"
                     "Utilization: %{z:.3f}<extra></extra>"
                 ),
@@ -2616,7 +2616,7 @@ class ShearViewer:
                     ),
                     hovertemplate=(
                         f"<b>{plotted_case.name}</b><br>"
-                        f"M_Ed: {plotted_case.M_Ed:.2f} kN·m<br>"
+                        f"My_Ed: {plotted_case.M_Ed:.2f} kN·m<br>"
                         f"N_Ed: {plotted_case.N_Ed:.1f} kN<br>"
                         f"Status: {status}<extra></extra>"
                     ),
@@ -2639,7 +2639,7 @@ class ShearViewer:
                             zmax=zmax,
                             showscale=False,
                             hovertemplate=(
-                                "M_Ed: %{x:.2f} kN·m<br>"
+                                "My_Ed: %{x:.2f} kN·m<br>"
                                 "N_Ed: %{y:.1f} kN<br>"
                                 "Utilization: %{z:.3f}<extra></extra>"
                             ),
@@ -2662,7 +2662,7 @@ class ShearViewer:
 
         layout_kwargs: dict[str, Any] = dict(
             title=title or "Axial-Moment Utilization (cot(theta) slider)",
-            xaxis_title="Moment M_Ed (kN·m)",
+            xaxis_title="Moment My_Ed (kN·m)",
             yaxis_title="Axial force N_Ed (kN)",
             template="plotly_white",
             width=width,

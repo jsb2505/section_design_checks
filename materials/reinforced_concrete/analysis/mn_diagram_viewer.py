@@ -14,6 +14,7 @@ class MNDiagramViewer:
         show_vectors: bool = False,
         show_metadata: bool = True,
         n_points: int = 120,
+        Mz_slice: float = 0.0,
         save_path: Optional[str | Path] = None,
         show: bool = True,
         title: Optional[str] = None,
@@ -40,6 +41,10 @@ class MNDiagramViewer:
                             load points to capacity boundary
             show_metadata: If True, show metadata in hover tooltips
             n_points: Number of points to generate M-N curve
+            Mz_slice: Minor-axis moment at which to slice the biaxial surface
+                (kN·m). When non-zero, requires a FreeNADiagramAdapter with a
+                biaxial surface. The My-N envelope shown is the slice at this
+                Mz level.
             save_path: If provided, save plot to this file path (HTML format)
             show: If True, display plot (fig.show())
             title: Custom plot title (optional)
@@ -57,9 +62,21 @@ class MNDiagramViewer:
             ) from e
 
         # 1. Generate core diagram data
-        diagram_points = self.diagram.generate_diagram_points(n_points=n_points)
-        M_curve = [p.M for p in diagram_points]
-        N_curve = [p.N for p in diagram_points]
+        if abs(Mz_slice) > 1e-9:
+            # Biaxial slice: get My-N polygon at the given Mz level
+            biaxial = getattr(self.diagram, "_biaxial", None)
+            if biaxial is None or not hasattr(biaxial, "get_mn_slice"):
+                raise ValueError(
+                    f"Mz_slice={Mz_slice:.1f} requires a FreeNADiagramAdapter "
+                    f"with a biaxial interaction surface."
+                )
+            slice_pts = biaxial.get_mn_slice(mz_target=Mz_slice)
+            M_curve = [p[0] for p in slice_pts]  # My values
+            N_curve = [p[1] for p in slice_pts]  # N values
+        else:
+            diagram_points = self.diagram.generate_diagram_points(n_points=n_points)
+            M_curve = [p.M for p in diagram_points]
+            N_curve = [p.N for p in diagram_points]
 
         fig = go.Figure()
 
@@ -167,9 +184,13 @@ class MNDiagramViewer:
         xpad = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
         ypad = 0.05 * (ymax - ymin) if ymax > ymin else 1.0
 
+        default_title = "M-N Interaction Diagram"
+        if abs(Mz_slice) > 1e-9:
+            default_title += f" (My-N slice at Mz = {Mz_slice:.1f} kN·m)"
+
         fig.update_layout(
-            title=dict(text=title or "M-N Interaction Diagram"),
-            xaxis_title="Moment M (kN·m)",
+            title=dict(text=title or default_title),
+            xaxis_title="Moment My (kN·m)",
             yaxis_title="Axial Force N (kN)",
             xaxis=dict(range=[xmin - xpad, xmax + xpad], gridcolor="lightgray", zeroline=True),
             yaxis=dict(range=[ymin - ypad, ymax + ypad], gridcolor="lightgray", zeroline=True),

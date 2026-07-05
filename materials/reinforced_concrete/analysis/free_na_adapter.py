@@ -309,37 +309,128 @@ class FreeNADiagramAdapter:
 
         return (N_cap, float(max(Ms)), float(min(Ms)))
 
+    def get_capacity_biaxial(
+        self,
+        N_Ed: float,
+        My_Ed: float,
+        Mz_Ed: float,
+        n_angles: int = 72,
+        n_axial_levels: int = 30,
+    ) -> CapacityResult:
+        """
+        3D ray intersection on the biaxial M-M-N surface for capacity check.
+
+        Computes utilisation as the ratio of the demand magnitude to the
+        capacity boundary along the (My, Mz, N) ray from the origin.
+
+        Args:
+            N_Ed: Design axial force (kN).
+            My_Ed: Design major axis moment (kN·m).
+            Mz_Ed: Design minor axis moment (kN·m).
+
+        Returns:
+            CapacityResult with utilisation on the biaxial surface.
+        """
+        if abs(My_Ed) < 1e-18 and abs(Mz_Ed) < 1e-18 and abs(N_Ed) < 1e-18:
+            return CapacityResult(N_Rd=0.0, M_Rd=0.0, is_safe=True, utilization=0.0)
+
+        try:
+            from scipy.spatial import ConvexHull
+        except ImportError:
+            # Fallback: use Mz=0 slice capacity (conservative)
+            return self.get_capacity_vector(N_Ed=N_Ed, M_Ed=My_Ed)
+
+        # Generate surface points
+        surface_data = self._biaxial.generate_surface_pivot(
+            n_angles=n_angles, n_axial_levels=n_axial_levels,
+        )
+        if not surface_data:
+            return CapacityResult(N_Rd=None, M_Rd=None, is_safe=False, utilization=float("inf"))
+
+        my_arr = np.array([p[0] for p in surface_data], dtype=float)
+        mz_arr = np.array([p[1] for p in surface_data], dtype=float)
+        n_arr = np.array([p[2] for p in surface_data], dtype=float)
+
+        pts_3d = np.column_stack([my_arr, mz_arr, n_arr])
+        if len(pts_3d) < 4:
+            return CapacityResult(N_Rd=None, M_Rd=None, is_safe=False, utilization=float("inf"))
+
+        try:
+            hull = ConvexHull(pts_3d)
+        except Exception:
+            return CapacityResult(N_Rd=None, M_Rd=None, is_safe=False, utilization=float("inf"))
+
+        # Ray from origin in direction (My_Ed, Mz_Ed, N_Ed)
+        ray = np.array([float(My_Ed), float(Mz_Ed), float(N_Ed)], dtype=float)
+        ray_mag = float(np.linalg.norm(ray))
+        if ray_mag < 1e-18:
+            return CapacityResult(N_Rd=0.0, M_Rd=0.0, is_safe=True, utilization=0.0)
+
+        ray_dir = ray / ray_mag
+
+        # Intersect ray with all hull facets
+        t_min = float("inf")
+        for eq in hull.equations:
+            normal = eq[:3]
+            offset = eq[3]
+            denom = float(np.dot(normal, ray_dir))
+            if abs(denom) < 1e-18:
+                continue
+            t = -offset / denom
+            if t > 1e-12 and t < t_min:
+                t_min = t
+
+        if t_min == float("inf"):
+            return CapacityResult(N_Rd=None, M_Rd=None, is_safe=False, utilization=float("inf"))
+
+        utilization = ray_mag / t_min
+        is_safe = utilization <= 1.0
+        cap_point = ray_dir * t_min
+        M_Rd = float(cap_point[0])
+        N_Rd = float(cap_point[2])
+
+        return CapacityResult(
+            N_Rd=N_Rd, M_Rd=M_Rd,
+            is_safe=bool(is_safe), utilization=float(utilization),
+        )
+
     # ----------------------------
     # Inverse solver
     # ----------------------------
 
     def find_strains_for_MN(
         self,
-        M_target: float,
+        My_target: float,
         N_target: float,
         initial_guess: Optional[Tuple[float, float]] = None,
         tol: float = 1e-6,
         strict: bool = False,
+        Mz_target: float = 0.0,
     ) -> Tuple[float, float]:
         """
-        Find end strains that produce target (M, N) with free NA.
+        Find end strains that produce target (My, N, Mz) with free NA.
 
         Uses the biaxial solver to find an NA depth and angle that gives
-        (N_target, My=M_target, Mz~=0), then projects the resulting 2D
-        strain plane onto the vertical centroidal axis.
+        (N_target, My=My_target, Mz=Mz_target), then projects the resulting
+        2D strain plane onto the vertical centroidal axis.
+
+        Args:
+            My_target: Target major axis moment (kN·m).
+            N_target: Target axial force (kN).
+            Mz_target: Target minor axis moment (kN·m), default 0.
 
         Returns:
             (eps_top, eps_bottom) projected strains.
         """
-        cache_key = (M_target, N_target, strict)
+        cache_key = (My_target, Mz_target, N_target, strict)
         cached = self._strain_cache.get(cache_key)
         if cached is not None:
             return cached
 
         from scipy.optimize import least_squares
+        import math as _math
 
         max_dim = max(self._biaxial.section_width, self._biaxial.section_height)
-        h = float(self.section_height)
 
         def residual(params: npt.NDArray) -> npt.NDArray:
             """Residual: [N_err, My_err, Mz_err]."""
@@ -348,16 +439,22 @@ class FreeNADiagramAdapter:
             pt = self._biaxial.calculate_point_pivot(na_depth, angle_deg)
             return np.array([
                 pt.N - N_target,
-                pt.My - M_target,
-                pt.Mz - 0.0,  # Target Mz = 0
+                pt.My - My_target,
+                pt.Mz - Mz_target,
             ])
 
         # Try multiple initial guesses
         best_result = None
         best_cost = float('inf')
 
+        # Include angle hint based on moment ratio when Mz != 0
+        angle_inits = [0.0, 5.0, -5.0, 10.0, -10.0]
+        if abs(Mz_target) > 1e-9:
+            hint = _math.degrees(_math.atan2(Mz_target, My_target)) if abs(My_target) > 1e-9 else 90.0
+            angle_inits = [hint, hint + 10, hint - 10] + angle_inits
+
         for phi_init in [0.5, 0.8, 1.0, -0.3]:
-            for angle_init in [0.0, 5.0, -5.0, 10.0, -10.0]:
+            for angle_init in angle_inits:
                 try:
                     result = least_squares(
                         residual,
@@ -381,7 +478,7 @@ class FreeNADiagramAdapter:
         if best_result is None:
             raise ValueError(
                 f"FreeNADiagramAdapter: Cannot find strain state for "
-                f"M={M_target:.3f} kN.m, N={N_target:.3f} kN"
+                f"My={My_target:.3f} kN.m, Mz={Mz_target:.3f} kN.m, N={N_target:.3f} kN"
             )
 
         phi_sol, angle_sol = best_result.x
@@ -444,19 +541,26 @@ class FreeNADiagramAdapter:
 
     def find_strain_state_for_MN(
         self,
-        M_target: float,
+        My_target: float,
         N_target: float,
         initial_guess: Optional[Tuple[float, float]] = None,
         tol: float = 1e-6,
         strict: bool = False,
+        Mz_target: float = 0.0,
     ) -> StrainState:
         """
         Full strain state solver returning biaxial plane coefficients.
+
+        Args:
+            My_target: Target major axis moment (kN·m).
+            N_target: Target axial force (kN).
+            Mz_target: Target minor axis moment (kN·m), default 0.
 
         Returns:
             StrainState with is_biaxial=True and full plane coefficients.
         """
         from scipy.optimize import least_squares
+        import math as _math
 
         max_dim = max(self._biaxial.section_width, self._biaxial.section_height)
 
@@ -464,13 +568,19 @@ class FreeNADiagramAdapter:
             phi, angle_deg = params[0], params[1]
             na_depth = max_dim * np.tan(phi)
             pt = self._biaxial.calculate_point_pivot(na_depth, angle_deg)
-            return np.array([pt.N - N_target, pt.My - M_target, pt.Mz])
+            return np.array([pt.N - N_target, pt.My - My_target, pt.Mz - Mz_target])
 
         best_result = None
         best_cost = float('inf')
 
+        # Include angle hint based on moment ratio when Mz != 0
+        angle_inits = [0.0, 5.0, -5.0]
+        if abs(Mz_target) > 1e-9:
+            hint = _math.degrees(_math.atan2(Mz_target, My_target)) if abs(My_target) > 1e-9 else 90.0
+            angle_inits = [hint, hint + 10, hint - 10] + angle_inits
+
         for phi_init in [0.5, 0.8, 1.0, -0.3]:
-            for angle_init in [0.0, 5.0, -5.0]:
+            for angle_init in angle_inits:
                 try:
                     result = least_squares(
                         residual,
@@ -494,7 +604,7 @@ class FreeNADiagramAdapter:
         if best_result is None:
             raise ValueError(
                 f"FreeNADiagramAdapter: Cannot find strain state for "
-                f"M={M_target:.3f} kN.m, N={N_target:.3f} kN"
+                f"My={My_target:.3f} kN.m, Mz={Mz_target:.3f} kN.m, N={N_target:.3f} kN"
             )
 
         phi_sol, angle_sol = best_result.x

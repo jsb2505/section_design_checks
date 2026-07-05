@@ -424,7 +424,7 @@ class TestCircularShearViewer:
         layout = fig.layout_updates[-1]
         _assert_slider_animation_controls_top_right(layout)
         assert "sliders" in layout
-        assert layout["sliders"][0]["currentvalue"]["prefix"] == "M_Ed (kN*m): "
+        assert layout["sliders"][0]["currentvalue"]["prefix"] == "My_Ed (kN*m): "
         _assert_force_slider_has_nice_steps(layout)
 
     def test_plot_force_cot_theta_contour_moment_on_y_axis_uses_axial_slider(self, monkeypatch):
@@ -446,7 +446,7 @@ class TestCircularShearViewer:
         layout = fig.layout_updates[-1]
         _assert_slider_animation_controls_top_right(layout)
         assert "sliders" in layout
-        assert layout.get("yaxis_title") == "Moment M_Ed (kN*m)"
+        assert layout.get("yaxis_title") == "Moment My_Ed (kN*m)"
         assert layout["sliders"][0]["currentvalue"]["prefix"] == "N_Ed (kN): "
         upper_trace = next(t[0] for t in fig.traces if t[0].get("name") == "Upper M-N limit")
         lower_trace = next(t[0] for t in fig.traces if t[0].get("name") == "Lower M-N limit")

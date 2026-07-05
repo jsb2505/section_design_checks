@@ -323,7 +323,7 @@ class TestStressLimitsDetailedAndPerform:
         monkeypatch.setattr(StressLimitsCheck, "_get_peak_concrete_stress", _fake_peak)
         monkeypatch.setattr(StressLimitsCheck, "_get_max_steel_stress", _fake_steel)
 
-        r = check.calculate_detailed(M_Ed=50.0, N_Ed=100.0)
+        r = check.calculate_detailed(My_Ed=50.0, N_Ed=100.0)
 
         assert r.k1_exceeded is False
         assert r.k2_exceeded is True
@@ -357,7 +357,7 @@ class TestStressLimitsDetailedAndPerform:
         monkeypatch.setattr(StressLimitsCheck, "_get_peak_concrete_stress", lambda *args, **kwargs: concrete_c30.f_ck)
         monkeypatch.setattr(StressLimitsCheck, "_get_max_steel_stress", lambda *args, **kwargs: 550.0)
 
-        r = check.calculate_detailed(M_Ed=60.0, N_Ed=50.0)
+        r = check.calculate_detailed(My_Ed=60.0, N_Ed=50.0)
         assert r.k1_exceeded is True
         assert r.k3_exceeded is True
         assert r.yielding is True
@@ -396,7 +396,7 @@ class TestStressLimitsDetailedAndPerform:
             lambda self, E_cm_eff, ignore_compression_steel=False: build_calls.__setitem__("n", build_calls["n"] + 1),
         )
 
-        r = check.calculate_detailed(M_Ed=40.0, N_Ed=20.0)
+        r = check.calculate_detailed(My_Ed=40.0, N_Ed=20.0)
         assert r.k2_exceeded is True
         assert build_calls["n"] == 0
 
@@ -406,12 +406,12 @@ class TestStressLimitsDetailedAndPerform:
         monkeypatch.setattr(
             StressLimitsCheck,
             "calculate_detailed",
-            lambda self, M_Ed, N_Ed=0.0, ignore_compression_steel=False: (_ for _ in ()).throw(
+            lambda self, My_Ed, N_Ed=0.0, ignore_compression_steel=False, Mz_Ed=0.0: (_ for _ in ()).throw(
                 ValueError("outside domain")
             ),
         )
 
-        result = check.perform_check(M_Ed=5000.0, N_Ed=0.0)
+        result = check.perform_check(My_Ed=5000.0, N_Ed=0.0)
 
         assert result.status == CheckStatus.FAIL
         assert result.utilization == float("inf")
@@ -445,10 +445,10 @@ class TestStressLimitsDetailedAndPerform:
         monkeypatch.setattr(
             StressLimitsCheck,
             "calculate_detailed",
-            lambda self, M_Ed, N_Ed=0.0, ignore_compression_steel=False: fake,
+            lambda self, My_Ed, N_Ed=0.0, ignore_compression_steel=False, Mz_Ed=0.0: fake,
         )
 
-        result = check.perform_check(M_Ed=120.0, N_Ed=250.0, warning_threshold=0.95)
+        result = check.perform_check(My_Ed=120.0, N_Ed=250.0, warning_threshold=0.95)
 
         assert result.details["governing_check"] == "k2_concrete_qp"
         assert result.utilization > 1.0
@@ -474,10 +474,10 @@ class TestStressLimitsDetailedAndPerform:
         monkeypatch.setattr(
             StressLimitsCheck,
             "calculate_detailed",
-            lambda self, M_Ed, N_Ed=0.0, ignore_compression_steel=False: fake,
+            lambda self, My_Ed, N_Ed=0.0, ignore_compression_steel=False, Mz_Ed=0.0: fake,
         )
 
-        result = check.perform_check(M_Ed=10.0, N_Ed=0.0)
+        result = check.perform_check(My_Ed=10.0, N_Ed=0.0)
         assert result.utilization == pytest.approx(0.0, abs=1e-12)
         assert result.details["governing_check"] == "none"
         assert result.status == CheckStatus.PASS
@@ -502,12 +502,12 @@ class TestStressLimitsDetailedAndPerform:
         monkeypatch.setattr(
             StressLimitsCheck,
             "calculate_detailed",
-            lambda self, M_Ed, N_Ed=0.0, ignore_compression_steel=False: fake,
+            lambda self, My_Ed, N_Ed=0.0, ignore_compression_steel=False, Mz_Ed=0.0: fake,
         )
 
         with warnings.catch_warnings(record=True) as caught_warn:
             warnings.simplefilter("always")
-            check.perform_check(M_Ed=10.0, N_Ed=0.0, suppress_warnings=False)
+            check.perform_check(My_Ed=10.0, N_Ed=0.0, suppress_warnings=False)
         assert len(caught_warn) == 2
         messages = [str(w.message) for w in caught_warn]
         assert "warning A" in messages
@@ -515,5 +515,5 @@ class TestStressLimitsDetailedAndPerform:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            check.perform_check(M_Ed=10.0, N_Ed=0.0, suppress_warnings=True)
+            check.perform_check(My_Ed=10.0, N_Ed=0.0, suppress_warnings=True)
         assert len(caught) == 0
