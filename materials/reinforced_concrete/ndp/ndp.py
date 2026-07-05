@@ -31,6 +31,10 @@ _NDP_METADATA = {
         "description": "Reinforcing steel partial safety factor for ULS Accidental",
         "ref": "2.4.2.4(1)",
     },
+    "k_f": {
+        "description": "Foundation factor for cast-in place piles without permanent casing",
+        "ref": "2.4.2.5(2)",
+    },
     "f_ck_max": {
         "description": "Maximum cylinder strength supported (inclusive)",
         "ref": "3.1.2(2)",
@@ -131,6 +135,7 @@ EN1992_1_1_2004 = {
         "gamma_s": 1.15,
         "gamma_c_accidental": 1.2,
         "gamma_s_accidental": 1.0,
+        "k_f": 1.1,
         "f_ck_max": 90,
         "f_ck_cube_max": 105,
         "alpha_cc": 1.0,

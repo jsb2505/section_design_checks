@@ -18,8 +18,9 @@ Usage::
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from enum import StrEnum
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Generator, Optional, Union
 
 from materials.reinforced_concrete.ndp.ndp import (
     EN1992_1_1_2004,
@@ -65,7 +66,9 @@ class NDPRegistry:
 
     def __init__(self) -> None:
         self._code: EurocodeVersion = EurocodeVersion.EN1992_1_1_2004
-        self._country: CountryCode = CountryCode.EU
+        self._country: str = CountryCode.EU  # str to allow custom annex names
+        self._temp_overrides: dict[str, NDPValue] = {}  # For context manager
+        self._custom_annexes: dict[str, dict[str, NDPValue]] = {}  # For runtime registration
 
     @classmethod
     def instance(cls) -> "NDPRegistry":
@@ -78,31 +81,37 @@ class NDPRegistry:
         return self._code
 
     @property
-    def country(self) -> CountryCode:
+    def country(self) -> str:
+        """Current country code (may be a CountryCode or custom annex name)."""
         return self._country
 
     def set_context(
         self,
         code: Optional[EurocodeVersion] = None,
-        country: Optional[CountryCode] = None,
+        country: Optional[str] = None,
     ) -> None:
         """
         Set the active code version and/or country code.
 
         Args:
             code: Eurocode version (e.g. ``EurocodeVersion.EN1992_1_1_2004``)
-            country: Country code (e.g. ``CountryCode.EU_UK``)
+            country: Country code (e.g. ``CountryCode.EU_UK``) or custom annex name
         """
         if code is not None:
             self._code = EurocodeVersion(code)
         if country is not None:
-            self._country = CountryCode(country)
+            # Accept both CountryCode enum and string (for custom annexes)
+            self._country = str(country)
         # Validate the combination exists
         self._get_country_data()
 
     def get(self, param: str) -> NDPValue:
         """
         Look up a single NDP value from the active code + country.
+
+        Priority order:
+        1. Temporary overrides (from ndp_override context manager)
+        2. Country data (built-in or custom annex)
 
         Args:
             param: Parameter key (e.g. ``"gamma_c"``, ``"alpha_cc"``)
@@ -113,6 +122,11 @@ class NDPRegistry:
         Raises:
             KeyError: If the parameter is not found.
         """
+        # Check temporary overrides first (highest priority)
+        if param in self._temp_overrides:
+            return self._temp_overrides[param]
+
+        # Fall back to country data
         country_data = self._get_country_data()
         if param not in country_data:
             raise KeyError(
@@ -137,6 +151,9 @@ class NDPRegistry:
         """
         Build merged NDP data: EU base + country overrides + metadata.
 
+        Supports both built-in country codes (EU, EU_UK, EU_DE) and
+        custom annexes registered via register_custom_annex().
+
         Returns dict of {param: {"value": ..., "description": ..., "ref": ...}}
         """
         code_data = _NDP_DATA.get(self._code)
@@ -154,8 +171,20 @@ class NDPRegistry:
                 f"Available country codes: {sorted(code_data.keys())}"
             )
 
-        # Get country-specific overrides (may be empty if requesting EU)
-        country_overrides = code_data.get(self._country, {})
+        # Get country-specific overrides
+        # Check custom annexes first, then built-in country codes
+        if self._country in self._custom_annexes:
+            country_overrides = self._custom_annexes[self._country]
+        elif self._country in code_data:
+            country_overrides = code_data[self._country]
+        elif self._country == CountryCode.EU:
+            country_overrides = {}
+        else:
+            raise KeyError(
+                f"Country '{self._country}' not found. "
+                f"Built-in: {sorted(code_data.keys())}. "
+                f"Custom: {sorted(self._custom_annexes.keys())}"
+            )
 
         # Merge: start with EU base, override with country-specific values
         merged: dict[str, dict[str, Any]] = {}
@@ -227,25 +256,154 @@ def get_ndp_info(param: str) -> dict[str, Any]:
 
 def set_ndp_context(
     code: Optional[EurocodeVersion] = None,
-    country: Optional[CountryCode] = None,
+    country: Optional[str] = None,
 ) -> None:
-    """Set the active Eurocode version and/or country code."""
+    """Set the active Eurocode version and/or country code (or custom annex name)."""
     NDPRegistry.instance().set_context(code=code, country=country)
 
 
-def get_ndp_context() -> tuple[EurocodeVersion, CountryCode]:
+def get_ndp_context() -> tuple[EurocodeVersion, str]:
     """Return the current (code, country) context."""
     reg = NDPRegistry.instance()
     return reg.code, reg.country
 
 
+# ---------------------------------------------------------------------------
+# Runtime NDP customization
+# ---------------------------------------------------------------------------
+
+@contextmanager
+def ndp_override(**overrides: NDPValue) -> Generator[None, None, None]:
+    """
+    Temporarily override NDP values within a scope.
+
+    Any NDP parameters passed as keyword arguments will override
+    the normal lookup for the duration of the context.
+
+    Args:
+        **overrides: NDP parameter names and their temporary values.
+            Values can be constants (float/int) or callables.
+
+    Example::
+
+        # Normal lookup
+        gamma_c = get_ndp("gamma_c")  # Returns 1.5
+
+        # Temporary override
+        with ndp_override(gamma_c=1.6, alpha_cc=0.9):
+            gamma_c = get_ndp("gamma_c")  # Returns 1.6
+            check = ShearCheck(...)  # Uses gamma_c=1.6
+
+        # Back to normal
+        gamma_c = get_ndp("gamma_c")  # Returns 1.5 again
+    """
+    registry = NDPRegistry.instance()
+    old_overrides = registry._temp_overrides.copy()
+    registry._temp_overrides.update(overrides)
+    try:
+        yield
+    finally:
+        registry._temp_overrides = old_overrides
+
+
+def register_custom_annex(
+    name: str,
+    overrides: dict[str, NDPValue],
+    *,
+    validate: bool = True,
+) -> None:
+    """
+    Register a custom national annex at runtime.
+
+    Custom annexes inherit all parameters from the EU base, with
+    the provided overrides taking precedence.
+
+    Args:
+        name: Annex identifier (e.g., "PROJECT_X", "CLIENT_STANDARDS")
+        overrides: Dict of NDP parameter names to override values.
+            Values can be constants (float/int) or callables.
+        validate: If True (default), verify that override keys exist
+            in the EU base parameters.
+
+    Raises:
+        ValueError: If validate=True and unknown parameter names are provided.
+
+    Example::
+
+        # Register a project-specific annex
+        register_custom_annex("PROJECT_BRIDGE", {
+            "gamma_c": 1.4,
+            "alpha_cc": 0.95,
+            "nu_shear": lambda f_ck: 0.65 * (1 - f_ck / 250),
+        })
+
+        # Switch to it
+        set_ndp_context(country="PROJECT_BRIDGE")
+
+        # All subsequent objects use these values
+        concrete = ConcreteMaterial(grade="C30/37")  # Uses gamma_c=1.4
+    """
+    registry = NDPRegistry.instance()
+
+    if validate:
+        # Get EU base keys for the current code version
+        code_data = _NDP_DATA.get(registry._code)
+        if code_data is None:
+            raise KeyError(f"Eurocode version '{registry._code}' not found.")
+        eu_keys = set(code_data.get(CountryCode.EU, {}).keys())
+        invalid = set(overrides.keys()) - eu_keys
+        if invalid:
+            raise ValueError(
+                f"Unknown NDP parameters: {sorted(invalid)}. "
+                f"Valid parameters: {sorted(eu_keys)}"
+            )
+
+    registry._custom_annexes[name] = overrides
+
+
+def unregister_custom_annex(name: str) -> bool:
+    """
+    Remove a custom annex registration.
+
+    Args:
+        name: Annex identifier to remove.
+
+    Returns:
+        True if the annex was removed, False if it didn't exist.
+    """
+    registry = NDPRegistry.instance()
+    if name in registry._custom_annexes:
+        del registry._custom_annexes[name]
+        return True
+    return False
+
+
+def list_custom_annexes() -> list[str]:
+    """
+    List all registered custom annex names.
+
+    Returns:
+        List of custom annex identifiers.
+    """
+    return list(NDPRegistry.instance()._custom_annexes.keys())
+
+
 __all__ = [
+    # Enums
     "EurocodeVersion",
     "CountryCode",
+    # Registry
     "NDPRegistry",
+    # Basic lookup
     "get_ndp",
     "get_ndp_callable",
     "get_ndp_info",
+    # Context management
     "set_ndp_context",
     "get_ndp_context",
+    # Runtime customization
+    "ndp_override",
+    "register_custom_annex",
+    "unregister_custom_annex",
+    "list_custom_annexes",
 ]
