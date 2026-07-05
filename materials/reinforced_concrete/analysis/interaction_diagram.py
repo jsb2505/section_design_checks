@@ -886,14 +886,20 @@ class MNInteractionDiagram:
             return (None, None, False, float("inf"))
 
         # Special case: origin (no load)
-        if abs(M_Ed) < 1e-12 and abs(N_Ed) < 1e-12:
+        if abs(M_Ed) < 1e-18 and abs(N_Ed) < 1e-18:
             return (0.0, 0.0, True, 0.0)
 
         ray_dir = (float(M_Ed), float(N_Ed))  # IMPORTANT: do NOT normalize
 
+        # Ensure closed (duplicate endpoint convention)
+        if pts[0] != pts[-1]:
+            pts = pts + [pts[0]]
+
         max_t = 0.0
-        for i in range(len(pts) - 1):
-            t = _ray_segment_intersection_alpha(ray_dir, pts[i], pts[i + 1], tol=1e-12)
+        for p1, p2 in zip(pts[:-1], pts[1:]):
+            if p1 == p2:
+                continue
+            t = _ray_segment_intersection_alpha(ray_dir, p1, p2, tol=1e-12)
             if t is not None:
                 max_t = max(max_t, t)
 

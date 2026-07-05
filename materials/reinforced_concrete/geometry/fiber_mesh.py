@@ -11,21 +11,16 @@ Each fiber has:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, List, Tuple
+from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
 from shapely.geometry import Point, box
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from shapely.prepared import prep
-from shapely.geometry.base import BaseGeometry
-
 
 from materials.reinforced_concrete.geometry.section import RCSection
-
-
-from dataclasses import dataclass
-from typing import Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,13 +80,17 @@ class FiberMesh:
         n_fibers_height: int = 20,
         exclude_steel_area: bool = True,
     ) -> None:
-        self.section = section
-        self.n_fibers_width = n_fibers_width
-        self.n_fibers_height = n_fibers_height
-        self.exclude_steel_area = exclude_steel_area
+        # Validate cheap things early (fail fast)
+        if n_fibers_width <= 0 or n_fibers_height <= 0:
+            raise ValueError("n_fibers_width and n_fibers_height must be > 0")
 
-        self.concrete_fibers: List[Fiber] = []
-        self.steel_fibers: List[Fiber] = []
+        self.section = section
+        self.n_fibers_width = int(n_fibers_width)
+        self.n_fibers_height = int(n_fibers_height)
+        self.exclude_steel_area = bool(exclude_steel_area)
+
+        self.concrete_fibers: list[Fiber] = []
+        self.steel_fibers: list[Fiber] = []
 
         # Precompute geometry for speed
         self._outline = self.section.outline
@@ -108,12 +107,12 @@ class FiberMesh:
         circles: list[BaseGeometry] = []
         for group in self.section.rebar_groups:
             r = float(group.rebar.diameter) / 2.0
-            if r <= 0:
+            if r <= 0.0:
                 continue
 
             for pos in group.positions:
                 # buffer() returns a Polygon (which is a BaseGeometry)
-                circles.append(Point(pos.x, pos.y).buffer(r))
+                circles.append(Point(float(pos.x), float(pos.y)).buffer(r))
 
         return circles
 
@@ -121,6 +120,14 @@ class FiberMesh:
         """Generate concrete and steel fibers."""
         self._generate_concrete_fibers()
         self._generate_steel_fibers()
+
+        # Optional sanity checks (lightweight)
+        # - Helps catch accidental empty meshes early.
+        if not self.concrete_fibers:
+            raise ValueError(
+                "FiberMesh generation produced no concrete fibers. "
+                "Check section outline geometry and fiber counts."
+            )
 
     def _generate_concrete_fibers(self) -> None:
         """
@@ -137,17 +144,15 @@ class FiberMesh:
         Notes:
             - Edge cells produce partial fibers (clipped by outline).
             - If the remaining area is negligible, the fiber is skipped.
+            - When excluding steel area, centroid is computed from the *remaining*
+              concrete geometry (after subtraction) to be consistent.
         """
         min_x, min_y, max_x, max_y = self.section.get_bounding_box()
-
-        # Guard against degenerate bbox / invalid mesh sizes
-        if self.n_fibers_width <= 0 or self.n_fibers_height <= 0:
-            raise ValueError("n_fibers_width and n_fibers_height must be > 0")
 
         dx = (max_x - min_x) / self.n_fibers_width
         dy = (max_y - min_y) / self.n_fibers_height
 
-        if dx <= 0 or dy <= 0:
+        if dx <= 0.0 or dy <= 0.0:
             raise ValueError("Section bounding box is degenerate (zero width/height).")
 
         # Small area threshold (mm²)
@@ -171,31 +176,32 @@ class FiberMesh:
                 if cell_concrete.is_empty:
                     continue
 
-                area_concrete = cell_concrete.area
+                # Subtract steel overlap geometrically (accurate)
+                # Use difference() so area and centroid are consistent.
+                remaining = cell_concrete
+                if self.exclude_steel_area and self._bar_union is not None:
+                    # Quick reject: if bar union doesn't intersect cell, avoid difference call
+                    if self._bar_union_prepared is None or self._bar_union_prepared.intersects(cell):
+                        remaining = cell_concrete.difference(self._bar_union)
+
+                if remaining.is_empty:
+                    continue
+
+                area_concrete = float(remaining.area)
                 if area_concrete < eps_area:
                     continue
 
-                # Subtract steel overlap geometrically (accurate)
-                if self.exclude_steel_area and self._bar_union is not None:
-                    # Quick reject: if bar union doesn't intersect cell, avoid intersection call
-                    if self._bar_union_prepared is None or self._bar_union_prepared.intersects(cell):
-                        steel_overlap = cell_concrete.intersection(self._bar_union)
-                        if not steel_overlap.is_empty:
-                            area_concrete -= steel_overlap.area
-
-                    if area_concrete < eps_area:
-                        continue
-
                 # Use centroid of remaining concrete region
-                c = cell_concrete.centroid
-                fiber = Fiber(
-                    x=float(c.x),
-                    y=float(c.y),
-                    area=float(area_concrete),
-                    material_type="concrete",
-                    material_index=0,
+                c = remaining.centroid
+                self.concrete_fibers.append(
+                    Fiber(
+                        x=float(c.x),
+                        y=float(c.y),
+                        area=area_concrete,
+                        material_type="concrete",
+                        material_index=0,
+                    )
                 )
-                self.concrete_fibers.append(fiber)
 
     def _generate_steel_fibers(self) -> None:
         """
@@ -209,20 +215,25 @@ class FiberMesh:
             Groups can have different diameters/areas from each other.
         """
         for group_idx, group in enumerate(self.section.rebar_groups):
+            a_bar = float(group.rebar.area)
+            if a_bar <= 0.0:
+                continue
+
             for pos in group.positions:
                 self.steel_fibers.append(
                     Fiber(
                         x=float(pos.x),
                         y=float(pos.y),
-                        area=float(group.rebar.area),
+                        area=a_bar,
                         material_type="steel",
                         material_index=group_idx,
                     )
                 )
 
     @property
-    def all_fibers(self) -> List[Fiber]:
+    def all_fibers(self) -> list[Fiber]:
         """Get all fibers (concrete + steel)."""
+        # Note: this creates a new list each call. Fine for occasional use.
         return self.concrete_fibers + self.steel_fibers
 
     @property
@@ -239,7 +250,7 @@ class FiberMesh:
 
     def get_fiber_arrays(
         self,
-    ) -> Tuple[
+    ) -> tuple[
         npt.NDArray[np.float64],
         npt.NDArray[np.float64],
         npt.NDArray[np.float64],

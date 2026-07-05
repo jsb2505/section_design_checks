@@ -7,6 +7,7 @@ Uses the fiber-based M-N interaction diagram infrastructure.
 
 from typing import Literal, Optional
 from pydantic import Field
+import numpy as np
 
 from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
@@ -81,11 +82,15 @@ class BendingCheck(BaseCodeCheck):
     n_fibers_width: int = Field(
         default=20,
         description="Number of concrete fibers across width",
+        ge=10,
+        le=500,
     )
 
     n_fibers_height: int = Field(
         default=30,
         description="Number of concrete fibers across height",
+        ge=10,
+        le=500,
     )
 
     def perform_check(
@@ -99,20 +104,10 @@ class BendingCheck(BaseCodeCheck):
         """
         Check section capacity against applied bending moment and axial force.
 
-        This is a FIRST PRINCIPLES check:
-        - Generates M-N interaction diagram using strain compatibility
-        - Checks if (N_Ed, M_Ed) point lies within the interaction surface
-        - Returns utilization ratio
-
-        Args:
-            M_Ed: Design bending moment in kN·m (factored loads)
-            N_Ed: Design axial force in kN (positive = compression, negative = tension)
-            warning_threshold: Utilization threshold for warning (default 0.95)
-
-        Returns:
-            CheckResult with pass/fail status and utilization
+        Uses M–N interaction diagram and ray intersection:
+        - Finds boundary point (N_Rd, M_Rd) along the load vector (M_Ed, N_Ed)
+        - Utilization = 1 / t_cap where (M_Rd, N_Rd) = t_cap * (M_Ed, N_Ed)
         """
-        # Create M-N interaction diagram (strain compatibility analysis)
         diagram = create_interaction_diagram(
             section=self.section,
             concrete=self.concrete,
@@ -122,37 +117,65 @@ class BendingCheck(BaseCodeCheck):
             n_fibers_height=self.n_fibers_height,
         )
 
-        # Check capacity (returns is_safe and utilization)
-        is_safe, utilization = diagram.get_utilization_vector(N_Ed=N_Ed, M_Ed=M_Ed)
+        N_Rd, M_Rd, _, utilization = diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed)
 
-        # Get moment capacity at this axial force for reporting
-        N_cap, M_Rd_pos, M_Rd_neg = diagram.get_capacity_fixed_n(N_Ed=N_Ed)
+        demand_components = {"N": float(N_Ed), "M": float(M_Ed)}
+        units_components = {"N": "kN", "M": "kN·m"}
 
-        # Determine which capacity is relevant based on sign of M_Ed
-        # Handle case where N_Ed is outside interaction diagram bounds
-        if M_Rd_pos is None and M_Rd_neg is None:
-            # N_Ed is outside the interaction diagram - section has no capacity
-            M_Rd = 0.0
-        elif M_Ed >= 0:
-            M_Rd = M_Rd_pos if M_Rd_pos is not None else 0.0
+        # Outside diagram / no intersection
+        if (
+            N_Rd is None
+            or M_Rd is None
+            or utilization is None
+            or utilization == float("inf")
+            or utilization != utilization  # NaN check without numpy
+        ):
+            message = "Load point outside interaction diagram domain (no capacity found)"
+            details = {
+                "N_Ed": float(N_Ed),
+                "M_Ed": float(M_Ed),
+                "N_Rd": N_Rd,
+                "M_Rd": M_Rd,
+                "utilization": float(utilization) if utilization is not None else None,
+                "concrete_model": self.concrete_model_type,
+                "steel_model": self.steel_branch_type,
+                "section_name": self.section.section_name or "unnamed",
+                "concrete_grade": self.concrete.grade,
+                "reinforcement_ratio": self.section.reinforcement_ratio,
+            }
+
+            return self._create_result(
+                check_name="Bending check (EC2 §6.1)",
+                code_reference="EC2 §6.1",
+                warning_threshold=warning_threshold,
+                utilization=float("inf"),
+                demand_components=demand_components,
+                capacity_components=None,
+                units_components=units_components,
+                message=message,
+                details=details,
+            )
+
+        utilization_f = float(utilization)
+        capacity_components = {"N": float(N_Rd), "M": float(M_Rd)}
+
+        # Messaging (optional; base_check will set status based on utilization)
+        if utilization_f <= 1.0:
+            message = (
+                "High utilization - consider increasing section or reinforcement"
+                if utilization_f >= warning_threshold
+                else "Section capacity adequate"
+            )
         else:
-            M_Rd = abs(M_Rd_neg) if M_Rd_neg is not None else 0.0
-
-        # Create detailed message
-        if is_safe:
-            if utilization >= warning_threshold:
-                message = f"High utilization - consider increasing section or reinforcement"
-            else:
-                message = "Section capacity adequate"
-        else:
-            deficit = (utilization - 1.0) * 100
+            deficit = (utilization_f - 1.0) * 100.0
             message = f"Section capacity exceeded - increase section or reinforcement by ~{deficit:.0f}%"
 
-        # Additional details
         details = {
-            "N_Ed": N_Ed,
-            "M_Ed": M_Ed,
-            "M_Rd": M_Rd,
+            "N_Ed": float(N_Ed),
+            "M_Ed": float(M_Ed),
+            "N_Rd": float(N_Rd),
+            "M_Rd": float(M_Rd),
+            "utilization": utilization_f,
             "concrete_model": self.concrete_model_type,
             "steel_model": self.steel_branch_type,
             "section_name": self.section.section_name or "unnamed",
@@ -162,14 +185,16 @@ class BendingCheck(BaseCodeCheck):
 
         return self._create_result(
             check_name="Bending check (EC2 §6.1)",
-            demand=abs(M_Ed),
-            capacity=M_Rd,
-            units="kN·m",
             code_reference="EC2 §6.1",
             warning_threshold=warning_threshold,
+            utilization=utilization_f,
+            demand_components=demand_components,
+            capacity_components=capacity_components,
+            units_components=units_components,
             message=message,
             details=details,
         )
+
 
     def get_moment_capacity(self, N_Ed: float = 0.0) -> tuple[Optional[float], Optional[float]]:
         """
@@ -192,10 +217,19 @@ class BendingCheck(BaseCodeCheck):
         )
 
         N_cap, M_Rd_pos, M_Rd_neg = diagram.get_capacity_fixed_n(N_Ed=N_Ed)
-        
+
+        if N_cap is not None:
+            if N_cap >=0:
+                if N_Ed > N_cap:
+                    M_Rd_pos = None
+                    M_Rd_neg = None
+            else:
+                if N_Ed < N_cap:
+                    M_Rd_pos = None
+                    M_Rd_neg = None
         return (M_Rd_pos, M_Rd_neg)
 
-    def generate_interaction_diagram(self, n_points: int = 100):
+    def generate_interaction_diagram(self, n_points: int = 100) -> tuple["np.ndarray", "np.ndarray"]:
         """
         Generate complete M-N interaction diagram for visualization.
 

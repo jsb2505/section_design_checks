@@ -36,9 +36,23 @@ class CheckResult(BaseModel):
         description="Utilization ratio (demand/capacity), if applicable",
         ge=0,
     )
+
+    # Scalar demand/capacity (kept for simple checks like shear VEd/VRd)
     demand: Optional[float] = Field(None, description="Demand value")
     capacity: Optional[float] = Field(None, description="Capacity value")
     units: Optional[str] = Field(None, description="Units for demand/capacity")
+
+    # Vector demand/capacity (for M-N, M-N-V, etc.)
+    demand_components: Optional[Dict[str, float]] = Field(
+        default=None, description="Component demands (e.g. {'N':..., 'M':...})"
+    )
+    capacity_components: Optional[Dict[str, float]] = Field(
+        default=None, description="Component capacities at governing point"
+    )
+    units_components: Optional[Dict[str, str]] = Field(
+        default=None, description="Units per component (e.g. {'N':'kN','M':'kN·m'})"
+    )
+
     message: str = Field(default="", description="Descriptive message")
     details: Dict[str, Any] = Field(
         default_factory=dict,
@@ -49,19 +63,34 @@ class CheckResult(BaseModel):
         description="Code clause reference (e.g., 'EC2 §6.1')"
     )
 
-    def __repr__(self) -> str:
-        util_str = f", {self.utilization:.2%}" if self.utilization is not None else ""
-        return f"CheckResult({self.check_name}: {self.status.value}{util_str})"
-
     def __str__(self) -> str:
         parts = [f"{self.check_name}: {self.status.value.upper()}"]
 
         if self.utilization is not None:
             parts.append(f"(utilization: {self.utilization:.1%})")
 
+        # Prefer scalar display if present
         if self.demand is not None and self.capacity is not None:
             units_str = f" {self.units}" if self.units else ""
             parts.append(f"[{self.demand:.2f}/{self.capacity:.2f}{units_str}]")
+        # Otherwise show vector summary if present
+        elif self.demand_components and self.capacity_components:
+            # small compact summary
+            keys = [k for k in ("N", "M", "V") if k in self.demand_components or k in self.capacity_components]
+            if not keys:
+                keys = sorted(set(self.demand_components) | set(self.capacity_components))
+
+            comp_bits = []
+            for k in keys:
+                d = self.demand_components.get(k)
+                c = self.capacity_components.get(k)
+                u = (self.units_components or {}).get(k, "")
+                if d is None or c is None:
+                    continue
+                u = f" {u}" if u else ""
+                comp_bits.append(f"{k}: {d:.2f}/{c:.2f}{u}")
+            if comp_bits:
+                parts.append("[" + ", ".join(comp_bits) + "]")
 
         if self.message:
             parts.append(f"- {self.message}")
@@ -96,14 +125,25 @@ class BaseCodeCheck(BaseModel, ABC):
 
     def _create_result(
         self,
+        *,
         check_name: str,
-        demand: float,
-        capacity: float,
-        units: str,
         code_reference: str,
         warning_threshold: float = 0.95,
         message: str = "",
         details: Optional[Dict[str, Any]] = None,
+
+        # scalar style (old)
+        demand: Optional[float] = None,
+        capacity: Optional[float] = None,
+        units: Optional[str] = None,
+
+        # vector style (new)
+        demand_components: Optional[Dict[str, float]] = None,
+        capacity_components: Optional[Dict[str, float]] = None,
+        units_components: Optional[Dict[str, str]] = None,
+
+        # override (for interaction checks)
+        utilization: Optional[float] = None,
     ) -> CheckResult:
         """
         Helper to create standardized check results.
@@ -121,7 +161,10 @@ class BaseCodeCheck(BaseModel, ABC):
         Returns:
             CheckResult
         """
-        utilization = demand / capacity if capacity > 0 else float('inf')
+        if utilization is None:
+            if demand is None or capacity is None:
+                raise ValueError("Provide either utilization=... or (demand and capacity).")
+            utilization = demand / capacity if capacity > 0 else float("inf")
 
         if utilization <= 1.0:
             if utilization >= warning_threshold:
@@ -140,10 +183,13 @@ class BaseCodeCheck(BaseModel, ABC):
         return CheckResult(
             check_name=check_name,
             status=status,
-            utilization=utilization,
+            utilization=float(utilization),
             demand=demand,
             capacity=capacity,
             units=units,
+            demand_components=demand_components,
+            capacity_components=capacity_components,
+            units_components=units_components,
             message=message,
             details=details or {},
             code_reference=code_reference,
