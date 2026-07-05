@@ -4,21 +4,30 @@ This module provides ConcreteAge which extends ConcreteMaterial with time-depend
 properties for early-age concrete behaviour and strength development.
 """
 
-from typing import Literal
+from enum import StrEnum
 from math import exp, sqrt
 from pydantic import BaseModel, Field, ConfigDict
 
 from .concrete import ConcreteMaterial
 
 
-# Cement class for strength development rate
-CementClass = Literal["R", "N", "S"]
+class CementClass(StrEnum):
+    '''Cement class for strength development rate'''
+    R = "R"  # Rapid (Class R)
+    N = "N"  # Normal (Class N)
+    S = "S"  # Slow (Class S)
 
-_S_VALUES: dict[CementClass, float] = {
-    "R": 0.20,
-    "N": 0.25,
-    "S": 0.38,
-}
+    @property
+    def s_coefficient(self) -> float:
+        """
+        Coefficient 's' depends on cement type (§3.1.2(6)).
+        R = 0.20, N = 0.25, S = 0.38
+        """
+        return {
+            CementClass.R: 0.20,
+            CementClass.N: 0.25,
+            CementClass.S: 0.38,
+        }[self]
 
 
 class ConcreteAge(BaseModel):
@@ -63,7 +72,7 @@ class ConcreteAge(BaseModel):
 
         β_cc(t) = exp[s · (1 - √(28/t))]
         """
-        s = _S_VALUES[self.cement_class]
+        s = self.cement_class.s_coefficient
         return exp(s * (1.0 - sqrt(28.0 / self.age)))
 
     @property

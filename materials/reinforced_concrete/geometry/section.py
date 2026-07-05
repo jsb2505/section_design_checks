@@ -417,7 +417,6 @@ class RCSection(BaseGeometry):
     def get_transformed_second_moment_area(
         self,
         E_cm: float,
-        centroid: Optional[Tuple[float, float]] = None,
     ) -> Tuple[float, float, float]:
         """
         Second moments of area for transformed section including reinforcement.
@@ -441,11 +440,7 @@ class RCSection(BaseGeometry):
         I_xx_g, I_yy_g, I_xy_g = self.get_second_moment_area()
         A_gross = self.get_area()
 
-        # Use provided centroid if user passes one, else compute transformed centroid
-        if centroid is None:
-            _, cx_t, cy_t = self.get_transformed_centroid(E_cm)
-        else:
-            cx_t, cy_t = centroid
+        _, cx_t, cy_t = self.get_transformed_centroid(E_cm)
 
         # Shift concrete I from gross centroid to transformed centroid
         dx_c = cx_g - cx_t
@@ -813,6 +808,7 @@ class RCSection(BaseGeometry):
         min_x, min_y, max_x, max_y = self.get_bounding_box()
         cx, cy = self.get_centroid()
         area = self.get_area()
+        I_xx, I_yy, I_xy = self.get_second_moment_area()            
 
         # Padding for plot limits
         pad_x = (max_x - min_x) * 0.1
@@ -825,16 +821,42 @@ class RCSection(BaseGeometry):
         # Build hover text for concrete
         concrete_hover_parts = [
             f"<b>Concrete Section</b>",
-            f"Name: {self.section_name or 'unnamed'}",
+            f"Section Name: {self.section_name or 'unnamed'}",
         ]
+
         if concrete is not None:
+            concrete_hover_parts.append(f"Material Name: {concrete.name}")
             concrete_hover_parts.append(f"Grade: {concrete.grade}")
-            concrete_hover_parts.append(f"Name: {concrete.name}")
+            
         concrete_hover_parts.extend([
-            f"Gross Area: {area:,.0f} mm²",
-            f"Gross Centroid: ({cx:.1f}, {cy:.1f}) mm",
+            f"Gross I_xx: {I_xx/10**6:,.0f} x10⁶ mm⁴",
+            f"Gross I_yy: {I_yy/10**6:,.0f} x10⁶ mm⁴",
             f"Reinforcement Ratio: {self.reinforcement_ratio:.4f}",
         ])
+
+        # Initialize default values
+        transformed_data = None
+        
+        # 1. Perform transformed calculations ONCE
+        if self.rebar_groups and concrete:
+            E_cm = concrete.E_cm
+            A_tr, cx_tr, cy_tr = self.get_transformed_centroid(E_cm=E_cm)
+            I_tr_xx, I_tr_yy, I_tr_xy = self.get_transformed_second_moment_area(E_cm=E_cm)
+            E_cm_GPa = E_cm / 1000.0
+
+            # Store in a local dictionary or namedtuple to pass around
+            transformed_data = {
+                "A_tr": A_tr, "cx_tr": cx_tr, "cy_tr": cy_tr,
+                "I_xx": I_tr_xx, "I_yy": I_tr_yy, "E_cm_GPa": E_cm_GPa
+            }
+
+            # Add to hover parts immediately
+            concrete_hover_parts.extend([
+                f"Elastic Modulus E_cm: {E_cm_GPa:,.2f} GPa",
+                f"Transformed I_xx: {I_tr_xx/10**6:,.0f} x10⁶ mm⁴",
+                f"Transformed I_yy: {I_tr_yy/10**6:,.0f} x10⁶ mm⁴",
+            ])
+
         concrete_hover = "<br>".join(concrete_hover_parts)
 
         # Exterior ring
@@ -903,12 +925,11 @@ class RCSection(BaseGeometry):
                 ]
                 if group.layer_name:
                     hover_parts.append(f"Layer: {group.layer_name}")
+
                 hover_parts.extend([
-                    f"Group Index: {group_idx}",
-                    f"Bar Index: {bar_idx + 1} of {group.n_bars}",
-                    f"f_yk: {group.rebar.f_yk:.0f} MPa",
-                    f"f_yd: {group.rebar.f_yd:.1f} MPa",
+                    f"Total Steel Area: {self.total_steel_area:.1f} mm²",
                 ])
+
                 rebar_hover = "<br>".join(hover_parts)
 
                 # Determine legend group for cleaner legend
@@ -949,15 +970,17 @@ class RCSection(BaseGeometry):
             ),
             name="Gross Centroid",
             hoverinfo="text",
-            hovertext=f"<b>Gross Centroid</b><br>({cx:.1f}, {cy:.1f}) mm",
+            hovertext=(f"<b>Gross Centroid</b><br>"
+                       f"Position: ({cx:.1f}, {cy:.1f}) mm<br>"
+                       f"Gross Area: {area:,.0f} mm²"
+            )
         ))
 
         # Add transformed centroid if concrete material is provided
-        if concrete is not None:
-            A_tr, cx_tr, cy_tr = self.get_transformed_centroid(concrete.E_cm)
+        if transformed_data:
             fig.add_trace(go.Scatter(
-                x=[cx_tr],
-                y=[cy_tr],
+                x=[transformed_data["cx_tr"]],
+                y=[transformed_data["cy_tr"]],
                 mode="markers",
                 marker=dict(
                     symbol="x",
@@ -969,9 +992,9 @@ class RCSection(BaseGeometry):
                 hoverinfo="text",
                 hovertext=(
                     f"<b>Transformed Centroid</b><br>"
-                    f"({cx_tr:.1f}, {cy_tr:.1f}) mm<br>"
-                    f"A_tr: {A_tr:,.0f} mm²<br>"
-                    f"E_cm: {concrete.E_cm:,.0f} MPa"
+                    f"Position: ({transformed_data['cx_tr']:.1f}, {transformed_data['cy_tr']:.1f}) mm<br>"
+                    f"Transformed Area: {transformed_data['A_tr']:,.0f} mm²<br>"
+                    f"Elastic Modulus: {transformed_data['E_cm_GPa']:,.2f} GPa"
                 ),
             ))
 
@@ -985,7 +1008,7 @@ class RCSection(BaseGeometry):
                 text=plot_title,
                 font=dict(size=16, family="Arial, sans-serif"),
                 x=0.5,
-                xanchor="centre",
+                xanchor="center",
             ),
             xaxis=dict(
                 title="Width (mm)",

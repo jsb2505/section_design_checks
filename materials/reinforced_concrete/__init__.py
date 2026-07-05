@@ -9,11 +9,12 @@ and code checks for reinforced concrete design.
 from materials.reinforced_concrete.materials import (
     ConcreteMaterial,
     ConcreteGrade,
+    AggregateType,
     ReinforcingSteel,
     ReinforcingSteelGrade,
     Rebar,
     ShearRebar,
-    BarDiameter,
+    STANDARD_BAR_DIAMETERS,
 )
 
 # Constitutive models
@@ -43,11 +44,12 @@ __all__ = [
     # Materials
     "ConcreteMaterial",
     "ConcreteGrade",
+    "AggregateType",
     "ReinforcingSteel",
     "ReinforcingSteelGrade",
     "Rebar",
     "ShearRebar",
-    "BarDiameter",
+    "STANDARD_BAR_DIAMETERS",
     # Constitutive
     "ConcreteStressStrainSchematic",
     "ConcreteStressStrainParabolaRectangle",
