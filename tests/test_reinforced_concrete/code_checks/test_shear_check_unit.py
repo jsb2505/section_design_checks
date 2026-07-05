@@ -68,6 +68,7 @@ def _make_stub_shear_check() -> ShearCheck:
     object.__setattr__(check, "cap_lever_arm", True)
     object.__setattr__(check, "breadth_override", None)
     object.__setattr__(check, "use_increased_nu_1", False)
+    object.__setattr__(check, "apply_tension_cot_theta_limit", True)
     object.__setattr__(check, "concrete_model_type", "parabola")
     object.__setattr__(check, "steel_model_type", "inclined")
     object.__setattr__(check, "concrete_model_override", None)

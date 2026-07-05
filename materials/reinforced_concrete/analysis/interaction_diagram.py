@@ -2105,6 +2105,7 @@ class MNInteractionDiagram:
         shear_reinforcement: Optional["ShearRebar"] = None,
         cot_theta_override: Optional[float] = None,
         use_v_rd_s_for_cot_theta: bool = False,
+        cot_max_override: Optional[float] = None,
         iterate_z: bool = False,
         prefer_rigorous: bool = False,
         cap_to_09d: bool = True,
@@ -2132,6 +2133,8 @@ class MNInteractionDiagram:
             use_v_rd_s_for_cot_theta: If True, determine cot(θ) from rearranged
                 EC2 Eq. 6.13 (V_Rd,s = V_Ed). If False (default), determine cot(θ)
                 from rearranged EC2 Eq. 6.14 / V_Rd,max.
+            cot_max_override: Optional upper limit for cot(θ). When provided,
+                overrides the NDP default (e.g. 1.25 for UK NA with tension).
             iterate_z: If True, iteratively recalculate z based on M_design until
                       convergence (0.5% tolerance, max 5 iterations). Only has an
                       effect when BOTH shear_reinforcement is provided (so a_l depends
@@ -2205,6 +2208,7 @@ class MNInteractionDiagram:
             shear_reinforcement=shear_reinforcement,
             cot_theta_override=cot_theta_override,
             use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
+            cot_max_override=cot_max_override,
         )
 
         # Iterate z if requested, shear reinforcement is provided, AND prefer_rigorous=True

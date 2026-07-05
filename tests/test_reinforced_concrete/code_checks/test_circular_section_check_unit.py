@@ -59,6 +59,7 @@ def _make_stub_check() -> CircularSectionCheck:
     object.__setattr__(check, "use_simplified_lambda_1", False)
     object.__setattr__(check, "use_increased_nu_1", False)
     object.__setattr__(check, "use_sigma_cp_for_alpha_cw", False)
+    object.__setattr__(check, "apply_tension_cot_theta_limit", True)
     object.__setattr__(check, "use_accidental", False)
     object.__setattr__(check, "_concrete_uls", concrete_uls)
     object.__setattr__(check, "_shear_check", shear_check)

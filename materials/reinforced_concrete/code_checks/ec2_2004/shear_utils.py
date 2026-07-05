@@ -64,6 +64,7 @@ def calculate_tension_shift(
     shear_reinforcement: Optional[ShearRebar] = None,
     cot_theta_override: Optional[float] = None,
     use_v_rd_s_for_cot_theta: bool = False,
+    cot_max_override: Optional[float] = None,
 ) -> TensionShiftResult:
     """
     Apply EC2 §9.2.1.3 tension shift rule to a bending moment.
@@ -159,12 +160,17 @@ def calculate_tension_shift(
     if shear_reinforcement is not None:
         if cot_theta_override is not None:
             # User-supplied cot(θ)
-            cot_theta = clamp_cot_theta(cot_theta_override)
+            cot_theta = clamp_cot_theta(cot_theta_override, cot_max=cot_max_override)
         else:
             # Type narrowing: validation above ensures these are not None
             assert f_cd is not None
             assert f_ck is not None
             assert b_w is not None
+
+            # Build optional cot_max kwargs
+            _cot_kw: dict[str, float] = {}
+            if cot_max_override is not None:
+                _cot_kw["cot_max"] = cot_max_override
 
             if use_v_rd_s_for_cot_theta:
                 cot_theta = find_cot_theta_for_V_Ed_from_V_Rd_s(
@@ -173,6 +179,7 @@ def calculate_tension_shift(
                     z=z,
                     f_ywd=shear_reinforcement.f_yd,
                     link_angle_degrees=shear_reinforcement.angle,
+                    **_cot_kw,
                 )
             else:
                 # Variable strut angle method (EC2 §6.2.3)
@@ -189,6 +196,7 @@ def calculate_tension_shift(
                     V_Ed=V_Ed,
                     K=K,
                     link_angle_degrees=shear_reinforcement.angle,
+                    **_cot_kw,
                 )
         # EC2 §9.2.1.3: a_l = z(cot θ - cot α)/2
         # where α is the stirrup angle (90° for vertical, typically 45° for inclined)

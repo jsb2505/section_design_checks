@@ -72,6 +72,7 @@ class DummyDiagram:
         iterate_z=False,
         cot_theta_override=None,
         use_v_rd_s_for_cot_theta=False,
+        cot_max_override=None,
     ):
         """Stub for MNInteractionDiagram.apply_tension_shift."""
         from math import copysign
@@ -150,6 +151,7 @@ def make_check(*, diagram: DummyDiagram) -> BendingCheck:
     object.__setattr__(check, 'n_fibres_width', 20)
     object.__setattr__(check, 'n_fibres_height', 30)
     object.__setattr__(check, 'use_accidental', False)
+    object.__setattr__(check, 'apply_tension_cot_theta_limit', True)
     object.__setattr__(check, 'concrete_model_override', None)
     object.__setattr__(check, 'steel_models_override', None)
 

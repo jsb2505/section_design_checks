@@ -193,6 +193,17 @@ class CircularSectionCheck(BaseModel):
         ),
     )
 
+    apply_tension_cot_theta_limit: bool = Field(
+        default=True,
+        description=(
+            "Apply reduced cot(θ) upper limit when shear co-exists with externally "
+            "applied tension (UK NA §6.2.3(2): cot θ ≤ 1.25). Default True "
+            "(conservative). Set to False when tension arises from restraint, "
+            "not external loading. Only has effect when the NDP provides "
+            "cot_theta_upper_lim_tension (e.g. EU_UK)."
+        ),
+    )
+
     # ===========================
     # Pile / foundation
     # ===========================
@@ -369,6 +380,7 @@ class CircularSectionCheck(BaseModel):
             n_fibres_width=self.n_fibres_width,
             n_fibres_height=self.n_fibres_height,
             use_accidental=self.use_accidental,
+            apply_tension_cot_theta_limit=self.apply_tension_cot_theta_limit,
         )
 
         self._shear_check = ShearCheck(
@@ -850,6 +862,19 @@ class CircularSectionCheck(BaseModel):
         )
 
 
+    def _get_cot_theta_limits(self, sigma_cp: float) -> tuple[float, float]:
+        """Return (cot_min, cot_max) with tension override applied if applicable."""
+        cot_min = float(cast(float, get_ndp("cot_theta_lower_lim")))
+        cot_max = float(cast(float, get_ndp("cot_theta_upper_lim")))
+
+        if self.apply_tension_cot_theta_limit and sigma_cp < 0:
+            tension_lim = get_ndp("cot_theta_upper_lim_tension")
+            if tension_lim is not None and not callable(tension_lim):
+                cot_max = min(cot_max, float(tension_lim))
+
+        cot_max = max(cot_min, cot_max)
+        return cot_min, cot_max
+
     def perform_shear_check(
         self,
         *,
@@ -964,10 +989,12 @@ class CircularSectionCheck(BaseModel):
         leg_spacing_max_allowable: Optional[float] = None
         leg_spacing_satisfied: Optional[bool] = None
 
+        cot_min, cot_max = self._get_cot_theta_limits(sigma_cp_capped)
+
         used_note_2 = False
         if cot_theta_override is not None:
             # User override — compute V_Rd_max/V_Rd_s directly (no iteration)
-            cot_theta = clamp_cot_theta(cot_theta_override)
+            cot_theta = clamp_cot_theta(cot_theta_override, cot_min=cot_min, cot_max=cot_max)
             nu_1 = find_nu_1_factor(f_ck, link_angle_degrees=90.0)
             K = alpha_cw * b_w * z * nu_1 * f_cd
             tan_theta = 1 / cot_theta
@@ -985,6 +1012,8 @@ class CircularSectionCheck(BaseModel):
                     V_Ed, z, sigma_cp_capped, b_w, lambda_1, lambda_2,
                     use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
                     suppress_warnings=suppress_warnings,
+                    cot_min=cot_min,
+                    cot_max=cot_max,
                 )
             )
             K = alpha_cw * b_w * z * nu_1 * f_cd
@@ -1001,12 +1030,16 @@ class CircularSectionCheck(BaseModel):
                     z=z,
                     f_ywd=self._f_ywd_design,
                     link_angle_degrees=90.0,
+                    cot_min=cot_min,
+                    cot_max=cot_max,
                 )
             else:
                 cot_theta = find_cot_theta_for_V_Ed_from_V_Rd_max(
-                    V_Ed=V_Ed,  # already in kN; function converts internally
+                    V_Ed=V_Ed,
                     K=K,
                     link_angle_degrees=90.0,
+                    cot_min=cot_min,
+                    cot_max=cot_max,
                 )
             tan_theta = 1 / cot_theta
             V_Rd_max = to_kn(K / (cot_theta + tan_theta), ForceUnit.N)
@@ -1102,6 +1135,8 @@ class CircularSectionCheck(BaseModel):
         lambda_2: float,
         use_v_rd_s_for_cot_theta: bool = False,
         suppress_warnings: bool = False,
+        cot_min: float = 1.0,
+        cot_max: float = 2.5,
     ) -> tuple[float, float, float, float, bool]:
         """
         Calculate V_Rd_max and V_Rd_s with ν₁ Note 2 iteration per EC2 §6.2.3(3).
@@ -1153,10 +1188,13 @@ class CircularSectionCheck(BaseModel):
                 z=z,
                 f_ywd=f_ywd,
                 link_angle_degrees=90.0,
+                cot_min=cot_min,
+                cot_max=cot_max,
             )
         else:
             cot_theta_n1 = find_cot_theta_for_V_Ed_from_V_Rd_max(
                 V_Ed=V_Ed, K=K_n1, link_angle_degrees=90.0,
+                cot_min=cot_min, cot_max=cot_max,
             )
         tan_theta_n1 = 1 / cot_theta_n1
         V_Rd_max_n1 = to_kn(K_n1 / (cot_theta_n1 + tan_theta_n1), ForceUnit.N)
@@ -1185,10 +1223,13 @@ class CircularSectionCheck(BaseModel):
                 z=z,
                 f_ywd=f_ywd_n2,
                 link_angle_degrees=90.0,
+                cot_min=cot_min,
+                cot_max=cot_max,
             )
         else:
             cot_theta_n2 = find_cot_theta_for_V_Ed_from_V_Rd_max(
                 V_Ed=V_Ed, K=K_n2, link_angle_degrees=90.0,
+                cot_min=cot_min, cot_max=cot_max,
             )
         tan_theta_n2 = 1 / cot_theta_n2
         V_Rd_max_n2 = to_kn(K_n2 / (cot_theta_n2 + tan_theta_n2), ForceUnit.N)
@@ -1263,6 +1304,8 @@ class CircularSectionCheck(BaseModel):
         nu_1 = find_nu_1_factor(f_ck, 90.0)
         K = alpha_cw * b_w * z * nu_1 * f_cd
 
+        cot_min, cot_max = self._get_cot_theta_limits(sigma_cp_capped)
+
         if use_v_rd_s_for_cot_theta and self.shear_reinforcement is not None:
             return find_cot_theta_for_V_Ed_from_V_Rd_s(
                 V_Ed=abs(V_Ed),
@@ -1270,12 +1313,16 @@ class CircularSectionCheck(BaseModel):
                 z=z,
                 f_ywd=self._f_ywd_design,
                 link_angle_degrees=90.0,
+                cot_min=cot_min,
+                cot_max=cot_max,
             )
 
         return find_cot_theta_for_V_Ed_from_V_Rd_max(
-            V_Ed=abs(V_Ed),  # already in kN; function converts internally
+            V_Ed=abs(V_Ed),
             K=K,
             link_angle_degrees=90.0,
+            cot_min=cot_min,
+            cot_max=cot_max,
         )
 
 

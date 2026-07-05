@@ -222,6 +222,10 @@ _NDP_METADATA = {
         "description": "Upper limit of cot(theta)",
         "ref": "6.2.3(2)",
     },
+    "cot_theta_upper_lim_tension": {
+        "description": "Upper limit of cot(theta) when shear co-exists with externally applied tension",
+        "ref": "6.2.3(2)",
+    },
     "nu_shear": {
         "description": "Strength reduction factor for concrete cracked in shear",
         "ref": "6.2.2(6)",
@@ -342,6 +346,7 @@ EN1992_1_1_2004 = {
         "v_min_coefficient": 0.035,
         "cot_theta_lower_lim": 1.0,
         "cot_theta_upper_lim": 2.5,
+        "cot_theta_upper_lim_tension": None,  # No tension-specific restriction in base EC2
         "nu_shear": lambda f_ck: 0.6 * (1 - f_ck / 250),
         "nu_1": lambda f_ck, angle_deg: 0.6 * (1 - f_ck / 250),
         "nu_1_note_2": lambda f_ck, angle_deg: (
@@ -380,6 +385,7 @@ EN1992_1_1_2004 = {
     "EU_UK": {
         "alpha_cc": 0.85,
         "alpha_cc_shear": 1.0,
+        "cot_theta_upper_lim_tension": 1.25,  # §6.2.3(2): shear with externally applied tension
         "nu_1": lambda f_ck, angle_deg: (
             (0.6 * (1 - f_ck / 250)) * (1 - 0.5 * cos(radians(angle_deg)))
         ),
@@ -464,6 +470,7 @@ EN1992_2_2005 = {
         "v_min_coefficient": 0.035,
         "cot_theta_lower_lim": 1.0,
         "cot_theta_upper_lim": 2.5,
+        "cot_theta_upper_lim_tension": None,  # No tension-specific restriction in base EC2
         "nu_shear": lambda f_ck: 0.6 * (1 - f_ck / 250),
         "nu_1": lambda f_ck, angle_deg: 0.6 * (1 - f_ck / 250),
         "nu_1_note_2": lambda f_ck, angle_deg: (
@@ -503,6 +510,7 @@ EN1992_2_2005 = {
         "f_ck_cube_min": 30,
         "alpha_cc": 0.85,
         "alpha_cc_shear": 1.0,
+        "cot_theta_upper_lim_tension": 1.25,  # §6.2.3(2): shear with externally applied tension
         "nu_1": lambda f_ck, angle_deg: (
             (0.6 * (1 - f_ck / 250)) * (1 - 0.5 * cos(radians(angle_deg)))
         ),

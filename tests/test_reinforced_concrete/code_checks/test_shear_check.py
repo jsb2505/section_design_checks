@@ -492,3 +492,75 @@ class TestShearUncrackedVrdc:
         assert result.details["V_Rd_max"] is not None
         assert result.details["governing_component"] in {"V_Rd_s", "V_Rd_max"}
 
+
+class TestTensionCotThetaLimit:
+    """Tests for UK NA §6.2.3(2) cot(θ) limit with external tension."""
+
+    @pytest.fixture(autouse=True)
+    def _use_uk_na(self):
+        """Switch to EU_UK NDP for these tests."""
+        old_code, old_country = get_ndp_context()
+        set_ndp_context(country=CountryCode.EU_UK)
+        yield
+        set_ndp_context(code=old_code, country=old_country)
+
+    def _make_check(self, *, apply_limit: bool = True) -> ShearCheck:
+        section = create_test_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        links = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
+        return ShearCheck(
+            section=section,
+            concrete=concrete,
+            shear_reinforcement=links,
+            apply_tension_cot_theta_limit=apply_limit,
+        )
+
+    def test_tension_cot_theta_clamped_to_1_25_under_eu_uk(self):
+        """With EU_UK + tensile N_Ed, cot(θ) should be ≤ 1.25."""
+        check = self._make_check(apply_limit=True)
+        # Use tensile N_Ed (negative = tension)
+        load_case = ShearLoadCase(V_Ed=150, N_Ed=-200)
+        result = check.perform_check(load_case=load_case, suppress_warnings=True)
+
+        cot_theta = result.details["cot_theta"]
+        assert cot_theta is not None
+        assert cot_theta <= 1.25 + 1e-9
+
+    def test_tension_cot_theta_not_limited_when_opt_out(self):
+        """With apply_tension_cot_theta_limit=False, standard limit applies."""
+        check = self._make_check(apply_limit=False)
+        load_case = ShearLoadCase(V_Ed=150, N_Ed=-200)
+        result = check.perform_check(load_case=load_case, suppress_warnings=True)
+
+        cot_theta = result.details["cot_theta"]
+        assert cot_theta is not None
+        # Standard EU_UK limit is 2.5 — cot_theta should be able to exceed 1.25
+        # (it will be whatever the formula gives, up to 2.5)
+        # We just verify it's not forcibly clamped to 1.25
+        _, cot_max = check._find_cot_theta_limits(sigma_cp=-1.0, z=400.0, V_Ed=150.0)
+        assert cot_max == pytest.approx(2.5, rel=1e-9)
+
+    def test_compression_not_affected_by_tension_limit(self):
+        """With compressive N_Ed, cot(θ) should NOT be clamped to 1.25."""
+        check = self._make_check(apply_limit=True)
+        load_case = ShearLoadCase(V_Ed=150, N_Ed=200)
+        result = check.perform_check(load_case=load_case, suppress_warnings=True)
+
+        cot_theta = result.details["cot_theta"]
+        assert cot_theta is not None
+        # cot_theta may naturally be < 1.25 due to strut formula,
+        # but the limit should be the standard 2.5
+        _, cot_max = check._find_cot_theta_limits(sigma_cp=1.0, z=400.0, V_Ed=150.0)
+        assert cot_max == pytest.approx(2.5, rel=1e-9)
+
+    def test_base_eu_tension_not_affected(self):
+        """With base EU NDP (not UK), tension should NOT trigger reduced limit."""
+        old_code, old_country = get_ndp_context()
+        set_ndp_context(country=CountryCode.EU)
+        try:
+            check = self._make_check(apply_limit=True)
+            _, cot_max = check._find_cot_theta_limits(sigma_cp=-1.0, z=400.0, V_Ed=150.0)
+            assert cot_max == pytest.approx(2.5, rel=1e-9)
+        finally:
+            set_ndp_context(code=old_code, country=old_country)
+

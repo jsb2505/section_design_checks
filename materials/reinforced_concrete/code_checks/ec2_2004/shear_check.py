@@ -230,6 +230,17 @@ class ShearCheck(BaseCodeCheck):
         ),
     )
 
+    apply_tension_cot_theta_limit: bool = Field(
+        default=True,
+        description=(
+            "Apply reduced cot(θ) upper limit when shear co-exists with externally "
+            "applied tension (UK NA §6.2.3(2): cot θ ≤ 1.25). Default True "
+            "(conservative). Set to False when tension arises from restraint, "
+            "not external loading. Only has effect when the NDP provides "
+            "cot_theta_upper_lim_tension (e.g. EU_UK)."
+        ),
+    )
+
 
     # ==================================
     # Material models for rigorous mode
@@ -902,6 +913,12 @@ class ShearCheck(BaseCodeCheck):
             ))
         else:
             cot_max = float(max_val)
+
+        # Apply reduced upper limit for shear with externally applied tension
+        if self.apply_tension_cot_theta_limit and sigma_cp < 0:
+            tension_lim = get_ndp("cot_theta_upper_lim_tension")
+            if tension_lim is not None and not callable(tension_lim):
+                cot_max = min(cot_max, float(tension_lim))
 
         # Ensure valid range (protect against edge cases in formulas)
         cot_max = max(cot_min, cot_max)

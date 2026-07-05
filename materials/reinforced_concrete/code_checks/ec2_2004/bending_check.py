@@ -26,6 +26,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import (
     find_area_of_steel_minimum,
     find_effective_depth_for_flexure,
 )
+from materials.reinforced_concrete.ndp import get_ndp
 
 
 class BendingCheck(BaseCodeCheck):
@@ -120,6 +121,16 @@ class BendingCheck(BaseCodeCheck):
     use_accidental: bool = Field(
         default=False,
         description="Use accidental limit state partial factors (gamma_c_accidental, gamma_s_accidental)",
+    )
+
+    apply_tension_cot_theta_limit: bool = Field(
+        default=True,
+        description=(
+            "Apply reduced cot(θ) upper limit for the tension shift rule when "
+            "axial force is tensile and the NDP provides cot_theta_upper_lim_tension "
+            "(UK NA §6.2.3(2): cot θ ≤ 1.25). Default True (conservative). "
+            "Set to False when tension arises from restraint, not external loading."
+        ),
     )
 
 
@@ -355,6 +366,13 @@ class BendingCheck(BaseCodeCheck):
             if V_Ed is None:
                 raise ValueError("V_Ed must be provided when M_cap is provided (tension shift enabled)")
 
+            # Compute effective cot_max for tension cases (UK NA §6.2.3(2))
+            cot_max_override: Optional[float] = None
+            if self.apply_tension_cot_theta_limit and N_Ed < 0:
+                tension_lim = get_ndp("cot_theta_upper_lim_tension")
+                if tension_lim is not None and not callable(tension_lim):
+                    cot_max_override = float(tension_lim)
+
             # Use the diagram's apply_tension_shift which handles all the policy decisions
             shift_result = self._get_diagram().apply_tension_shift(
                 M_Ed=M_Ed_original,
@@ -364,6 +382,7 @@ class BendingCheck(BaseCodeCheck):
                 shear_reinforcement=shear_reinforcement,
                 cot_theta_override=cot_theta_override,
                 use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
+                cot_max_override=cot_max_override,
                 iterate_z=iterate_z,
             )
             M_design = shift_result.M_design
