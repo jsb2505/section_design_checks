@@ -282,6 +282,17 @@ class CrackingCheck(BaseCodeCheck):
         ),
     )
 
+    bar_spacing_policy: Literal["x_axis", "perpendicular_to_na"] = Field(
+        default="perpendicular_to_na",
+        description=(
+            "Policy for measuring bar spacing in _compute_max_bar_spacing. "
+            "'perpendicular_to_na' (default): sort bars by their projection along the "
+            "tension face (perpendicular to compression_direction). Correct for biaxial; "
+            "equivalent to x-axis for horizontal NA. "
+            "'x_axis': sort bars by x-coordinate (legacy behaviour)."
+        ),
+    )
+
     # =========================
     # Internal state (private)
     # =========================
@@ -1108,7 +1119,6 @@ class CrackingCheck(BaseCodeCheck):
             - bar_sizes: List of (diameter, count) for equivalent diameter calc
         """
         use_biaxial = strain_state is not None and strain_state.is_biaxial
-        cx, cy = self.section.get_centroid() if use_biaxial else (0.0, 0.0)
 
         bounds = self.section.outline.bounds
         h = bounds[3] - bounds[1]
@@ -1118,14 +1128,11 @@ class CrackingCheck(BaseCodeCheck):
         total_area = 0.0
         cover_sum = 0.0
 
-        # Determine which face is the tension reference for cover calculation
-        comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
-        if comp_face is None:
-            # Net tension — use the face parameter to determine cover reference
-            # face="bottom" → cover from bottom, face="top" → cover from top
-            cover_ref = face or "bottom"
-        else:
-            cover_ref = "bottom" if comp_face == "top" else "top"
+        # 1D path: determine which face is the tension reference for cover calculation
+        if not use_biaxial:
+            comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
+            cover_ref = (face or "bottom") if comp_face is None else ("bottom" if comp_face == "top" else "top")
+            cx = cy = 0.0
 
         for group in self.section.rebar_groups:
             diameter = float(group.rebar.diameter)
@@ -1133,8 +1140,9 @@ class CrackingCheck(BaseCodeCheck):
             bar_count = 0
 
             for pos in group.positions:
-                # Calculate strain at bar location
+                # --- Strain at bar location ---
                 if use_biaxial:
+                    cx, cy = self.section.get_centroid()
                     strain_at_bar = strain_state.strain_at(  # type: ignore[union-attr]
                         float(pos.x) - cx, float(pos.y) - cy,
                     )
@@ -1146,34 +1154,32 @@ class CrackingCheck(BaseCodeCheck):
                 if strain_at_bar >= 0:
                     continue
 
-                # Face filter: for net tension, assign bar to nearest face
-                if face is not None and comp_face is None:
-                    dist_to_bottom = pos.y - y_min
-                    dist_to_top = y_max - pos.y
-                    if face == "bottom" and dist_to_bottom > dist_to_top:
+                if use_biaxial:
+                    # --- 2D path: projection-based distance and cover ---
+                    dist_from_face = self._compute_biaxial_bar_face_distance(pos, strain_state)  # type: ignore[arg-type]
+                    bar_cover = self._compute_biaxial_cover(pos, diameter)
+                    # Net-tension face filter: skip (face concept ill-defined for rotated NA;
+                    # all tension bars contribute regardless of face label)
+                    if h_c_ef_limit is not None and dist_from_face > h_c_ef_limit:
                         continue
-                    if face == "top" and dist_to_bottom <= dist_to_top:
-                        continue
-
-                # h_c,ef filter: only include bars within h_c,ef of the tension face
-                if h_c_ef_limit is not None:
-                    if cover_ref == "bottom":
-                        dist_from_face = pos.y - y_min
-                    else:
-                        dist_from_face = y_max - pos.y
-                    if dist_from_face > h_c_ef_limit:
-                        continue
+                else:
+                    # --- 1D path: Y-axis face filter, h_c,ef filter, cover ---
+                    if face is not None and comp_face is None:  # type: ignore[possibly-undefined]
+                        dist_to_bottom = pos.y - y_min
+                        dist_to_top = y_max - pos.y
+                        if face == "bottom" and dist_to_bottom > dist_to_top:
+                            continue
+                        if face == "top" and dist_to_bottom <= dist_to_top:
+                            continue
+                    if h_c_ef_limit is not None:
+                        dist_from_face = pos.y - y_min if cover_ref == "bottom" else y_max - pos.y  # type: ignore[possibly-undefined]
+                        if dist_from_face > h_c_ef_limit:
+                            continue
+                    bar_cover = (pos.y - y_min if cover_ref == "bottom" else y_max - pos.y) - diameter / 2  # type: ignore[possibly-undefined]
 
                 bar_count += 1
                 total_area += bar_area
-
-                # Calculate cover to the tension face
-                if cover_ref == "bottom":
-                    cover = pos.y - y_min - diameter / 2
-                else:
-                    cover = y_max - pos.y - diameter / 2
-
-                cover_sum += bar_area * max(0, cover)
+                cover_sum += bar_area * max(0.0, bar_cover)
 
             if bar_count > 0:
                 tension_bars.append((diameter, bar_count))
@@ -1207,17 +1213,17 @@ class CrackingCheck(BaseCodeCheck):
             Maximum tensile stress in reinforcement (MPa, always positive)
         """
         use_biaxial = strain_state is not None and strain_state.is_biaxial
-        cx, cy = self.section.get_centroid() if use_biaxial else (0.0, 0.0)
 
         bounds = self.section.outline.bounds
         h = bounds[3] - bounds[1]
         y_min = bounds[1]
         y_max = bounds[3]
-        comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
-        if comp_face is None:
-            cover_ref = face or "bottom"
-        else:
-            cover_ref = "bottom" if comp_face == "top" else "top"
+
+        # 1D path only: determine tension face reference
+        if not use_biaxial:
+            comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
+            cover_ref = (face or "bottom") if comp_face is None else ("bottom" if comp_face == "top" else "top")
+            cx = cy = 0.0
 
         max_tension_stress = 0.0
 
@@ -1228,8 +1234,9 @@ class CrackingCheck(BaseCodeCheck):
             k_ratio = group.rebar.grade.ft_ratio_min  # Hardening ratio
 
             for pos in group.positions:
-                # Strain at bar location
+                # --- Strain at bar location ---
                 if use_biaxial:
+                    cx, cy = self.section.get_centroid()
                     strain_at_bar = strain_state.strain_at(  # type: ignore[union-attr]
                         float(pos.x) - cx, float(pos.y) - cy,
                     )
@@ -1241,23 +1248,25 @@ class CrackingCheck(BaseCodeCheck):
                 if strain_at_bar >= 0:
                     continue
 
-                # Face filter: for net tension, assign bar to nearest face
-                if face is not None and comp_face is None:
-                    dist_to_bottom = pos.y - y_min
-                    dist_to_top = y_max - pos.y
-                    if face == "bottom" and dist_to_bottom > dist_to_top:
+                if use_biaxial:
+                    # --- 2D path: projection-based distance filter ---
+                    dist_from_face = self._compute_biaxial_bar_face_distance(pos, strain_state)  # type: ignore[arg-type]
+                    if h_c_ef_limit is not None and dist_from_face > h_c_ef_limit:
                         continue
-                    if face == "top" and dist_to_bottom <= dist_to_top:
-                        continue
-
-                # h_c,ef filter
-                if h_c_ef_limit is not None:
-                    if cover_ref == "bottom":
-                        dist_from_face = pos.y - y_min
-                    else:
-                        dist_from_face = y_max - pos.y
-                    if dist_from_face > h_c_ef_limit:
-                        continue
+                    # Net-tension face filter: all tension bars included for biaxial
+                else:
+                    # --- 1D path: Y-axis face and h_c,ef filters ---
+                    if face is not None and comp_face is None:  # type: ignore[possibly-undefined]
+                        dist_to_bottom = pos.y - y_min
+                        dist_to_top = y_max - pos.y
+                        if face == "bottom" and dist_to_bottom > dist_to_top:
+                            continue
+                        if face == "top" and dist_to_bottom <= dist_to_top:
+                            continue
+                    if h_c_ef_limit is not None:
+                        dist_from_face = pos.y - y_min if cover_ref == "bottom" else y_max - pos.y  # type: ignore[possibly-undefined]
+                        if dist_from_face > h_c_ef_limit:
+                            continue
 
                 stress = flexure_utils.calculate_rebar_characteristic_stress_from_strain(
                     strain=strain_at_bar,
@@ -1301,21 +1310,26 @@ class CrackingCheck(BaseCodeCheck):
 
         # Different E_s values - find outermost tension bar
         use_biaxial = strain_state is not None and strain_state.is_biaxial
-        cx, cy = self.section.get_centroid() if use_biaxial else (0.0, 0.0)
 
         bounds = self.section.outline.bounds
         h = bounds[3] - bounds[1]
         y_min = bounds[1]
 
-        comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
+        # 1D path: compression face to determine tension direction
+        if not use_biaxial:
+            comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
+            cx = cy = 0.0
 
+        # Track the outermost tension bar: by Y-coordinate (1D) or by projection distance (2D)
         outermost_y: Optional[float] = None
+        outermost_dist: float = -1.0
         outermost_E_s = first_E_s
 
         for group in self.section.rebar_groups:
             for pos in group.positions:
-                # Check if bar is in tension
+                # --- Strain at bar location ---
                 if use_biaxial:
+                    cx, cy = self.section.get_centroid()
                     strain = strain_state.strain_at(  # type: ignore[union-attr]
                         float(pos.x) - cx, float(pos.y) - cy,
                     )
@@ -1325,17 +1339,22 @@ class CrackingCheck(BaseCodeCheck):
                 if strain >= 0:  # Compression, skip
                     continue
 
-                # Track outermost tension bar
-                if comp_face == "top":
-                    # Tension at bottom - find lowest bar
-                    if outermost_y is None or pos.y < outermost_y:
-                        outermost_y = pos.y
+                if use_biaxial:
+                    # --- 2D path: outermost = furthest from compression face along compression_direction ---
+                    dist = self._compute_biaxial_bar_face_distance(pos, strain_state)  # type: ignore[arg-type]
+                    if dist > outermost_dist:
+                        outermost_dist = dist
                         outermost_E_s = group.rebar.E_s
                 else:
-                    # Tension at top - find highest bar
-                    if outermost_y is None or pos.y > outermost_y:
-                        outermost_y = pos.y
-                        outermost_E_s = group.rebar.E_s
+                    # --- 1D path: outermost = lowest (tension at bottom) or highest (tension at top) ---
+                    if comp_face == "top":  # type: ignore[possibly-undefined]
+                        if outermost_y is None or pos.y < outermost_y:
+                            outermost_y = pos.y
+                            outermost_E_s = group.rebar.E_s
+                    else:
+                        if outermost_y is None or pos.y > outermost_y:
+                            outermost_y = pos.y
+                            outermost_E_s = group.rebar.E_s
 
         return outermost_E_s
 
@@ -1365,28 +1384,26 @@ class CrackingCheck(BaseCodeCheck):
         Returns:
             Maximum centre-to-centre bar spacing (mm), or 0.0 if < 2 bars.
         """
+        use_biaxial = strain_state is not None and strain_state.is_biaxial
+
         bounds = self.section.outline.bounds
         h = bounds[3] - bounds[1]
         y_min = bounds[1]
         y_max = bounds[3]
 
-        comp_face = flexure_utils.calculate_compression_face_from_strains(
-            eps_top, eps_bottom,
-        )
-        if comp_face is None:
-            cover_ref = face or "bottom"
-        else:
-            cover_ref = "bottom" if comp_face == "top" else "top"
-
-        use_biaxial = strain_state is not None and strain_state.is_biaxial
-        cx, cy = self.section.get_centroid() if use_biaxial else (0.0, 0.0)
+        # 1D path only: tension face reference
+        if not use_biaxial:
+            comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
+            cover_ref = (face or "bottom") if comp_face is None else ("bottom" if comp_face == "top" else "top")
+            cx = cy = 0.0
 
         qualifying: List[Point2D] = []
 
         for group in self.section.rebar_groups:
             for pos in group.positions:
-                # Strain filter — tension only
+                # --- Strain filter — tension only ---
                 if use_biaxial:
+                    cx, cy = self.section.get_centroid()
                     strain_at_bar = strain_state.strain_at(  # type: ignore[union-attr]
                         float(pos.x) - cx, float(pos.y) - cy,
                     )
@@ -1396,30 +1413,39 @@ class CrackingCheck(BaseCodeCheck):
                 if strain_at_bar >= 0:
                     continue
 
-                # Face filter (net tension)
-                if face is not None and comp_face is None:
-                    dist_to_bottom = pos.y - y_min
-                    dist_to_top = y_max - pos.y
-                    if face == "bottom" and dist_to_bottom > dist_to_top:
+                if use_biaxial:
+                    # --- 2D path: projection-based h_c,ef filter ---
+                    dist_from_face = self._compute_biaxial_bar_face_distance(pos, strain_state)  # type: ignore[arg-type]
+                    if h_c_ef_limit is not None and dist_from_face > h_c_ef_limit:
                         continue
-                    if face == "top" and dist_to_bottom <= dist_to_top:
-                        continue
-
-                # h_c,ef filter
-                if h_c_ef_limit is not None:
-                    if cover_ref == "bottom":
-                        dist_from_face = pos.y - y_min
-                    else:
-                        dist_from_face = y_max - pos.y
-                    if dist_from_face > h_c_ef_limit:
-                        continue
+                    # Net-tension face filter: all tension bars included
+                else:
+                    # --- 1D path: Y-axis face and h_c,ef filters ---
+                    if face is not None and comp_face is None:  # type: ignore[possibly-undefined]
+                        dist_to_bottom = pos.y - y_min
+                        dist_to_top = y_max - pos.y
+                        if face == "bottom" and dist_to_bottom > dist_to_top:
+                            continue
+                        if face == "top" and dist_to_bottom <= dist_to_top:
+                            continue
+                    if h_c_ef_limit is not None:
+                        dist_from_face = pos.y - y_min if cover_ref == "bottom" else y_max - pos.y  # type: ignore[possibly-undefined]
+                        if dist_from_face > h_c_ef_limit:
+                            continue
 
                 qualifying.append(pos)
 
         if len(qualifying) < 2:
             return 0.0
 
-        qualifying.sort(key=lambda p: p.x)
+        # Sort bars and measure spacing
+        if use_biaxial and self.bar_spacing_policy == "perpendicular_to_na":
+            # Sort along the tension face: perpendicular to compression_direction
+            dx, dy = strain_state.compression_direction  # type: ignore[union-attr]
+            qualifying.sort(key=lambda p: -dy * float(p.x) + dx * float(p.y))
+        else:
+            qualifying.sort(key=lambda p: p.x)
+
         max_spacing = 0.0
         for i in range(len(qualifying) - 1):
             spacing = qualifying[i].distance_to(qualifying[i + 1])
@@ -1474,7 +1500,6 @@ class CrackingCheck(BaseCodeCheck):
 
         # --- Collect qualifying bars with per-bar properties ---
         use_biaxial = strain_state is not None and strain_state.is_biaxial
-        cx, cy = self.section.get_centroid() if use_biaxial else (0.0, 0.0)
 
         bounds = self.section.outline.bounds
         x_min = bounds[0]
@@ -1483,13 +1508,11 @@ class CrackingCheck(BaseCodeCheck):
         y_min = bounds[1]
         y_max = bounds[3]
 
-        comp_face = flexure_utils.calculate_compression_face_from_strains(
-            eps_top, eps_bottom,
-        )
-        if comp_face is None:
-            cover_ref = face or "bottom"
-        else:
-            cover_ref = "bottom" if comp_face == "top" else "top"
+        # 1D path only: tension face reference
+        if not use_biaxial:
+            comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
+            cover_ref = (face or "bottom") if comp_face is None else ("bottom" if comp_face == "top" else "top")
+            cx = cy = 0.0
 
         # Each entry: (bar_x, bar_diameter, bar_cover_to_tension_face)
         qualifying: List[Tuple[float, float, float]] = []
@@ -1498,8 +1521,9 @@ class CrackingCheck(BaseCodeCheck):
             diameter = float(group.rebar.diameter)
 
             for pos in group.positions:
-                # Strain filter — tension only
+                # --- Strain filter — tension only ---
                 if use_biaxial:
+                    cx, cy = self.section.get_centroid()
                     strain_at_bar = strain_state.strain_at(  # type: ignore[union-attr]
                         float(pos.x) - cx, float(pos.y) - cy,
                     )
@@ -1509,30 +1533,27 @@ class CrackingCheck(BaseCodeCheck):
                 if strain_at_bar >= 0:
                     continue
 
-                # Face filter (net tension)
-                if face is not None and comp_face is None:
-                    dist_to_bottom = pos.y - y_min
-                    dist_to_top = y_max - pos.y
-                    if face == "bottom" and dist_to_bottom > dist_to_top:
+                if use_biaxial:
+                    # --- 2D path: projection-based distance and Euclidean cover ---
+                    dist_from_face = self._compute_biaxial_bar_face_distance(pos, strain_state)  # type: ignore[arg-type]
+                    bar_cover = max(0.0, self._compute_biaxial_cover(pos, diameter))
+                    if h_c_ef_limit is not None and dist_from_face > h_c_ef_limit:
                         continue
-                    if face == "top" and dist_to_bottom <= dist_to_top:
-                        continue
-
-                # h_c,ef filter
-                if h_c_ef_limit is not None:
-                    if cover_ref == "bottom":
-                        dist_from_face = pos.y - y_min
-                    else:
-                        dist_from_face = y_max - pos.y
-                    if dist_from_face > h_c_ef_limit:
-                        continue
-
-                # Per-bar cover to tension face
-                if cover_ref == "bottom":
-                    bar_cover = pos.y - y_min - diameter / 2
+                    # Net-tension face filter: all tension bars included for biaxial
                 else:
-                    bar_cover = y_max - pos.y - diameter / 2
-                bar_cover = max(0.0, bar_cover)
+                    # --- 1D path: Y-axis face and h_c,ef filters ---
+                    if face is not None and comp_face is None:  # type: ignore[possibly-undefined]
+                        dist_to_bottom = pos.y - y_min
+                        dist_to_top = y_max - pos.y
+                        if face == "bottom" and dist_to_bottom > dist_to_top:
+                            continue
+                        if face == "top" and dist_to_bottom <= dist_to_top:
+                            continue
+                    if h_c_ef_limit is not None:
+                        dist_from_face = pos.y - y_min if cover_ref == "bottom" else y_max - pos.y  # type: ignore[possibly-undefined]
+                        if dist_from_face > h_c_ef_limit:
+                            continue
+                    bar_cover = max(0.0, (pos.y - y_min if cover_ref == "bottom" else y_max - pos.y) - diameter / 2)  # type: ignore[possibly-undefined]
 
                 qualifying.append((float(pos.x), diameter, bar_cover))
 
@@ -1910,6 +1931,7 @@ class CrackingCheck(BaseCodeCheck):
         strain_state: Optional["StrainState"] = None,
         h_override: Optional[float] = None,
         breadth_override: Optional[float] = None,
+        d_override: Optional[float] = None,
     ) -> CrackingResult:
         """
         Calculate crack width for a single face using iterative h_c,ef.
@@ -1958,9 +1980,10 @@ class CrackingCheck(BaseCodeCheck):
 
         # --- Step 2: Iterative h_c,ef determination ---
         # Compute initial d
-        if is_net_tension:
+        if d_override is not None:
+            d = d_override
+        elif is_net_tension:
             # For net tension: d from the face to the bar centroid
-            #TODO update this for sides faces too now sing minor axis strain
             comp_face_for_d = "bottom" if face == "top" else "top"
             d = self.section.get_effective_depth(
                 compression_face=comp_face_for_d, zone_fraction=0.5,
@@ -2004,8 +2027,14 @@ class CrackingCheck(BaseCodeCheck):
 
                     if relaxed_factor is not None:
                         # German NA: first try (h - x_I) × factor
-                        comp_face_name = "top" if face == "bottom" else "bottom"
-                        x_I = self._compute_uncracked_na_depth(comp_face_name)
+                        use_biaxial = strain_state is not None and strain_state.is_biaxial
+                        if use_biaxial:
+                            # For biaxial: approximate x_I as half the perpendicular extent
+                            # (h already incorporates h_override = h_perp when set by caller)
+                            x_I = h / 2.0
+                        else:
+                            comp_face_name = "top" if face == "bottom" else "bottom"
+                            x_I = self._compute_uncracked_na_depth(comp_face_name)
                         h_c_ef_relaxed = (h - x_I) * cast(float, relaxed_factor)
                         if h_c_ef_relaxed > h_c_ef:
                             if not suppress_warnings:
@@ -2549,6 +2578,22 @@ class CrackingCheck(BaseCodeCheck):
             section_height=section_h,
         )
 
+        # Pre-compute biaxial effective depth so _calculate_face_crack_width can use it.
+        # For 1D, d is face-dependent and computed inside _calculate_face_crack_width.
+        _d_override: Optional[float] = None
+        if strain_state_local is not None and strain_state_local.is_biaxial:
+            _d_override = flexure_utils.find_effective_depth_for_flexure(
+                section=self.section,
+                diagram=diagram_for_check,
+                M_Ed=M_Ed,
+                N_Ed=N_Ed,
+                eps_top=eps_top,
+                eps_bottom=eps_bottom,
+                strain_state=strain_state_local,
+                warn_on_fallback=not suppress_warnings,
+                _stacklevel=4,
+            )
+
         if is_net_tension:
             # Both faces in tension (EC2 Fig 7.1, case c)
             # Check both faces independently and report the worst crack width.
@@ -2567,6 +2612,8 @@ class CrackingCheck(BaseCodeCheck):
                 )
                 if cover_override is not None:
                     crack_width_kwargs["cover_override"] = cover_override
+                if _d_override is not None:
+                    crack_width_kwargs["d_override"] = _d_override
                 cr_candidate = self._calculate_face_crack_width(
                     eps_top, eps_bottom, face=face_candidate,
                     x=x, is_net_tension=True,
@@ -2597,6 +2644,8 @@ class CrackingCheck(BaseCodeCheck):
             )
             if cover_override is not None:
                 crack_width_kwargs["cover_override"] = cover_override
+            if _d_override is not None:
+                crack_width_kwargs["d_override"] = _d_override
             cr = self._calculate_face_crack_width(
                 eps_top, eps_bottom, face=tension_face,
                 x=x, is_net_tension=False,

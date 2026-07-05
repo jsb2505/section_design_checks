@@ -169,7 +169,6 @@ class StrainState:
         plane_a: float,
         plane_b: float,
         plane_c: float,
-        cx: float,
         y_top: float,
         y_bottom: float,
         na_angle_deg: Optional[float] = None,
@@ -184,7 +183,6 @@ class StrainState:
             plane_a: d(eps)/dx.
             plane_b: d(eps)/dy.
             plane_c: Strain at centroid.
-            cx: x-coordinate of centroid (used for eps_top/eps_bottom projection).
             y_top: y-coordinate of top fibre (relative to centroid).
             y_bottom: y-coordinate of bottom fibre (relative to centroid).
             na_angle_deg: Optional NA angle from horizontal in degrees.

@@ -1456,16 +1456,22 @@ class ShearCheck(BaseCodeCheck):
             # Apply German NA z_cap if applicable: z_cap = max(d - 2·d_2, d - d_2 - 30)
             z_cap_ndp = get_ndp("z_cap")
             if z_cap_ndp is not None and callable(z_cap_ndp):
-                # Determine compression face from strains
-                if eps_top is not None and eps_bottom is not None:
-                    compression_face = "top" if eps_top >= eps_bottom else "bottom"
+                if strain_state_local is not None and strain_state_local.is_biaxial:
+                    # For biaxial (rotated NA), compression rebar depth along the
+                    # rotated axis is ill-defined with a Y-axis face label.
+                    # Skip z_cap: set d_2=0 so z_cap = max(d, d-30) ≈ d (conservative).
+                    d_2 = 0.0
                 else:
-                    # Conservative: assume top compression (typical for sagging)
-                    compression_face = "top"
+                    # Determine compression face from strains
+                    if eps_top is not None and eps_bottom is not None:
+                        compression_face = "top" if eps_top >= eps_bottom else "bottom"
+                    else:
+                        # Conservative: assume top compression (typical for sagging)
+                        compression_face = "top"
 
-                d_2 = self.section.get_compression_rebar_depth(compression_face)
-                if d_2 is None:
-                    d_2 = 0.0  # Safe fallback: z_cap = max(d, d - 30) = d
+                    d_2 = self.section.get_compression_rebar_depth(compression_face)
+                    if d_2 is None:
+                        d_2 = 0.0  # Safe fallback: z_cap = max(d, d - 30) = d
 
                 z_cap = z_cap_ndp(d, d_2)
                 if z_ec2 > z_cap:

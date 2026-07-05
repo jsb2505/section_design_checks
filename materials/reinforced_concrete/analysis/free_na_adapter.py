@@ -652,7 +652,6 @@ class FreeNADiagramAdapter:
             plane_a=plane_a,
             plane_b=plane_b,
             plane_c=plane_c,
-            cx=0.0,  # Already centroid-relative
             y_top=y_top_rel,
             y_bottom=y_bot_rel,
             na_angle_deg=float(angle_sol),
