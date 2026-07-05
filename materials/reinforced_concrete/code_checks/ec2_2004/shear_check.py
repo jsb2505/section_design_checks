@@ -12,7 +12,7 @@ from functools import cached_property
 from typing import Optional, ClassVar
 from math import atan, degrees, radians, sin, sqrt
 import warnings
-from pydantic import BaseModel, Field, PrivateAttr, computed_field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from materials.utils.helpers import cot
 from materials.reinforced_concrete.code_checks.base_check import (
@@ -243,9 +243,14 @@ class ShearCheck(BaseCodeCheck):
     # Properties (immutable - don't depend on loads)
     # ===============================================
 
-    @computed_field
-    @property
+    @cached_property
     def breadth(self) -> float:
+        """
+        Minimum web breadth b_w for shear design (mm).
+
+        Per EC2 §6.2, b_w is the minimum width between tension and compression chords.
+        For rectangular sections this is the section width; for T-beams it's the web width.
+        """
         return calculate_section_breadth(self.section)
 
     @cached_property

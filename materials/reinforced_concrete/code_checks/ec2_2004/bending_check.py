@@ -6,7 +6,8 @@ Uses the fibre-based M-N interaction diagram infrastructure.
 """
 
 from functools import cached_property
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import Field, PrivateAttr
 import numpy as np
 
@@ -413,3 +414,109 @@ class BendingCheck(BaseCodeCheck):
             Tuple of (N_array, M_array) for plotting
         """
         return self._diagram.get_diagram_arrays(n_points=n_points)
+
+    def plot_mn(
+        self,
+        *,
+        load_points: Optional[List[Dict[str, Any]]] = None,
+        show_vectors: bool = False,
+        show_metadata: bool = True,
+        n_points: int = 120,
+        save_path: Optional[str | Path] = None,
+        show: bool = True,
+        title: Optional[str] = None,
+    ) -> Any:
+        """
+        Plot M-N interaction diagram with optional load points using Plotly.
+
+        Creates an interactive plot with:
+        - M-N interaction curve boundary
+        - Optional load points with color-coded utilization
+        - Optional vector projection rays from origin to boundary
+        - Interactive hover tooltips with metadata
+
+        Args:
+            load_points: List of load case dictionaries with format:
+                {
+                    "N_Ed": float,      # Axial force (kN)
+                    "M_Ed": float,      # Moment (kN·m)
+                    "name": str,        # Load case name (optional)
+                }
+            show_vectors: If True, show vector projection rays from origin through
+                          load points to capacity boundary
+            show_metadata: If True, show metadata in hover tooltips
+            n_points: Number of points to generate M-N curve
+            save_path: If provided, save plot to this file path (HTML format)
+            show: If True, display plot (fig.show())
+            title: Custom plot title (optional)
+
+        Returns:
+            Plotly Figure object
+
+        Example:
+            >>> check = BendingCheck(section=section, concrete=concrete)
+            >>> # Plot diagram with load cases
+            >>> check.plot_mn(
+            ...     load_points=[
+            ...         {"N_Ed": 500, "M_Ed": 150, "name": "LC1"},
+            ...         {"N_Ed": 800, "M_Ed": 100, "name": "LC2"},
+            ...     ],
+            ...     show_vectors=True,
+            ... )
+        """
+        return self._diagram.plot_mn(
+            load_points=load_points,
+            show_vectors=show_vectors,
+            show_metadata=show_metadata,
+            n_points=n_points,
+            save_path=save_path,
+            show=show,
+            title=title,
+        )
+
+    def plot_stress_strain(
+        self,
+        M_Ed: float,
+        N_Ed: float,
+        *,
+        show: bool = True,
+        title: Optional[str] = None,
+        width: int = 1200,
+        height: int = 600,
+        section_render: Literal["points", "filled"] = "points",
+    ) -> Any:
+        """
+        Visualize stress and strain distribution for a given load case.
+
+        Creates an interactive plot showing:
+        - Section geometry with reinforcement
+        - Strain profile across the section depth
+        - Stress distribution in concrete and steel
+
+        Args:
+            M_Ed: Design bending moment (kN·m)
+            N_Ed: Design axial force (kN, positive = compression)
+            show: If True, display plot (fig.show())
+            title: Custom plot title (optional)
+            width: Plot width in pixels
+            height: Plot height in pixels
+            section_render: How to render section - "points" for fibre centroids,
+                           "filled" for filled polygon
+
+        Returns:
+            Plotly Figure object
+
+        Example:
+            >>> check = BendingCheck(section=section, concrete=concrete)
+            >>> # Visualize stress/strain for a specific load case
+            >>> check.plot_stress_strain(M_Ed=150, N_Ed=500)
+        """
+        return self._diagram.plot_stress_strain(
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            show=show,
+            title=title,
+            width=width,
+            height=height,
+            section_render=section_render,
+        )

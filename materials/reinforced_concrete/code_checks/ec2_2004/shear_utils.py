@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from math import sqrt, isfinite, radians, copysign, tan
 from typing import Optional
 
+from shapely.geometry import LineString, MultiLineString, Point
+
 from materials.utils.helpers import cot
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ShearRebar
@@ -191,19 +193,74 @@ def calculate_tension_shift(
     )
 
 
-def calculate_section_breadth(section: RCSection) -> float:
+def calculate_section_breadth(
+    section: RCSection,
+    n_slices: int = 50,
+) -> float:
     """
-    Web breadth in mm.
+    Calculate the minimum web breadth b_w for shear design per EC2 §6.2.
+
+    EC2 defines b_w as "the minimum width between tension and compression chords".
+    This function finds the minimum horizontal width of the section by slicing
+    at multiple heights.
+
+    For rectangular sections, this returns the section width.
+    For T-beams or I-beams, this returns the web width (narrowest part).
 
     Args:
         section: RCSection object
+        n_slices: Number of horizontal slices for sampling (default 50)
 
     Returns:
-        shear breadth in mm
+        Minimum web breadth b_w in mm
     """
-    # TODO FOR WEB BEAMS FIND THE BREADTH USED FOR SHEAR AREA
-    bounds = section.outline.bounds
-    return bounds[2] - bounds[0]
+    from shapely.geometry import LineString
+
+    outline = section.outline
+    min_x, min_y, max_x, max_y = outline.bounds
+
+    # Sample the section at multiple heights
+    height = max_y - min_y
+    if height < 1e-6:
+        return max_x - min_x  # Degenerate case
+
+    min_width = max_x - min_x  # Start with bounding box width
+
+    for i in range(1, n_slices):
+        # Slice at this height (avoid exact boundaries)
+        y = min_y + (i / n_slices) * height
+
+        # Create horizontal line across section
+        line = LineString([(min_x - 1, y), (max_x + 1, y)])
+
+        # Find intersection with section outline
+        intersection = outline.intersection(line)
+
+        if intersection.is_empty:
+            continue
+
+        # Calculate width at this height
+        if isinstance(intersection, LineString):
+            # Single intersection line
+            coords = list(intersection.coords)
+            if len(coords) >= 2:
+                width = abs(coords[-1][0] - coords[0][0])
+                min_width = min(min_width, width)
+        elif isinstance(intersection, MultiLineString):
+            # Multiple intersection segments (e.g., hollow section)
+            # Sum the widths of all segments
+            total_width = 0.0
+            for geom in intersection.geoms:
+                coords = list(geom.coords)
+                if len(coords) >= 2:
+                    total_width += abs(coords[-1][0] - coords[0][0])
+            if total_width > 0:
+                min_width = min(min_width, total_width)
+        elif isinstance(intersection, Point):
+            # Tangent point - skip
+            continue
+
+    return min_width
 
 
 def find_cot_theta_for_V_Ed(

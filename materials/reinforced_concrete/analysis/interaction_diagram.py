@@ -1933,8 +1933,10 @@ class MNInteractionDiagram:
                                 cot(θ) using the variable strut angle method.
                                 If not provided, uses a_l = d (no shear reinforcement).
             iterate_z: If True, iteratively recalculate z based on M_design until
-                      convergence (0.5% tolerance, max 5 iterations). Only affects
-                      cases with shear reinforcement where a_l depends on z.
+                      convergence (0.5% tolerance, max 5 iterations). Only has an
+                      effect when BOTH shear_reinforcement is provided (so a_l depends
+                      on z) AND prefer_rigorous=True (so z depends on M). With
+                      prefer_rigorous=False, z=0.9d always so iteration is skipped.
             prefer_rigorous: If True, attempt to compute the rigorous centroid-based
                 lever arm from strain analysis. If False (default), use the simplified
                 0.9d approach per EC2 §6.2.3(1).
@@ -2003,9 +2005,10 @@ class MNInteractionDiagram:
             shear_reinforcement=shear_reinforcement,
         )
 
-        # Iterate z if requested and shear reinforcement is provided
-        # (without shear reinforcement, a_l = d which doesn't depend on z)
-        if iterate_z and shear_reinforcement is not None:
+        # Iterate z if requested, shear reinforcement is provided, AND prefer_rigorous=True
+        # - Without shear reinforcement: a_l = d which doesn't depend on z
+        # - Without prefer_rigorous: z = 0.9d always (doesn't depend on M)
+        if iterate_z and shear_reinforcement is not None and prefer_rigorous:
             MAX_ITERATIONS = 5
             CONVERGENCE_TOL = 0.005  # 0.5%
 
