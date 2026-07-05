@@ -314,7 +314,7 @@ class BiaxialMNInteractionSurface:
             Tuple of (N_min, N_max) in kN
         """
         # Get fibre data
-        _, _, area, mat_type, mat_idx = self.mesh.get_fibre_arrays()
+        _, _, area, mat_type, mat_idx, _, _ = self.mesh.get_fibre_arrays()
 
         # EC2 strain limits
         eps_cu2 = self.concrete.epsilon_cu2  # Use ultimate compression strain for pole
@@ -452,7 +452,7 @@ class BiaxialMNInteractionSurface:
             Point on the failure surface
         """
         # Get fibre coordinates
-        x, y, area, material_type, material_index = self.mesh.get_fibre_arrays()
+        x, y, area, material_type, material_index, _, _ = self.mesh.get_fibre_arrays()
 
         # Fibre positions relative to centroid
         x_rel = x - self.section_centroid_x

@@ -34,6 +34,8 @@ class Fibre:
         area: Fibre area (mm²)
         material_type: 'concrete' or 'steel'
         material_index: Index into material array (e.g. rebar group index)
+        i: width index (grid column). -1 means "not on grid" (e.g. steel fibre).
+        j: height index (grid row). -1 means "not on grid" (e.g. steel fibre).
     """
 
     x: float
@@ -41,6 +43,8 @@ class Fibre:
     area: float
     material_type: Literal["concrete", "steel"]
     material_index: int = 0
+    i: int = -1
+    j: int = -1
 
     def __repr__(self) -> str:
         return (
@@ -49,7 +53,9 @@ class Fibre:
             f"y={self.y:.1f}, "
             f"area={self.area:.1f}, "
             f"material_type={self.material_type}, "
-            f"material_index={self.material_index}"
+            f"material_index={self.material_index}, "
+            f"i={self.i}, "
+            f"j={self.j}"
             ")"
         )
 
@@ -200,6 +206,8 @@ class FibreMesh:
                         area=area_concrete,
                         material_type="concrete",
                         material_index=0,
+                        i=i,
+                        j=j,
                     )
                 )
 
@@ -251,17 +259,25 @@ class FibreMesh:
     def get_fibre_arrays(
         self,
     ) -> tuple[
-        npt.NDArray[np.float64],
-        npt.NDArray[np.float64],
-        npt.NDArray[np.float64],
-        npt.NDArray[np.str_],
-        npt.NDArray[np.int32],
+        npt.NDArray[np.float64],  # x
+        npt.NDArray[np.float64],  # y
+        npt.NDArray[np.float64],  # area
+        npt.NDArray[np.str_],     # material_type
+        npt.NDArray[np.int32],    # material_index
+        npt.NDArray[np.int32],    # i
+        npt.NDArray[np.int32],    # j
     ]:
         """
         Get fibre data as numpy arrays for vectorized calculations.
 
         Returns:
-            Tuple of (x, y, area, material_type, material_index) arrays
+            (x, y, area, material_type, material_index, i, j)
+
+        Notes:
+            - i/j indices apply to concrete fibres (grid indices).
+            - Steel fibres have i=j=-1.
+            - This function always returns i/j to keep callers simple and avoid
+            union return types that confuse type checkers.
         """
         all_f = self.all_fibres
 
@@ -271,12 +287,8 @@ class FibreMesh:
         material_type = np.array([f.material_type for f in all_f], dtype=np.str_)
         material_index = np.array([f.material_index for f in all_f], dtype=np.int32)
 
-        return x, y, area, material_type, material_index
+        # With your new Fibre defaults (i/j = -1), these are always ints already
+        ii = np.array([f.i for f in all_f], dtype=np.int32)
+        jj = np.array([f.j for f in all_f], dtype=np.int32)
 
-    def __repr__(self) -> str:
-        return (
-            f"FibreMesh("
-            f"concrete={self.n_concrete_fibres}, "
-            f"steel={self.n_steel_fibres}, "
-            f"total={self.total_fibres})"
-        )
+        return x, y, area, material_type, material_index, ii, jj
