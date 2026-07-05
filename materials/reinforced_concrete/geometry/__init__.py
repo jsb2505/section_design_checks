@@ -19,6 +19,7 @@ from materials.reinforced_concrete.geometry.section_utils import (
 )
 from materials.reinforced_concrete.geometry.rebar_layer import (
     create_linear_rebar_layer,
+    create_multi_layer_linear_rebars,
     create_rectangular_perimeter_rebars,
     create_circular_perimeter_rebars,
     create_custom_rebar_layer,
@@ -41,6 +42,7 @@ __all__ = [
     "create_channel_section",
     "create_trapezoidal_section",
     "create_linear_rebar_layer",
+    "create_multi_layer_linear_rebars",
     "create_rectangular_perimeter_rebars",
     "create_circular_perimeter_rebars",
     "create_custom_rebar_layer",

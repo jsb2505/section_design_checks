@@ -9,7 +9,7 @@ Provides utilities for positioning rebars in common configurations:
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -93,6 +93,132 @@ def create_linear_rebar_layer(
         )
 
     return RebarGroup(rebar=rebar, positions=tuple(positions), layer_name=layer_name)
+
+
+def create_multi_layer_linear_rebars(
+    rebars: Union[Rebar, Sequence[Rebar]],
+    n_bars: int,
+    start_point: Tuple[float, float],
+    end_point: Tuple[float, float],
+    gap: Union[float, Sequence[float]] = 25.0,
+    gap_between_faces: bool = True,
+    layer_names: Optional[Sequence[str]] = None,
+    omit_start: bool = False,
+    omit_end: bool = False,
+) -> List[RebarGroup]:
+    """
+    Create multiple parallel linear rebar layers offset perpendicular to the
+    start→end direction.
+
+    Layer 0 sits at the supplied *start_point* / *end_point*.  Subsequent
+    layers are offset to the **left** of the start→end vector (90° CCW).
+    For a typical horizontal layer running left→right this means layers
+    stack **upward**.  A negative *gap* reverses the direction.
+
+    Args:
+        rebars: A single Rebar (same bar in every layer) or a sequence of
+            Rebar objects — one per layer.  The length of the sequence
+            determines the number of layers.
+        n_bars: Number of bars per layer (same for every layer).
+        start_point: (x, y) start of the base layer (mm).
+        end_point: (x, y) end of the base layer (mm).
+        gap: Spacing between layers.  A single float is reused for every
+            gap; a sequence must have length ``n_layers - 1``.
+            Interpretation depends on *gap_between_faces*.
+        gap_between_faces: If True (default) *gap* is clear spacing between
+            bar surfaces.  If False, *gap* is centre-to-centre distance.
+        layer_names: Optional layer identifiers (length must equal n_layers).
+            Defaults to "layer_0", "layer_1", …
+        omit_start: Passed through to each ``create_linear_rebar_layer`` call.
+        omit_end: Passed through to each ``create_linear_rebar_layer`` call.
+
+    Returns:
+        List of RebarGroups, one per layer (layer 0 first).
+
+    Example:
+        >>> bar = Rebar(diameter=16, grade="B500B")
+        >>> # Two layers of H16, 25 mm clear gap, stacking upward
+        >>> groups = create_multi_layer_linear_rebars(
+        ...     [bar, bar], n_bars=4,
+        ...     start_point=(50, 50), end_point=(250, 50), gap=25,
+        ... )
+        >>> # Layer 0 at y=50, layer 1 at y=50+8+25+8=91
+        >>> groups[1].positions[0].y
+        91.0
+    """
+    # --- normalise rebars to a list ---
+    if isinstance(rebars, Rebar):
+        raise TypeError(
+            "rebars must be a sequence of Rebar objects (one per layer), "
+            "not a single Rebar.  Wrap in a list: [rebar, rebar, ...]"
+        )
+    rebar_list: List[Rebar] = list(rebars)
+    n_layers = len(rebar_list)
+    if n_layers < 1:
+        raise ValueError("At least one rebar layer is required")
+
+    # --- normalise gap to a list of n_layers-1 values ---
+    if isinstance(gap, (int, float)):
+        gaps: List[float] = [float(gap)] * max(n_layers - 1, 0)
+    else:
+        gaps = [float(g) for g in gap]
+        if len(gaps) != n_layers - 1:
+            raise ValueError(
+                f"gap sequence length ({len(gaps)}) must equal n_layers - 1 ({n_layers - 1})"
+            )
+
+    # --- layer names ---
+    if layer_names is not None:
+        if len(layer_names) != n_layers:
+            raise ValueError(
+                f"layer_names length ({len(layer_names)}) must equal number of layers ({n_layers})"
+            )
+        names: List[Optional[str]] = list(layer_names)
+    else:
+        names = [f"layer_{i}" for i in range(n_layers)]
+
+    # --- perpendicular unit normal (left of start→end, i.e. 90° CCW) ---
+    dx = end_point[0] - start_point[0]
+    dy = end_point[1] - start_point[1]
+    length = (dx**2 + dy**2) ** 0.5
+    if length < 1e-12:
+        raise ValueError("start_point and end_point are coincident — cannot determine offset direction")
+    nx, ny = -dy / length, dx / length  # 90° CCW rotation
+
+    # --- build layers ---
+    groups: List[RebarGroup] = []
+    cumulative_offset = 0.0
+
+    for i in range(n_layers):
+        if i > 0:
+            if gap_between_faces:
+                cumulative_offset += (
+                    rebar_list[i - 1].diameter / 2.0
+                    + gaps[i - 1]
+                    + rebar_list[i].diameter / 2.0
+                )
+            else:
+                cumulative_offset += gaps[i - 1]
+
+        offset_x = nx * cumulative_offset
+        offset_y = ny * cumulative_offset
+
+        layer_start = (start_point[0] + offset_x, start_point[1] + offset_y)
+        layer_end = (end_point[0] + offset_x, end_point[1] + offset_y)
+
+        groups.append(
+            create_linear_rebar_layer(
+                rebar=rebar_list[i],
+                n_bars=n_bars,
+                start_point=layer_start,
+                end_point=layer_end,
+                layer_name=names[i],
+                omit_start=omit_start,
+                omit_end=omit_end,
+            )
+        )
+
+    return groups
 
 
 def create_rectangular_perimeter_rebars(
@@ -264,7 +390,7 @@ def create_circular_perimeter_rebars(
         cover: Cover to rebar outer surface (mm)
         n_bars: Number of bars around perimeter (minimum 3)
         origin: Centre of section (default: (0, 0))
-        start_angle: Starting angle in degrees (0 = right, counterclockwise)
+        start_angle: Starting angle in degrees (0 = right, counter-clockwise)
 
     Returns:
         RebarGroup with circular arrangement

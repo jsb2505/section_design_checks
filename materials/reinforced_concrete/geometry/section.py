@@ -306,7 +306,7 @@ class RCSection(BaseGeometry):
 
     def _invalidate_outline_cache(self) -> None:
         """Clear cached Shapely outline so it rebuilds next time it's accessed."""
-        self.__dict__.pop("outline", None)  # cached_property stores value on the instance
+        self.__dict__.pop("outline", None)  # type: ignore[union-attr]  # cached_property stores value on the instance
 
     def __setattr__(self, name: str, value: Any) -> None:
         """
