@@ -85,8 +85,8 @@ class TestSteelStressStrainEC2:
         strain = (model_inclined.epsilon_y + steel_b500b.epsilon_ud) / 2
         stress = model_inclined.get_stress(strain)
 
-        # Should be between f_yd and f_t
-        assert model_inclined.f_y < stress < steel_b500b.f_t
+        # Should be between f_y and f_t (both using design values)
+        assert model_inclined.f_y < stress < model_inclined.f_t
 
     def test_plastic_region_horizontal(self, model_horizontal):
         """Test plastic region for perfectly plastic."""
@@ -99,14 +99,14 @@ class TestSteelStressStrainEC2:
     def test_stress_at_ultimate_inclined(self, model_inclined, steel_b500b):
         """Test stress at ultimate strain for inclined branch."""
         stress = model_inclined.get_stress(steel_b500b.epsilon_ud)
-        # Should reach f_t
-        assert stress == pytest.approx(steel_b500b.f_t, rel=1e-3)
+        # Should reach f_t (design tensile strength f_td)
+        assert stress == pytest.approx(model_inclined.f_t, rel=1e-3)
 
     def test_beyond_ultimate(self, model_inclined, steel_b500b):
         """Test stress beyond ultimate strain - maintains ultimate stress."""
         stress = model_inclined.get_stress(steel_b500b.epsilon_ud + 0.01)
         # New behavior: maintains ultimate stress f_t beyond ultimate strain
-        assert stress == pytest.approx(steel_b500b.f_t, rel=1e-3)
+        assert stress == pytest.approx(model_inclined.f_t, rel=1e-3)
 
     def test_compression_elastic(self, model_inclined, steel_b500b):
         """Test elastic compression."""

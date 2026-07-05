@@ -256,6 +256,12 @@ class FibreMesh:
     def total_fibres(self) -> int:
         return self.n_concrete_fibres + self.n_steel_fibres
 
+    def __repr__(self) -> str:
+        return (
+            f"FibreMesh({self.total_fibres} fibres: "
+            f"{self.n_concrete_fibres} concrete, {self.n_steel_fibres} steel)"
+        )
+
     def get_fibre_arrays(
         self,
     ) -> tuple[

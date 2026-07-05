@@ -48,28 +48,28 @@ class TestBaseMaterial:
                 elastic_modulus=30000.0,
             )
 
-    def test_density_optional(self):
-        """Test that density is optional."""
-        mat = ConcreteMaterialTest(
-            name="Test",
-            density=None,
-            elastic_modulus=30000.0,
-        )
-        assert mat.density is None
+    def test_density_required(self):
+        """Test that density is required."""
+        with pytest.raises(ValidationError):
+            ConcreteMaterialTest(
+                name="Test",
+                elastic_modulus=30000.0,
+                # density missing
+            )
 
     def test_material_repr(self):
         """Test __repr__ method."""
-        mat = ConcreteMaterialTest(name="TestMat", elastic_modulus=30000.0)
+        mat = ConcreteMaterialTest(name="TestMat", density=2400.0, elastic_modulus=30000.0)
         assert "TestMat" in repr(mat)
 
     def test_material_str(self):
         """Test __str__ method."""
-        mat = ConcreteMaterialTest(name="TestMat", elastic_modulus=30000.0)
+        mat = ConcreteMaterialTest(name="TestMat", density=2400.0, elastic_modulus=30000.0)
         assert str(mat) == "TestMat"
 
     def test_validate_assignment(self):
         """Test that validation occurs on assignment."""
-        mat = ConcreteMaterialTest(name="Test", elastic_modulus=30000.0)
+        mat = ConcreteMaterialTest(name="Test", density=2400.0, elastic_modulus=30000.0)
 
         # Valid assignment
         mat.density = 2500.0

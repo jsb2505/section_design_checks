@@ -87,21 +87,25 @@ class TestFibreMesh:
 
     def test_get_fibre_arrays(self, mesh_simple):
         """Test getting fibre data as arrays."""
-        x, y, area, material_type, material_index = mesh_simple.get_fibre_arrays()
+        x, y, area, material_type, material_index, i, j = mesh_simple.get_fibre_arrays()
 
         assert isinstance(x, np.ndarray)
         assert isinstance(y, np.ndarray)
         assert isinstance(area, np.ndarray)
         assert isinstance(material_type, np.ndarray)
         assert isinstance(material_index, np.ndarray)
+        assert isinstance(i, np.ndarray)
+        assert isinstance(j, np.ndarray)
 
         assert len(x) == mesh_simple.total_fibres
         assert len(y) == mesh_simple.total_fibres
         assert len(area) == mesh_simple.total_fibres
+        assert len(i) == mesh_simple.total_fibres
+        assert len(j) == mesh_simple.total_fibres
 
     def test_fibre_arrays_properties(self, mesh_simple):
         """Test fibre array properties."""
-        x, y, area, material_type, material_index = mesh_simple.get_fibre_arrays()
+        x, y, area, material_type, material_index, i, j = mesh_simple.get_fibre_arrays()
 
         # All areas should be positive
         assert np.all(area > 0)

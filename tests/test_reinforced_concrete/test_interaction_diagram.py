@@ -1368,7 +1368,7 @@ class TestConfinedConcrete:
         )
 
         # Should not raise error and return a figure
-        fig = diagram.plot(show=False, n_points=50)
+        fig = diagram.plot_mn(show=False, n_points=50)
         assert fig is not None
 
         # Check that figure has traces (M-N curve and origin)
@@ -1386,7 +1386,7 @@ class TestConfinedConcrete:
             {"N_Ed": 800, "M_Ed": 150, "name": "LC2: Test"},
         ]
 
-        fig = diagram.plot(
+        fig = diagram.plot_mn(
             load_points=load_points,
             show_vectors=False,
             show_metadata=True,
@@ -1409,7 +1409,7 @@ class TestConfinedConcrete:
             {"N_Ed": 500, "M_Ed": 100, "name": "LC1: Test"},
         ]
 
-        fig = diagram.plot(
+        fig = diagram.plot_mn(
             load_points=load_points,
             show_vectors=True,
             show=False,
@@ -1432,7 +1432,7 @@ class TestConfinedConcrete:
 
         save_path = tmp_path / "test_plot.html"
 
-        fig = diagram.plot(
+        fig = diagram.plot_mn(
             show=False,
             save_path=str(save_path),
             n_points=50
@@ -1451,7 +1451,7 @@ class TestConfinedConcrete:
 
         custom_title = "Custom Test Title"
 
-        fig = diagram.plot(
+        fig = diagram.plot_mn(
             show=False,
             title=custom_title,
             n_points=50
@@ -1471,7 +1471,7 @@ class TestConfinedConcrete:
             {"N_Ed": 500, "M_Ed": 100, "name": "LC1: Test"},
         ]
 
-        fig = diagram.plot(
+        fig = diagram.plot_mn(
             load_points=load_points,
             show_metadata=False,
             show=False,

@@ -46,14 +46,18 @@ class TestRebar:
         assert rebar_16.perimeter == pytest.approx(expected, rel=1e-6)
 
     def test_diameter_validation_too_small(self):
-        """Test that non-standard diameters are rejected."""
-        with pytest.raises(ValidationError, match="Input should be"):
-            Rebar(diameter=4, grade="B500B")
+        """Test that non-standard diameters produce a warning."""
+        with pytest.warns(UserWarning, match="not in standard list"):
+            bar = Rebar(diameter=4, grade="B500B")
+        assert bar.diameter == 4
+        assert not bar.is_standard
 
     def test_diameter_validation_too_large(self):
-        """Test that non-standard diameters are rejected."""
-        with pytest.raises(ValidationError, match="Input should be"):
-            Rebar(diameter=60, grade="B500B")
+        """Test that non-standard diameters produce a warning."""
+        with pytest.warns(UserWarning, match="not in standard list"):
+            bar = Rebar(diameter=60, grade="B500B")
+        assert bar.diameter == 60
+        assert not bar.is_standard
 
     def test_diameter_validation_negative(self):
         """Test that negative diameters are rejected."""

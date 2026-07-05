@@ -186,7 +186,7 @@ def test_newton_behavior_near_cracking():
     eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=M_target, N_target=N_target)
 
     # Check fiber strains
-    _, y, _, material_type, _ = diagram.mesh.get_fibre_arrays()
+    _, y, _, material_type, _, _, _ = diagram.mesh.get_fibre_arrays()
     strains = diagram._strain_field_from_end_strains(eps_top, eps_bottom)
 
     concrete_strains = strains[material_type == "concrete"]
