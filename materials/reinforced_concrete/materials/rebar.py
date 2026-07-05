@@ -2,14 +2,14 @@
 Rebar (reinforcing bar) with geometry and material properties.
 """
 
-from typing import Literal
-import math
-from pydantic import Field, computed_field
+from typing import Final
+from math import pi, tan, sin, radians
+from pydantic import Field, computed_field, field_validator
 from materials.reinforced_concrete.materials.reinforcing_steel import ReinforcingSteel
 
 
 # Standard bar diameters in mm (EC2 common practice) - single source of truth
-BarDiameter = Literal[6, 8, 10, 12, 16, 20, 25, 28, 32, 40]
+STANDARD_BAR_DIAMETERS: Final = (6, 8, 10, 12, 16, 20, 25, 28, 32, 40)
 
 
 class Rebar(ReinforcingSteel):
@@ -19,18 +19,42 @@ class Rebar(ReinforcingSteel):
     Extends ReinforcingSteel to include geometric properties.
     """
 
-    diameter: BarDiameter = Field(..., description="Bar diameter in mm")
+    diameter: float = Field(..., description="Bar diameter in mm", gt=0)
 
     @computed_field
     @property
     def area(self) -> float:
         """Cross-sectional area (mm²): A = π d² / 4."""
-        return math.pi * (float(self.diameter) ** 2) / 4.0
+        return pi * (float(self.diameter) ** 2) / 4.0
 
     @property
     def perimeter(self) -> float:
         """Perimeter (mm): P = π d."""
-        return math.pi * float(self.diameter)
+        return pi * float(self.diameter)
+    
+    @computed_field
+    @property
+    def mass_per_metre(self) -> float:
+        """
+        Mass per unit length (kg/m).
+        Calculation: Area(m²) * Density(kg/m³)
+        """
+        # area is in mm², divide by 1,000,000 to get m²
+        area_m2 = self.area / 1_000_000.0
+        return area_m2 * self.density
+    
+    @property
+    def is_standard(self) -> bool:
+        """Checks if the chosen diameter is a standard Eurocode size."""
+        return self.diameter in STANDARD_BAR_DIAMETERS
+    
+    @field_validator("diameter")
+    @classmethod
+    def check_standard_size(cls, v: float) -> float:
+        if v not in STANDARD_BAR_DIAMETERS:
+            import warnings
+            warnings.warn(f"Diameter {v}mm is not in standard list: {STANDARD_BAR_DIAMETERS}")
+        return v
 
     def __str__(self) -> str:
         return f"ϕ{self.diameter} {self.grade} (A={self.area:.1f} mm²)"
@@ -61,8 +85,8 @@ class ShearRebar(Rebar):
         A_sw / (s · sin α) in mm²/mm.
         Divide by b_w to get full EC2 ρ_w.
         """
-        angle_rad = math.radians(self.angle)
-        return self.total_area_per_spacing / (self.spacing * math.sin(angle_rad))
+        angle_rad = radians(self.angle)
+        return self.total_area_per_spacing / (self.spacing * sin(angle_rad))
 
     def max_link_spacing(self, effective_depth: float) -> float:
         """EC2 §9.2.2(6): s_l,max = 0.75 d (1 + cot α)."""
@@ -72,7 +96,7 @@ class ShearRebar(Rebar):
         if abs(self.angle - 90.0) < 1e-9:
             cot_alpha = 0.0
         else:
-            cot_alpha = 1.0 / math.tan(math.radians(self.angle))
+            cot_alpha = 1.0 / tan(radians(self.angle))
 
         return 0.75 * effective_depth * (1.0 + cot_alpha)
 

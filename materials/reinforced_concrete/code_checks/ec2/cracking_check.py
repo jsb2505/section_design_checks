@@ -1,8 +1,13 @@
 from math import sqrt
 from typing import Optional
 from scipy import interpolate
-from .geometry import Geometry
-from .concrete_material import ConcreteMaterial
+
+from pydantic import Field
+
+from materials.reinforced_concrete.code_checks.base_check import (
+    BaseCodeCheck,
+    CheckResult,
+)
 
 
 # TO DO:
@@ -12,7 +17,7 @@ from .concrete_material import ConcreteMaterial
 # will need to update the method calls so the new rebar set-up works
 # i.e. area of steel and effective depth
 
-class _Cracking():
+class CrackingCheck(BaseCodeCheck):
     def __init__(self, geometry_instance: Geometry, concrete_instance: ConcreteMaterial):
         self.geometry = geometry_instance
         self.concrete = concrete_instance

@@ -11,7 +11,11 @@ Supports:
 
 from __future__ import annotations
 
-from typing import List, Tuple, Optional, Literal
+from typing import TYPE_CHECKING, List, Tuple, Optional, Literal
+
+if TYPE_CHECKING:
+    import plotly.graph_objects as go
+    from materials.reinforced_concrete.materials.concrete import ConcreteMaterial
 
 import numpy as np
 from shapely.geometry import Polygon, Point as ShapelyPoint
@@ -761,6 +765,266 @@ class RCSection(BaseGeometry):
         return self.__repr__()
 
 
+    def plot(
+        self,
+        *,
+        concrete: Optional["ConcreteMaterial"] = None,
+        show: bool = True,
+        title: Optional[str] = None,
+        width: int = 700,
+        height: int = 700,
+    ) -> "go.Figure":
+        """
+        Create an interactive Plotly figure of the section cross-section.
+
+        Shows:
+        - Concrete outline with fill and optional hatch pattern
+        - Holes/voids (if any) shown as white areas
+        - Rebar circles with detailed hover tooltips
+        - Gross centroid marker
+        - Transformed centroid marker (if concrete material provided)
+
+        Hover tooltips include:
+        - Concrete: Section name, grade (if provided), gross area, centroid
+        - Rebars: Diameter, grade, area, position, layer name, group index
+
+        Args:
+            concrete: Optional ConcreteMaterial for hover info and transformed centroid
+            show: If True, display the figure immediately
+            title: Optional plot title (defaults to section name or "RC Section")
+            width: Figure width in pixels
+            height: Figure height in pixels
+
+        Returns:
+            Plotly Figure object for further customization
+
+        Example:
+            >>> from materials.reinforced_concrete.materials import ConcreteMaterial
+            >>> section = create_rectangular_section(300, 500)
+            >>> concrete = ConcreteMaterial(grade="C30/37")
+            >>> # Add rebars...
+            >>> fig = section.plot(concrete=concrete, show=True)
+        """
+        import plotly.graph_objects as go
+
+        fig = go.Figure()
+
+        # Get section bounds for axis limits
+        min_x, min_y, max_x, max_y = self.get_bounding_box()
+        cx, cy = self.get_centroid()
+        area = self.get_area()
+
+        # Padding for plot limits
+        pad_x = (max_x - min_x) * 0.1
+        pad_y = (max_y - min_y) * 0.1
+
+        # ===========================
+        # 1. Draw concrete outline
+        # ===========================
+
+        # Build hover text for concrete
+        concrete_hover_parts = [
+            f"<b>Concrete Section</b>",
+            f"Name: {self.section_name or 'unnamed'}",
+        ]
+        if concrete is not None:
+            concrete_hover_parts.append(f"Grade: {concrete.grade}")
+            concrete_hover_parts.append(f"Name: {concrete.name}")
+        concrete_hover_parts.extend([
+            f"Gross Area: {area:,.0f} mm²",
+            f"Gross Centroid: ({cx:.1f}, {cy:.1f}) mm",
+            f"Reinforcement Ratio: {self.reinforcement_ratio:.4f}",
+        ])
+        concrete_hover = "<br>".join(concrete_hover_parts)
+
+        # Exterior ring
+        ext_coords = np.asarray(self.outline.exterior.coords, dtype=float)
+        x_ext = ext_coords[:, 0].tolist()
+        y_ext = ext_coords[:, 1].tolist()
+
+        # Add concrete fill (exterior)
+        fig.add_trace(go.Scatter(
+            x=x_ext,
+            y=y_ext,
+            fill="toself",
+            fillcolor="rgba(180, 180, 180, 0.5)",  # Light gray with transparency
+            line=dict(color="black", width=2),
+            mode="lines",
+            name="Concrete",
+            hoverinfo="text",
+            hovertext=concrete_hover,
+            hoveron="fills+points",
+        ))
+
+        # Add interior rings (holes/voids) as white fill
+        for i, interior in enumerate(self.outline.interiors):
+            int_coords = np.asarray(interior.coords, dtype=float)
+            x_int = int_coords[:, 0].tolist()
+            y_int = int_coords[:, 1].tolist()
+
+            void_hover = f"<b>Void {i+1}</b><br>Area: {Polygon(int_coords).area:,.0f} mm²"
+
+            fig.add_trace(go.Scatter(
+                x=x_int,
+                y=y_int,
+                fill="toself",
+                fillcolor="white",
+                line=dict(color="black", width=1.5, dash="dash"),
+                mode="lines",
+                name=f"Void {i+1}",
+                hoverinfo="text",
+                hovertext=void_hover,
+                hoveron="fills+points",
+            ))
+
+        # ===========================
+        # 2. Draw rebars
+        # ===========================
+
+        # Generate circle points for each rebar
+        n_circle_pts = 32
+        theta = np.linspace(0, 2 * np.pi, n_circle_pts, endpoint=True)
+
+        for group_idx, group in enumerate(self.rebar_groups):
+            r = float(group.rebar.diameter) / 2.0
+
+            for bar_idx, pos in enumerate(group.positions):
+                # Circle coordinates
+                x_circle = (pos.x + r * np.cos(theta)).tolist()
+                y_circle = (pos.y + r * np.sin(theta)).tolist()
+
+                # Build detailed hover text
+                hover_parts = [
+                    f"<b>Rebar</b>",
+                    f"Diameter: ϕ{group.rebar.diameter} mm",
+                    f"Grade: {group.rebar.grade}",
+                    f"Area: {group.rebar.area:.1f} mm²",
+                    f"Position: ({pos.x:.1f}, {pos.y:.1f}) mm",
+                ]
+                if group.layer_name:
+                    hover_parts.append(f"Layer: {group.layer_name}")
+                hover_parts.extend([
+                    f"Group Index: {group_idx}",
+                    f"Bar Index: {bar_idx + 1} of {group.n_bars}",
+                    f"f_yk: {group.rebar.f_yk:.0f} MPa",
+                    f"f_yd: {group.rebar.f_yd:.1f} MPa",
+                ])
+                rebar_hover = "<br>".join(hover_parts)
+
+                # Determine legend group for cleaner legend
+                legend_name = f"ϕ{group.rebar.diameter}"
+                if group.layer_name:
+                    legend_name += f" ({group.layer_name})"
+
+                # Only show in legend for first bar of each group
+                show_legend = (bar_idx == 0)
+
+                fig.add_trace(go.Scatter(
+                    x=x_circle,
+                    y=y_circle,
+                    fill="toself",
+                    fillcolor="rgba(139, 0, 0, 0.9)",  # Dark red
+                    line=dict(color="black", width=1),
+                    mode="lines",
+                    name=legend_name,
+                    legendgroup=f"group_{group_idx}",
+                    showlegend=show_legend,
+                    hoverinfo="text",
+                    hovertext=rebar_hover,
+                    hoveron="fills+points",
+                ))
+
+        # ===========================
+        # 3. Add centroid markers
+        # ===========================
+        fig.add_trace(go.Scatter(
+            x=[cx],
+            y=[cy],
+            mode="markers",
+            marker=dict(
+                symbol="cross",
+                size=12,
+                color="blue",
+                line=dict(width=2, color="blue"),
+            ),
+            name="Gross Centroid",
+            hoverinfo="text",
+            hovertext=f"<b>Gross Centroid</b><br>({cx:.1f}, {cy:.1f}) mm",
+        ))
+
+        # Add transformed centroid if concrete material is provided
+        if concrete is not None:
+            A_tr, cx_tr, cy_tr = self.get_transformed_centroid(concrete.E_cm)
+            fig.add_trace(go.Scatter(
+                x=[cx_tr],
+                y=[cy_tr],
+                mode="markers",
+                marker=dict(
+                    symbol="x",
+                    size=12,
+                    color="green",
+                    line=dict(width=2, color="green"),
+                ),
+                name="Transformed Centroid",
+                hoverinfo="text",
+                hovertext=(
+                    f"<b>Transformed Centroid</b><br>"
+                    f"({cx_tr:.1f}, {cy_tr:.1f}) mm<br>"
+                    f"A_tr: {A_tr:,.0f} mm²<br>"
+                    f"E_cm: {concrete.E_cm:,.0f} MPa"
+                ),
+            ))
+
+        # ===========================
+        # 4. Layout configuration
+        # ===========================
+        plot_title = title or self.section_name or "RC Section Cross-Section"
+
+        fig.update_layout(
+            title=dict(
+                text=plot_title,
+                font=dict(size=16, family="Arial, sans-serif"),
+                x=0.5,
+                xanchor="centre",
+            ),
+            xaxis=dict(
+                title="Width (mm)",
+                range=[min_x - pad_x, max_x + pad_x],
+                scaleanchor="y",
+                scaleratio=1,
+                showgrid=True,
+                gridcolor="rgba(200, 200, 200, 0.5)",
+                zeroline=False,
+            ),
+            yaxis=dict(
+                title="Height (mm)",
+                range=[min_y - pad_y, max_y + pad_y],
+                showgrid=True,
+                gridcolor="rgba(200, 200, 200, 0.5)",
+                zeroline=False,
+            ),
+            width=width,
+            height=height,
+            showlegend=True,
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=1.02,
+                bgcolor="rgba(255, 255, 255, 0.8)",
+                bordercolor="rgba(0, 0, 0, 0.3)",
+                borderwidth=1,
+            ),
+            plot_bgcolor="white",
+            hovermode="closest",
+        )
+
+        if show:
+            fig.show()
+
+        return fig
+
+
 def create_rectangular_section(
     width: float,
     height: float,
@@ -772,7 +1036,7 @@ def create_rectangular_section(
     Create a rectangular RC section.
 
     Hook Reference Convention:
-        hook_ref=0: Center (origin at center of rectangle)
+        hook_ref=0: Centre (origin at centre of rectangle)
         hook_ref=1: Bottom-left corner (section in +X, +Y quadrant) - DEFAULT
         hook_ref=2: Bottom-right corner (section in -X, +Y quadrant)
         hook_ref=3: Top-right corner (section in -X, -Y quadrant)
@@ -782,7 +1046,7 @@ def create_rectangular_section(
         width: Section width (mm)
         height: Section height (mm)
         origin: Hook point coordinates (default: (0, 0))
-        hook_ref: Hook reference point (0=center, 1=bottom-left, 2=bottom-right,
+        hook_ref: Hook reference point (0=centre, 1=bottom-left, 2=bottom-right,
                   3=top-right, 4=top-left). Default: 1 (bottom-left)
         section_name: Optional section name
 
@@ -793,7 +1057,7 @@ def create_rectangular_section(
         >>> # Section with bottom-left at (0, 0), extends to (300, 500)
         >>> section = create_rectangular_section(300, 500)
 
-        >>> # Section centered at (0, 0)
+        >>> # Section centred at (0, 0)
         >>> section = create_rectangular_section(300, 500, hook_ref=0)
 
         >>> # Section with bottom-left at (100, 50)
@@ -801,9 +1065,9 @@ def create_rectangular_section(
     """
     ox, oy = origin
 
-    # Calculate center point based on hook_ref
+    # Calculate centre point based on hook_ref
     if hook_ref == 0:
-        # Center
+        # Centre
         cx, cy = ox, oy
     elif hook_ref == 1:
         # Bottom-left corner (section in +X, +Y)
@@ -852,7 +1116,7 @@ def create_circular_section(
     Create a circular RC section.
 
     Hook Reference Convention:
-        hook_ref=0: Center (origin at center of circle)
+        hook_ref=0: Centre (origin at centre of circle)
         hook_ref=1: Bottom-left of bounding box (section in +X, +Y quadrant) - DEFAULT
         hook_ref=2: Bottom-right of bounding box (section in -X, +Y quadrant)
         hook_ref=3: Top-right of bounding box (section in -X, -Y quadrant)
@@ -862,7 +1126,7 @@ def create_circular_section(
         diameter: Section diameter (mm)
         n_points: Number of points to approximate circle (default: 32)
         origin: Hook point coordinates (default: (0, 0))
-        hook_ref: Hook reference point (0=center, 1=bottom-left, etc.). Default: 1
+        hook_ref: Hook reference point (0=centre, 1=bottom-left, etc.). Default: 1
         section_name: Optional section name
 
     Returns:
@@ -872,15 +1136,15 @@ def create_circular_section(
         >>> # Circle with bounding box bottom-left at (0, 0)
         >>> section = create_circular_section(400)
 
-        >>> # Circle centered at (0, 0)
+        >>> # Circle centred at (0, 0)
         >>> section = create_circular_section(400, hook_ref=0)
     """
     ox, oy = origin
     radius = diameter / 2.0
 
-    # Calculate center point based on hook_ref
+    # Calculate centre point based on hook_ref
     if hook_ref == 0:
-        # Center
+        # Centre
         cx, cy = ox, oy
     elif hook_ref == 1:
         # Bottom-left corner of bounding box

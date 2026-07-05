@@ -4,27 +4,46 @@ Reinforcing steel material properties according to Eurocode 2.
 Implements characteristic and design strengths for reinforcing bar grades.
 """
 
-from typing import Literal, TypedDict, ClassVar
+from enum import StrEnum
+from typing import Literal
 from pydantic import Field
 from materials.core.base_material import BaseMaterial
 
 
+# Define a Type Alias for clarity
+DuctilityClass = Literal["A", "B", "C"]
+
 # Steel grades according to EC2 §C.1 (single source of truth)
-ReinforcingSteelGrade = Literal["B500A", "B500B", "B500C"]
+class ReinforcingSteelGrade(StrEnum):
+    B500A = "B500A"
+    B500B = "B500B"
+    B500C = "B500C"
 
+    @property
+    def _data(self) -> tuple[float, float, float, DuctilityClass]:
+        """
+        Returns (f_yk, ft_ratio_min, epsilon_uk_min, ductility_class)
+        Explicitly typed to satisfy Pylance.
+        """
+        mapping: dict[ReinforcingSteelGrade, tuple[float, float, float, DuctilityClass]] = {
+            ReinforcingSteelGrade.B500A: (500.0, 1.05, 0.025, "A"),
+            ReinforcingSteelGrade.B500B: (500.0, 1.08, 0.050, "B"),
+            ReinforcingSteelGrade.B500C: (500.0, 1.15, 0.075, "C"),
+        }
+        return mapping[self]
+    
+    @property
+    def f_yk(self) -> float: return self._data[0]
 
-class SteelGradeData(TypedDict):
-    f_yk: float
-    ft_ratio_min: float
-    epsilon_uk_min: float
-    ductility_class: Literal["A", "B", "C"]
+    @property
+    def ft_ratio_min(self) -> float: return self._data[1]
 
+    @property
+    def epsilon_uk_min(self) -> float: return self._data[2]
 
-STEEL_GRADE_DATA: dict[ReinforcingSteelGrade, SteelGradeData] = {
-    "B500A": {"f_yk": 500.0, "ft_ratio_min": 1.05, "epsilon_uk_min": 0.025, "ductility_class": "A"},
-    "B500B": {"f_yk": 500.0, "ft_ratio_min": 1.08, "epsilon_uk_min": 0.050, "ductility_class": "B"},
-    "B500C": {"f_yk": 500.0, "ft_ratio_min": 1.15, "epsilon_uk_min": 0.075, "ductility_class": "C"},
-}
+    @property
+    def ductility_class(self) -> DuctilityClass:
+        return self._data[3]
 
 
 class ReinforcingSteel(BaseMaterial):
@@ -38,12 +57,10 @@ class ReinforcingSteel(BaseMaterial):
         - Modulus: MPa (GPa × 1000)
         - Strain: dimensionless
     """
-    DEFAULT_GRADE: ClassVar[ReinforcingSteelGrade] = "B500B"
-
     name: str = Field(default="Reinforcing Steel", description="Material name")
 
     grade: ReinforcingSteelGrade = Field(
-        default=DEFAULT_GRADE,
+        default=ReinforcingSteelGrade.B500B,
         description="Steel grade per EC2 Annex C (defaults to B500B)",
     )
 
@@ -65,8 +82,6 @@ class ReinforcingSteel(BaseMaterial):
         gt=0,
     )
 
-    # Overrides BaseMaterial.density (Optional[float]) with a fixed default.
-    # Relax constraint to allow 0 or greater as requested.
     density: float = Field(
         default=7850.0,
         description="Steel density in kg/m³",
@@ -78,7 +93,7 @@ class ReinforcingSteel(BaseMaterial):
     @property
     def f_yk(self) -> float:
         """Characteristic yield strength (§C.1). All B500 grades: 500 MPa."""
-        return  float(STEEL_GRADE_DATA[self.grade]["f_yk"])
+        return self.grade.f_yk
 
     @property
     def f_yd(self) -> float:
@@ -106,8 +121,7 @@ class ReinforcingSteel(BaseMaterial):
 
         Uses minimum ratio × f_yk.
         """
-        ft_ratio = float(STEEL_GRADE_DATA[self.grade]["ft_ratio_min"])
-        return ft_ratio * self.f_yk
+        return self.grade.ft_ratio_min * self.f_yk
 
     @property
     def epsilon_yk(self) -> float:
@@ -127,7 +141,7 @@ class ReinforcingSteel(BaseMaterial):
         Returns:
             ε_uk (dimensionless)
         """
-        return float(STEEL_GRADE_DATA[self.grade]["epsilon_uk_min"])
+        return self.grade.epsilon_uk_min
 
     @property
     def epsilon_ud(self) -> float:
@@ -142,13 +156,14 @@ class ReinforcingSteel(BaseMaterial):
     @property
     def ductility_class(self) -> Literal["A", "B", "C"]:
         """Ductility class based on grade."""
-        return STEEL_GRADE_DATA[self.grade]["ductility_class"]  # type: ignore[return-value]
+        return self.grade.ductility_class
 
     @classmethod
-    def f_yk_for(cls, grade: ReinforcingSteelGrade | None = None) -> float:
+    def f_yk_for(cls, grade: ReinforcingSteelGrade | str | None = None) -> float:
         """Characteristic yield strength (MPa) for a given grade (defaults to B500B)."""
-        g = grade or cls.DEFAULT_GRADE
-        return float(STEEL_GRADE_DATA[g]["f_yk"])
+        # Convert string to Enum if needed, default to B500B
+        g = ReinforcingSteelGrade(grade) if grade else ReinforcingSteelGrade.B500B
+        return g.f_yk
 
     @classmethod
     def f_yd_for(

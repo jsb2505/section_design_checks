@@ -5,26 +5,88 @@ Implements characteristic strengths, design strengths, elastic modulus,
 and stress-strain parameters for concrete grades C12/15 to C90/105.
 """
 
-from typing import Literal
-import math
-from pydantic import Field
+from enum import StrEnum
+from typing import Annotated
+from math import log
+from pydantic import Field, BeforeValidator
+
 from materials.core.base_material import BaseMaterial
 
 
 # Concrete grades according to EC2 Table 3.1 (single source of truth)
-ConcreteGrade = Literal[
-    "C12/15", "C16/20", "C20/25", "C25/30", "C30/37", "C35/45", "C40/50",
-    "C45/55", "C50/60", "C55/67", "C60/75", "C70/85", "C80/95", "C90/105"
-]
+class ConcreteGrade(StrEnum):
+    C12_15 = "C12/15"
+    C16_20 = "C16/20"
+    C20_25 = "C20/25"
+    C25_30 = "C25/30"
+    C30_37 = "C30/37"
+    C35_45 = "C35/45"
+    C40_50 = "C40/50"
+    C45_55 = "C45/55"
+    C50_60 = "C50/60"
+    C55_67 = "C55/67"
+    C60_75 = "C60/75"
+    C70_85 = "C70/85"
+    C80_95 = "C80/95"
+    C90_105 = "C90/105"
 
-AggregateType = Literal["quartzite", "limestone", "sandstone", "basalt"]
+    @property
+    def _table_data(self) -> tuple[float, float, float]:
+        """
+        Returns (f_ck, f_ck_cube, f_cm) per EC2 Table 3.1.
+        Units: MPa
+        """
+        # Dictionary mapping for quick, safe lookup
+        mapping = {
+            ConcreteGrade.C12_15:  (12.0, 15.0, 20.0),
+            ConcreteGrade.C16_20:  (16.0, 20.0, 24.0),
+            ConcreteGrade.C20_25:  (20.0, 25.0, 28.0),
+            ConcreteGrade.C25_30:  (25.0, 30.0, 33.0),
+            ConcreteGrade.C30_37:  (30.0, 37.0, 38.0),
+            ConcreteGrade.C35_45:  (35.0, 45.0, 43.0),
+            ConcreteGrade.C40_50:  (40.0, 50.0, 48.0),
+            ConcreteGrade.C45_55:  (45.0, 55.0, 53.0),
+            ConcreteGrade.C50_60:  (50.0, 60.0, 58.0),
+            ConcreteGrade.C55_67:  (55.0, 67.0, 63.0),
+            ConcreteGrade.C60_75:  (60.0, 75.0, 68.0),
+            ConcreteGrade.C70_85:  (70.0, 85.0, 78.0),
+            ConcreteGrade.C80_95:  (80.0, 95.0, 88.0),
+            ConcreteGrade.C90_105: (90.0, 105.0, 98.0),
+        }
+        return mapping[self]
+    
+    @property
+    def f_ck(self) -> float:
+        return self._table_data[0]
 
-_AGGREGATE_ECM_FACTORS: dict[AggregateType, float] = {
-    "basalt": 1.2,
-    "quartzite": 1.0,
-    "limestone": 0.9,
-    "sandstone": 0.7,
-}
+    @property
+    def f_ck_cube(self) -> float:
+        return self._table_data[1]
+
+    @property
+    def f_cm(self) -> float:
+        return self._table_data[2]
+
+
+class AggregateType(StrEnum):
+    BASALT = "basalt"
+    QUARTZITE = "quartzite"
+    LIMESTONE = "limestone"
+    SANDSTONE = "sandstone"
+
+    @property
+    def e_cm_factor(self) -> float:
+        """Correction factor for E_cm based on aggregate type (§3.1.3(2))."""
+        factors = {
+            AggregateType.BASALT: 1.2,
+            AggregateType.QUARTZITE: 1.0,
+            AggregateType.LIMESTONE: 0.9,
+            AggregateType.SANDSTONE: 0.7,
+        }
+        return factors[self]
+
+# This tells Pylance "Strings are okay" but Pydantic will convert to Enum
+GradeInput = Annotated[ConcreteGrade, BeforeValidator(lambda v: ConcreteGrade(v) if isinstance(v, str) else v)]
 
 
 class ConcreteMaterial(BaseMaterial):
@@ -70,7 +132,7 @@ class ConcreteMaterial(BaseMaterial):
     )
 
     aggregate_type: AggregateType = Field(
-        default="quartzite",
+        default=AggregateType.QUARTZITE,
         description="Aggregate type for elastic modulus adjustment (§3.1.3)",
     )
 
@@ -85,20 +147,17 @@ class ConcreteMaterial(BaseMaterial):
     @property
     def f_ck(self) -> float:
         """Characteristic cylinder compressive strength at 28 days (§3.1.2), MPa."""
-        f_ck_int = int(self.grade.split("/")[0].replace("C", ""))
-        if f_ck_int > 90:
-            raise ValueError("Concrete cylinder strengths above 90 are not supported as per (§3.1.2(2)P)")
-        return float(f_ck_int)
+        return self.grade.f_ck
 
     @property
     def f_ck_cube(self) -> float:
         """Characteristic cube compressive strength at 28 days (§3.1.2), MPa."""
-        return float(self.grade.split("/")[1])
+        return self.grade.f_ck_cube
 
     @property
     def f_cm(self) -> float:
         """Mean cylinder compressive strength (§Table 3.1): f_cm = f_ck + 8 (MPa)."""
-        return self.f_ck + 8.0
+        return self.grade.f_cm
 
     @property
     def f_cd(self) -> float:
@@ -120,7 +179,7 @@ class ConcreteMaterial(BaseMaterial):
         """
         if self.f_ck <= 50:
             return 0.30 * (self.f_ck ** (2.0 / 3.0))
-        return 2.12 * math.log(1.0 + self.f_cm / 10.0)
+        return 2.12 * log(1.0 + self.f_cm / 10.0)
 
     @property
     def f_ctk_005(self) -> float:
@@ -146,7 +205,7 @@ class ConcreteMaterial(BaseMaterial):
         adjusted for aggregate type per §3.1.3(2).
         """
         e_base_gpa = 22.0 * ((self.f_cm / 10.0) ** 0.3)
-        factor = _AGGREGATE_ECM_FACTORS[self.aggregate_type]
+        factor = self.aggregate_type.e_cm_factor
         return e_base_gpa * 1000.0 * factor
 
     def get_elastic_modulus(self) -> float:
