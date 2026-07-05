@@ -93,10 +93,12 @@ def _polygon_integrals_about_origin(poly: Polygon) -> Tuple[float, float, float,
         - Subtract ring integrals for each interior ring (holes).
 
     Note:
-        Shapely normalizes all rings to CCW winding, so the shoelace formula
-        produces positive values for both exterior and interior rings. We must
-        explicitly subtract interior ring contributions to get correct results
-        for hollow sections.
+        Ring integrals scale with the ring's SIGNED area. Shapely does NOT
+        normalise interior-ring winding — it preserves whatever orientation the
+        caller supplied — so a hole given in the conventional clockwise order has
+        negative signed area and negated integrals. Each hole is therefore scaled
+        back to a positive-area basis (via the sign of its signed area) before
+        subtraction, so the result is correct for either winding.
     """
     # Exterior
     ext = np.asarray(poly.exterior.coords, dtype=float)
@@ -109,18 +111,25 @@ def _polygon_integrals_about_origin(poly: Polygon) -> Tuple[float, float, float,
     Iyy0 = Iyy_e
     Ixy0 = Ixy_e
 
-    # Interiors (holes) - subtract their contributions
+    # Interiors (holes) - subtract their contributions.
+    # All ring integrals scale with the SIGNED area, and Shapely preserves the
+    # caller's interior-ring winding, so normalise each hole to a positive-area
+    # basis via s = sign(A_i). This makes EVERY term subtract with a consistent
+    # sign - including the product of inertia Ixy, which can legitimately be
+    # negative and was previously subtracted with the raw (winding-dependent)
+    # sign, corrupting I_xy for clockwise-wound voids.
     for ring in poly.interiors:
         coords = np.asarray(ring.coords, dtype=float)
         A_i, Cx_i, Cy_i, Ixx_i, Iyy_i, Ixy_i = _ring_integrals_about_origin(coords)
 
-        # Subtract hole contributions (Shapely stores holes as CCW, same as exterior)
-        A_total -= abs(A_i)
-        Cx_num -= Cx_i * abs(A_i)
-        Cy_num -= Cy_i * abs(A_i)
-        Ixx0 -= abs(Ixx_i)
-        Iyy0 -= abs(Iyy_i)
-        Ixy0 -= Ixy_i  # Product of inertia keeps sign
+        s = 1.0 if A_i >= 0.0 else -1.0
+        A_hole = s * A_i  # == |A_i|
+        A_total -= A_hole
+        Cx_num -= Cx_i * A_hole
+        Cy_num -= Cy_i * A_hole
+        Ixx0 -= s * Ixx_i
+        Iyy0 -= s * Iyy_i
+        Ixy0 -= s * Ixy_i
 
     if abs(A_total) < 1e-18:
         return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -1222,7 +1231,3 @@ class RCSection(BaseGeometry):
 # Section creation helpers — moved to section_utils.py, re-exported here
 # for backward compatibility.
 # ---------------------------------------------------------------------------
-from materials.reinforced_concrete.geometry.section_utils import (  # noqa: E402
-    create_rectangular_section,
-    create_circular_section,
-)
