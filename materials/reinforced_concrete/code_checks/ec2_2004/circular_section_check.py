@@ -32,7 +32,6 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import Shear
 from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
     CrackingCheck,
     LoadDuration,
-    SLSCombination,
 )
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     find_cot_theta_for_V_Ed,
@@ -238,9 +237,29 @@ class CircularSectionCheck(BaseModel):
         description="True for ribbed bars (k_1=0.8), False for plain bars (k_1=1.6)",
     )
 
-    sls_combination: SLSCombination = Field(
-        default=SLSCombination.QUASI_PERMANENT,
-        description="SLS load combination type for stress limitation checks",
+    check_k1_stress: bool = Field(
+        default=False,
+        description="EC2 §7.2(2) characteristic concrete stress limit.",
+    )
+
+    check_k2_stress: bool = Field(
+        default=True,
+        description="EC2 §7.2(3) quasi-permanent concrete stress limit.",
+    )
+
+    check_k3_stress: bool = Field(
+        default=False,
+        description="EC2 §7.2(5) reinforcement stress limit.",
+    )
+
+    check_yielding: bool = Field(
+        default=True,
+        description="EC2 §7.2(4)P inelastic strain check.",
+    )
+
+    check_k4_stress: bool = Field(
+        default=False,
+        description="EC2 §7.2(5) imposed deformation stress limit.",
     )
 
     # ===========================
@@ -310,7 +329,11 @@ class CircularSectionCheck(BaseModel):
             n_fibres_height=self.n_fibres_height,
             is_high_bond_bar=self.is_high_bond_bar,
             creep_coefficient=self.creep_coefficient,
-            sls_combination=self.sls_combination,
+            check_k1_stress=self.check_k1_stress,
+            check_k2_stress=self.check_k2_stress,
+            check_k3_stress=self.check_k3_stress,
+            check_yielding=self.check_yielding,
+            check_k4_stress=self.check_k4_stress,
         )
 
         return self

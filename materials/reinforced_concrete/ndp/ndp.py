@@ -108,7 +108,11 @@ _NDP_METADATA = {
         "ref": "7.2(3)",
     },
     "k_3_stress": {
-        "description": "SLS reinforcement stress limit factor",
+        "description": "SLS Characteristic reinforcement stress limit factor",
+        "ref": "7.2(5)",
+    },
+    "k_4_stress": {
+        "description": "SLS Characteristic imposed deformation stress limit factor",
         "ref": "7.2(5)",
     },
     "f_ct_eff_min": {
@@ -179,6 +183,7 @@ EN1992_1_1_2004 = {
         "k_1_stress": 0.6,
         "k_2_stress": 0.45,
         "k_3_stress": 0.8,
+        "k_4_stress": 1.0,
         "f_ct_eff_min": None,  # No lower bound in base EC2, depends on f_ck
         "k_1_crack": lambda is_high_bond_bar, k_2: 0.8 if is_high_bond_bar else 1.6,
         "k_3_crack": 3.4,
@@ -284,6 +289,7 @@ EN1992_2_2005 = {
         "k_1_stress": 0.6,
         "k_2_stress": 0.45,
         "k_3_stress": 0.8,
+        "k_4_stress": 1.0,
         "f_ct_eff_min": None,  # No lower bound in base EC2, depends on f_ck
         "k_1_crack": lambda is_high_bond_bar, k_2: 0.8 if is_high_bond_bar else 1.6,
         "k_3_crack": 3.4,

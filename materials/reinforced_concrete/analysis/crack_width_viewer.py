@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 import numpy as np
 
@@ -138,13 +138,13 @@ def _find_crack_width_boundary(
         for k in range(len(g_vals) - 1):
             if g_vals[k] < 0 and g_vals[k + 1] >= 0:
                 try:
-                    M_star = brentq(
+                    M_star = cast(float, brentq(
                         lambda m: g(m, N_i_float),
                         float(M_probe[k]),
                         float(M_probe[k + 1]),
                         xtol=0.1,
                         maxiter=30,
-                    )
+                    ))
                     pos_boundary.append((M_star, N_i_float))
                 except ValueError:
                     pass
@@ -158,13 +158,13 @@ def _find_crack_width_boundary(
             for k in range(len(g_vals_neg) - 1):
                 if g_vals_neg[k] < 0 and g_vals_neg[k + 1] >= 0:
                     try:
-                        M_star = brentq(
+                        M_star = cast(float, brentq(
                             lambda m: g(m, N_i_float),
                             float(M_probe_neg[k]),
                             float(M_probe_neg[k + 1]),
                             xtol=0.1,
                             maxiter=30,
-                        )
+                        ))
                         neg_boundary.append((M_star, N_i_float))
                     except ValueError:
                         pass
