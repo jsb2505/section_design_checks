@@ -30,6 +30,7 @@ from materials.reinforced_concrete.materials import ConcreteMaterial
 from materials.reinforced_concrete.analysis import create_interaction_diagram
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
+from materials.core.geometry import Point2D
 from materials.core.units import ForceUnit, MomentUnit, from_kn, to_knm
 from materials.reinforced_concrete.ndp import get_ndp, get_ndp_callable
 
@@ -542,6 +543,7 @@ class CrackingCheck(BaseCodeCheck):
         x: Optional[float] = None,
         has_tension_reinforcement: bool = True,
         sigma_s: float = 0.0,
+        bar_spacing: float = 0.0,
     ) -> float:
         """
         Maximum crack spacing s_r,max (EC2 §7.3.4(3), Eq. 7.11).
@@ -549,7 +551,7 @@ class CrackingCheck(BaseCodeCheck):
         Standard formula (spacing ≤ 5(c + φ/2)):
             s_r,max = k_3·c + k_1·k_2·k_4·φ / ρ_p,eff
 
-        If spacing > 5(c + φ/2) or no bonded reinforcement (Eq. 7.14):
+        If bar_spacing > 5(c + φ/2) or no bonded reinforcement (Eq. 7.14):
             s_r_max = 1.3(h - x)
 
         An additional NDP upper limit s_r_max_lim may cap the Eq. 7.11 result
@@ -564,6 +566,8 @@ class CrackingCheck(BaseCodeCheck):
             has_tension_reinforcement: True if bonded reinforcement exists in tension zone
             sigma_s: Steel stress in tension reinforcement (MPa, positive).
                 Required by some National Annexes for s_r,max upper limit.
+            bar_spacing: Maximum centre-to-centre spacing of tension bars (mm).
+                Used to trigger Eq. 7.14 when bar_spacing > 5(c + φ/2).
 
         Returns:
             Maximum crack spacing in mm
@@ -588,12 +592,7 @@ class CrackingCheck(BaseCodeCheck):
         # Per IDEA StatiCa interpretation: Eq. 7.14 bounds w_k, not s_r,max.
         # Therefore take max(Eq.7.11, Eq.7.14) to be conservative.
         spacing_limit = 5 * (cover + phi_eq / 2)
-        # TODO  this is wrong. these two things shouldn't be compared.
-        # Need a function to find the inter-bar spacing. It is this that should be
-        # compared the spacing_limit.
-        #s_bar = max centre-to-centre spacing of bars in the considered face/layer/zone
-        #'trigger Eq 7.14 if s_bar > 5(c + φ/2) or if “no bonded reinforcement within tension zone”.
-        if s_r_max > spacing_limit or not has_tension_reinforcement:
+        if bar_spacing > spacing_limit or not has_tension_reinforcement:
             h = self.height
             if x is not None and x > 0:
                 s_r_max_7_14 = 1.3 * (h - x)
@@ -795,15 +794,6 @@ class CrackingCheck(BaseCodeCheck):
     # ===============================================
     # Helper methods for rebar analysis
     # ===============================================
-    # TODO _get_tension_rebar_info(... face=...) splits bars at y_mid.
-    # That’s fine for rectangles, but for general shapes it’s slightly arbitrary.
-    # A more robust (still cheap) rule is: assign bars to the face they are
-    # closest to (top vs bottom), using distance to bounding faces:
-    # dist_to_bottom = pos.y - y_min
-    # dist_to_top = y_max - pos.y
-    # bottom-face set if dist_to_bottom <= dist_to_top, else top-face set
-    # This removes the “mid-depth” artifact and behaves nicely for asymmetric bar layouts.
-
     def _get_tension_rebar_info(
         self,
         eps_top: float,
@@ -818,7 +808,7 @@ class CrackingCheck(BaseCodeCheck):
             eps_top: Top fibre strain (compression positive)
             eps_bottom: Bottom fibre strain (compression positive)
             face: For net tension, restrict to bars near this face ("top" or "bottom").
-                Bars are split at the section geometric centroid (zone_fraction=0.5).
+                Bars are assigned to the nearest bounding face (bottom takes ties).
                 When None, all tension bars are included.
             h_c_ef_limit: When provided, only include bars within this distance of
                 the tension face. Used by the iterative h_c,ef process.
@@ -833,8 +823,6 @@ class CrackingCheck(BaseCodeCheck):
         h = bounds[3] - bounds[1]
         y_min = bounds[1]
         y_max = bounds[3]
-        y_mid = (y_min + y_max) / 2  # Section geometric centroid (for face split)
-
         tension_bars: List[Tuple[float, int]] = []
         total_area = 0.0
         cover_sum = 0.0
@@ -862,12 +850,13 @@ class CrackingCheck(BaseCodeCheck):
                 if strain_at_bar >= 0:
                     continue
 
-                # Face filter: for net tension, only include bars in the
-                # half of the section corresponding to the requested face
+                # Face filter: for net tension, assign bar to nearest face
                 if face is not None and comp_face is None:
-                    if face == "bottom" and pos.y > y_mid:
+                    dist_to_bottom = pos.y - y_min
+                    dist_to_top = y_max - pos.y
+                    if face == "bottom" and dist_to_bottom > dist_to_top:
                         continue
-                    if face == "top" and pos.y < y_mid:
+                    if face == "top" and dist_to_bottom <= dist_to_top:
                         continue
 
                 # h_c,ef filter: only include bars within h_c,ef of the tension face
@@ -924,8 +913,6 @@ class CrackingCheck(BaseCodeCheck):
         h = bounds[3] - bounds[1]
         y_min = bounds[1]
         y_max = bounds[3]
-        y_mid = (y_min + y_max) / 2
-
         comp_face = flexure_utils.calculate_compression_face_from_strains(eps_top, eps_bottom)
         if comp_face is None:
             cover_ref = face or "bottom"
@@ -949,11 +936,13 @@ class CrackingCheck(BaseCodeCheck):
                 if strain_at_bar >= 0:
                     continue
 
-                # Face filter (net tension)
+                # Face filter: for net tension, assign bar to nearest face
                 if face is not None and comp_face is None:
-                    if face == "bottom" and pos.y > y_mid:
+                    dist_to_bottom = pos.y - y_min
+                    dist_to_top = y_max - pos.y
+                    if face == "bottom" and dist_to_bottom > dist_to_top:
                         continue
-                    if face == "top" and pos.y < y_mid:
+                    if face == "top" and dist_to_bottom <= dist_to_top:
                         continue
 
                 # h_c,ef filter
@@ -1035,6 +1024,85 @@ class CrackingCheck(BaseCodeCheck):
                         outermost_E_s = group.rebar.E_s
 
         return outermost_E_s
+
+
+    def _compute_max_bar_spacing(
+        self,
+        eps_top: float,
+        eps_bottom: float,
+        face: Optional[str] = None,
+        h_c_ef_limit: Optional[float] = None,
+    ) -> float:
+        """
+        Maximum centre-to-centre spacing between adjacent tension bars.
+
+        Collects qualifying bar positions using the same filters as
+        ``_get_tension_rebar_info`` (strain, face, h_c,ef), sorts by
+        x-coordinate, and returns the max gap between consecutive bars.
+
+        Args:
+            eps_top: Top fibre strain (compression positive)
+            eps_bottom: Bottom fibre strain (compression positive)
+            face: For net tension, restrict to bars near this face.
+            h_c_ef_limit: Only consider bars within this distance of the
+                tension face.
+
+        Returns:
+            Maximum centre-to-centre bar spacing (mm), or 0.0 if < 2 bars.
+        """
+        bounds = self.section.outline.bounds
+        h = bounds[3] - bounds[1]
+        y_min = bounds[1]
+        y_max = bounds[3]
+
+        comp_face = flexure_utils.calculate_compression_face_from_strains(
+            eps_top, eps_bottom,
+        )
+        if comp_face is None:
+            cover_ref = face or "bottom"
+        else:
+            cover_ref = "bottom" if comp_face == "top" else "top"
+
+        qualifying: List[Point2D] = []
+
+        for group in self.section.rebar_groups:
+            for pos in group.positions:
+                # Strain filter — tension only
+                y_rel = (pos.y - y_min) / h
+                strain_at_bar = eps_bottom + (eps_top - eps_bottom) * y_rel
+                if strain_at_bar >= 0:
+                    continue
+
+                # Face filter (net tension)
+                if face is not None and comp_face is None:
+                    dist_to_bottom = pos.y - y_min
+                    dist_to_top = y_max - pos.y
+                    if face == "bottom" and dist_to_bottom > dist_to_top:
+                        continue
+                    if face == "top" and dist_to_bottom <= dist_to_top:
+                        continue
+
+                # h_c,ef filter
+                if h_c_ef_limit is not None:
+                    if cover_ref == "bottom":
+                        dist_from_face = pos.y - y_min
+                    else:
+                        dist_from_face = y_max - pos.y
+                    if dist_from_face > h_c_ef_limit:
+                        continue
+
+                qualifying.append(pos)
+
+        if len(qualifying) < 2:
+            return 0.0
+
+        qualifying.sort(key=lambda p: p.x)
+        max_spacing = 0.0
+        for i in range(len(qualifying) - 1):
+            spacing = qualifying[i].distance_to(qualifying[i + 1])
+            max_spacing = max(max_spacing, spacing)
+
+        return max_spacing
 
 
     # ===============================================
@@ -1279,12 +1347,20 @@ class CrackingCheck(BaseCodeCheck):
         # k_2 (strain distribution coefficient)
         k_2 = self.find_k_2(eps_top, eps_bottom)
 
+        # Max bar spacing for Eq. 7.14 trigger (EC2 §7.3.4(3))
+        bar_spacing = self._compute_max_bar_spacing(
+            eps_top, eps_bottom,
+            face=face if is_net_tension else None,
+            h_c_ef_limit=h_c_ef,
+        )
+
         # s_r,max
         has_tension_reinforcement = A_s > 0
         s_r_max = self.find_maximum_crack_spacing(
             cover=cover, phi_eq=phi_eq, rho_p_eff=rho_p_eff, k_2=k_2,
             x=x, has_tension_reinforcement=has_tension_reinforcement,
             sigma_s=sigma_s,
+            bar_spacing=bar_spacing,
         )
 
         # Strain difference (ε_sm - ε_cm)

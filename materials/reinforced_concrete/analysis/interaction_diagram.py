@@ -878,9 +878,9 @@ class MNInteractionDiagram:
         return float(max(10.0 * eps_y_max, 0.01))
 
 
-    # ----------------------------
+    # -----------------------------------------
     # Inverse solver (M, N) → (ε_top, ε_bottom)
-    # ----------------------------
+    # -----------------------------------------
 
     def find_strains_for_MN(
         self,

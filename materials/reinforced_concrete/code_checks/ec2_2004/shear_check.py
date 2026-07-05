@@ -686,9 +686,7 @@ class ShearCheck(BaseCodeCheck):
         # First moment S of area above centroidal axis about that axis.
         # For centroidal axes, top/bottom first moments have equal magnitude.
         from shapely.geometry import box
-        # TODO check the implementation of the moment of inertia and the
-        # section modulus is correct. Does this work for the generic section
-        # and rebar layout that may be possible, what about voids too?
+
         top_region = self.section.outline.intersection(
             box(min_x - pad, cy, max_x + pad, max_y + pad)
         )
