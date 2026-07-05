@@ -890,42 +890,41 @@ class MNInteractionDiagram:
         tol: float = 1e-6,
     ) -> Tuple[float, float]:
         """
-        Inverse solver: Find end strains (ε_top, ε_bottom) that produce target (M, N).
+        Inverse solver: Find end strains that produce target (M, N).
 
-        Uses scipy.optimize.least_squares with numerical Jacobian to solve the
-        2D root-finding problem:
-            calculate_point_from_end_strains(ε_top, ε_bottom) = (N_target, M_target)
+        Uses scipy.optimize.least_squares to solve:
+            calculate_point_from_end_strains(eps_top, eps_bottom) = (N_target, M_target)
 
         This method does NOT require generate_diagram_points() to have been called - it only
         needs the fibre mesh and constitutive models (created in __init__).
 
         Args:
-            M_target: Target moment (kN·m)
+            M_target: Target moment (kN.m)
             N_target: Target axial force (kN, compression positive)
-            initial_guess: Optional (ε_top, ε_bottom) starting point for optimizer.
+            initial_guess: Optional (eps_top, eps_bottom) starting point for optimizer.
                           If None, automatically estimated from (M, N) quadrant.
             tol: Convergence tolerance for residual norm and parameter changes
 
         Returns:
-            (ε_top, ε_bottom): Tuple of end strains that produce target forces
+            (eps_top, eps_bottom): Tuple of end strains that produce target forces
 
         Raises:
-            ValueError: If no solution found (point may be outside diagram envelope)
-                       or if solver fails to converge
+            ValueError: If no numerically stable solution can be found.
 
         Performance:
             - Typical solve time: 10-50ms per unique (M,N) point
+            - Hard points (e.g. near cracking transitions) may run extra fallback
+              attempts with alternative starting points and Jacobians
             - No caching - solves fresh each time per design
 
         Examples:
             >>> diagram = MNInteractionDiagram(section, concrete)
-            >>> # Find strains for sagging moment with compression
             >>> eps_top, eps_bottom = diagram.find_strains_for_MN(M_target=50.0, N_target=100.0)
-            >>> # Verify round-trip
             >>> point = diagram.calculate_point_from_end_strains(eps_top, eps_bottom)
             >>> assert abs(point.M - 50.0) < 1e-3
             >>> assert abs(point.N - 100.0) < 1e-3
         """
+
         def residual(eps_pair: npt.NDArray) -> npt.NDArray:
             """Residual function: [N_error, M_error]."""
             point = self.calculate_point_from_end_strains(eps_pair[0], eps_pair[1])
@@ -939,6 +938,7 @@ class MNInteractionDiagram:
         # This prevents numerical artifacts where extreme strains "match" forces via clipping
         eps_cu = self.concrete_model.get_ultimate_strain()  # Compression limit (~0.0035)
         eps_t = self._eps_tension_limit()  # Tension limit (steel-controlled, ~0.01-0.05)
+        eps_y = self.steel_models[0].epsilon_y if self.steel_models else 0.002
 
         # Bounds: (eps_top, eps_bottom) each in [-eps_t, +eps_cu]
         lower_bounds = np.array([-eps_t, -eps_t])  # Maximum tension (negative)
@@ -960,32 +960,155 @@ class MNInteractionDiagram:
             def analytical_jacobian(eps_pair: npt.NDArray) -> npt.NDArray:
                 """Compute analytical Jacobian at current strain pair."""
                 return self._compute_analytical_jacobian(eps_pair[0], eps_pair[1])
+
             jac_method = analytical_jacobian
             max_iterations = 50  # Analytical Jacobian converges much faster
 
-        # Solve using least squares
-        # Analytical Jacobian: exact derivatives, 5-10 iterations typical
-        # Numerical Jacobian: finite difference, 30-50 iterations typical
-        result = least_squares(
-            residual,
-            x0=np.array(initial_guess),
-            bounds=(lower_bounds, upper_bounds),  # Prevent absurd strains
-            jac=jac_method,  # type: ignore[arg-type]  # Analytical (plain) or numerical (confined/tension stiffening)
-            ftol=tol,
-            xtol=tol,
-            gtol=tol,  # Gradient tolerance (helps convergence for awkward load points)
-            max_nfev=max_iterations,
-        )
-
-        if not result.success:
-            raise ValueError(
-                f"Inverse solver failed for M={M_target:.2f} kN·m, N={N_target:.2f} kN. "
-                f"Reason: {result.message}. "
-                "Point may be outside section capacity envelope. "
-                f"Final residual: {result.fun}"
+        def clamp_guess(guess: Tuple[float, float]) -> Tuple[float, float]:
+            """Clamp guess to strain bounds before handing it to the optimizer."""
+            return (
+                float(np.clip(guess[0], -eps_t, +eps_cu)),
+                float(np.clip(guess[1], -eps_t, +eps_cu)),
             )
 
-        return tuple(result.x)
+        def residual_metrics(result: Any) -> Tuple[float, float]:
+            """
+            Return (max_abs_residual, normalized_residual_norm).
+
+            The normalized score scales each residual by target magnitude so
+            comparisons remain meaningful across low/high load levels.
+            """
+            fun = np.asarray(getattr(result, "fun", np.array([np.inf, np.inf])), dtype=float)
+            if fun.shape != (2,) or np.any(~np.isfinite(fun)):
+                return (np.inf, np.inf)
+
+            n_err = float(fun[0])
+            m_err = float(fun[1])
+            abs_max = max(abs(n_err), abs(m_err))
+
+            n_scale = max(abs(float(N_target)), 1.0)
+            m_scale = max(abs(float(M_target)), 1.0)
+            norm = float(np.hypot(n_err / n_scale, m_err / m_scale))
+            return (abs_max, norm)
+
+        def solve_from_guess(
+            guess: Tuple[float, float],
+            jac: Union[Callable[[npt.NDArray], npt.NDArray], str],
+        ) -> Any:
+            # Analytical Jacobian: exact derivatives, 5-10 iterations typical
+            # Numerical Jacobian: finite difference, 30-50 iterations typical
+            return least_squares(
+                residual,
+                x0=np.array(clamp_guess(guess)),
+                bounds=(lower_bounds, upper_bounds),
+                jac=jac,  # type: ignore[arg-type]
+                ftol=tol,
+                xtol=tol,
+                gtol=tol,
+                max_nfev=max_iterations,
+            )
+
+        # Build a compact set of branch-diverse candidate guesses. Keep the
+        # existing heuristic as first choice, then add conservative alternatives.
+        candidate_guesses: List[Tuple[float, float]] = [initial_guess]
+        if abs(M_target) < 1e-9:
+            if N_target > 0:
+                candidate_guesses.extend([
+                    (+eps_cu * 0.8, +eps_cu * 0.8),
+                    (+eps_cu * 0.9, +eps_cu * 0.7),
+                ])
+            elif N_target < 0:
+                candidate_guesses.extend([
+                    (-eps_y * 2.0, -eps_y * 2.0),
+                    (-eps_y * 3.0, -eps_y),
+                ])
+            else:
+                candidate_guesses.append((0.0, 0.0))
+        elif M_target > 0:
+            candidate_guesses.extend([
+                (+eps_cu * 0.8, +eps_cu * 0.2),
+                (+eps_cu * 0.8, -eps_y * 1.5),
+                (+eps_cu * 0.6, -eps_y * 0.5),
+            ])
+            if N_target > 0:
+                eccentricity_mm = abs(M_target) * 1000.0 / max(abs(N_target), 1e-6)
+                if eccentricity_mm > float(self.section_height) * 0.6:
+                    candidate_guesses.append((+eps_cu * 0.7, -eps_y * 2.0))
+        else:
+            candidate_guesses.extend([
+                (+eps_cu * 0.2, +eps_cu * 0.8),
+                (-eps_y * 1.5, +eps_cu * 0.8),
+                (-eps_y * 0.5, +eps_cu * 0.6),
+            ])
+            if N_target > 0:
+                eccentricity_mm = abs(M_target) * 1000.0 / max(abs(N_target), 1e-6)
+                if eccentricity_mm > float(self.section_height) * 0.6:
+                    candidate_guesses.append((-eps_y * 2.0, +eps_cu * 0.7))
+
+        # Deduplicate after clamping to avoid redundant solve calls.
+        deduped_guesses: List[Tuple[float, float]] = []
+        for guess in candidate_guesses:
+            clamped = clamp_guess(guess)
+            if not any(abs(clamped[0] - d[0]) < 1e-9 and abs(clamped[1] - d[1]) < 1e-9 for d in deduped_guesses):
+                deduped_guesses.append(clamped)
+
+        # Keep existing behavior for outside-envelope requests: if residual stays
+        # high, still return the nearest feasible point. This threshold is only
+        # used to decide if additional fallback passes are necessary.
+        acceptable_abs_error = max(1.0, tol * 1e6)
+
+        attempts: List[Tuple[Any, str, Tuple[float, float]]] = []
+
+        # Fast path: primary guess only.
+        primary_guess = deduped_guesses[0]
+        primary_result = solve_from_guess(primary_guess, jac_method)
+        attempts.append((primary_result, "pass1_primary", primary_guess))
+
+        best_result = primary_result
+        best_abs_error, _ = residual_metrics(best_result)
+        if np.isfinite(best_abs_error) and best_abs_error <= acceptable_abs_error:
+            return tuple(best_result.x)
+
+        # Fallback pass 1: alternative guesses with preferred Jacobian.
+        for i, guess in enumerate(deduped_guesses[1:], start=1):
+            attempts.append((solve_from_guess(guess, jac_method), f"pass1_guess{i}", guess))
+
+        best_result, _, _ = min(
+            attempts,
+            key=lambda item: (
+                residual_metrics(item[0])[0],
+                residual_metrics(item[0])[1],
+                0 if bool(getattr(item[0], "success", False)) else 1,
+            ),
+        )
+
+        best_abs_error, _ = residual_metrics(best_result)
+        if np.isfinite(best_abs_error) and best_abs_error <= acceptable_abs_error:
+            return tuple(best_result.x)
+
+        # Near cracking transitions, retry all guesses with numerical Jacobian.
+        if self.tension_stiffening and not self.confined_concrete:
+            for i, guess in enumerate(deduped_guesses):
+                attempts.append((solve_from_guess(guess, "2-point"), f"pass2_guess{i}", guess))
+
+            best_result, _, _ = min(
+                attempts,
+                key=lambda item: (
+                    residual_metrics(item[0])[0],
+                    residual_metrics(item[0])[1],
+                    0 if bool(getattr(item[0], "success", False)) else 1,
+                ),
+            )
+
+        best_abs_error, _ = residual_metrics(best_result)
+        finite_x = np.all(np.isfinite(np.asarray(best_result.x)))
+        if not (np.isfinite(best_abs_error) and finite_x):
+            raise ValueError(
+                f"Inverse solver failed for M={M_target:.2f} kN.m, N={N_target:.2f} kN. "
+                "All solver attempts were numerically unstable."
+            )
+
+        return tuple(best_result.x)
 
     def _compute_analytical_jacobian(
         self,

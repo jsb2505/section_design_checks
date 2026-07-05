@@ -147,11 +147,6 @@ def test_jacobian_convergence_with_options():
 
     With tension_stiffening=True, ensure find_strains_for_MN() converges reliably.
     This is where the analytical Jacobian is most likely to misbehave if implemented incorrectly.
-
-    TODO: Case (M=100, N=100) fails with error=34.5 kN. The solver converges to
-    the wrong branch near the cracking transition with tension stiffening enabled.
-    Investigate initial guess strategy or Jacobian discontinuity handling.
-    See TODO.md for details.
     """
     print("\n=== Test D: Jacobian Convergence with Tension Stiffening ===\n")
 
@@ -257,6 +252,44 @@ def test_confined_concrete_convergence():
     print(f"[OK] Numerical Jacobian (confined concrete) converges correctly")
 
 
+def test_tension_stiffening_branch_selection_regression():
+    """
+    Regression guard for wrong-branch convergence near cracking transition.
+
+    Uses the historical problematic case (M=100, N=100) and a deliberately
+    branch-biased all-compression seed to verify fallback recovery.
+    """
+    print("\n=== Test E: Branch Selection Regression (Tension Stiffening) ===\n")
+
+    section = create_test_section()
+    concrete = ConcreteMaterial(grade="C30/37")
+    diagram = MNInteractionDiagram(section=section, concrete=concrete, tension_stiffening=True)
+
+    M_target = 100.0
+    N_target = 100.0
+    eps_cu = diagram.concrete_model.get_ultimate_strain()
+
+    # Historically problematic seed (all compression under sagging + compression)
+    branch_biased_guess = (eps_cu * 0.8, eps_cu * 0.2)
+    eps_top, eps_bottom = diagram.find_strains_for_MN(
+        M_target=M_target,
+        N_target=N_target,
+        initial_guess=branch_biased_guess,
+    )
+    point = diagram.calculate_point_from_end_strains(eps_top, eps_bottom)
+
+    error_M = abs(point.M - M_target)
+    error_N = abs(point.N - N_target)
+    error = max(error_M, error_N)
+
+    print(f"Target:   M={M_target:.2f}, N={N_target:.2f}")
+    print(f"Result:   M={point.M:.2f}, N={point.N:.2f}")
+    print(f"Error:    M={error_M:.4f}, N={error_N:.4f}, max={error:.4f}")
+
+    assert error < 1.0, f"Wrong-branch regression detected: error={error:.6f} kN"
+    print("[OK] Solver recovered from branch-biased initial guess")
+
+
 def test_inside_outside_consistency():
     """
     Additional check: Points inside envelope should have util < 1.0, outside util > 1.0.
@@ -303,6 +336,7 @@ if __name__ == "__main__":
     test_scaling_property()
     test_jacobian_convergence_with_options()
     test_confined_concrete_convergence()
+    test_tension_stiffening_branch_selection_regression()
     test_inside_outside_consistency()
 
     print("\n" + "="*80)
@@ -315,6 +349,7 @@ A) Ray-curve intersection: Boundary points have utilization ~= 1.0 [OK]
 B) Scaling property: util(k*M, k*N) = k * util(M, N) [OK]
 D) Analytical Jacobian: Converges reliably with tension stiffening [OK]
 D) Numerical Jacobian: Converges reliably with confined concrete [OK]
+E) Branch selection regression: Recovered from wrong branch seed [OK]
 +) Inside/outside: Classification consistent with utilization [OK]
 
 These sanity checks confirm:
