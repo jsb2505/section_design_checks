@@ -1012,3 +1012,69 @@ class TestCrackingAdditionalBranches:
 
         assert out.details["is_cracked"] is True
         assert out.details["crack_detection_method"] == "solver_uncracked_tension_threshold"
+
+
+class TestBiaxialEntryPointConsistency:
+    """perform_check (via _check_single_case) and calculate_detailed must agree on the
+    crack width for biaxial loads. They diverged because calculate_detailed omitted
+    the biaxial effective-depth (d_override) that _check_single_case applies, so the
+    detailed path fell back to a face-based 1D effective depth."""
+
+    @staticmethod
+    def _asymmetric_section():
+        # More/larger steel bottom-left than bottom-right => I_xy != 0, so the free
+        # neutral axis is skewed even under pure My => the strain state is biaxial.
+        section = create_rectangular_section(width=300.0, height=500.0)
+        section.add_rebar_group(create_linear_rebar_layer(
+            rebar=Rebar(diameter=25, grade="B500B"), n_bars=2,
+            start_point=(50.0, 50.0), end_point=(120.0, 50.0), layer_name="bl"))
+        section.add_rebar_group(create_linear_rebar_layer(
+            rebar=Rebar(diameter=16, grade="B500B"), n_bars=1,
+            start_point=(250.0, 50.0), end_point=(250.0, 50.0), layer_name="br"))
+        section.add_rebar_group(create_linear_rebar_layer(
+            rebar=Rebar(diameter=16, grade="B500B"), n_bars=2,
+            start_point=(50.0, 450.0), end_point=(250.0, 450.0), layer_name="top"))
+        return section
+
+    def test_perform_and_detailed_agree_for_biaxial(self, concrete_c30):
+        check = CrackingCheck(
+            section=self._asymmetric_section(), concrete=concrete_c30, free_neutral_axis=True,
+        )
+        # Confirm the biaxial (free-NA) diagram is actually in use, else the
+        # d_override path is not exercised and the test would prove nothing.
+        assert hasattr(check._get_diagram(), "get_capacity_biaxial")
+
+        # Load chosen to crack this heavily-reinforced asymmetric section so the
+        # biaxial crack-width (and d_override) path is genuinely exercised.
+        kw = dict(My_Ed=80.0, N_Ed=0.0)
+        pc = check.perform_check(suppress_warnings=True, **kw)
+        cd = check.calculate_detailed(suppress_warnings=True, **kw)
+
+        assert cd.w_k is not None and cd.w_k > 0.0
+        assert pc.details["w_k"] == pytest.approx(cd.w_k, rel=1e-6)
+
+
+class TestBiaxialNetCompression:
+    """The net-compression short-circuit must use the minimum fibre strain over the
+    section for biaxial states, not just the vertical faces — otherwise a skewed-NA
+    state with both faces in compression but a corner in tension is wrongly reported
+    as uncracked (non-conservative)."""
+
+    def test_corner_tension_is_not_net_compression(self, concrete_c30):
+        from materials.reinforced_concrete.analysis.strain_state import StrainState
+
+        check = CrackingCheck(section=_make_section(width=300.0, height=500.0), concrete=concrete_c30)
+        # Uniform vertical strain (both faces in compression, +100e-6) but a horizontal
+        # gradient (plane_a < 0) drives the right edge (x_rel = +150 mm) into tension:
+        # strain(150, y) = -1e-6*150 + 100e-6 = -50e-6 < 0.
+        ss = StrainState(
+            eps_top=100e-6, eps_bottom=100e-6,
+            plane_a=-1e-6, plane_b=0.0, plane_c=100e-6, is_biaxial=True,
+        )
+        # Vertical-only logic would call this net compression; the fix must not.
+        assert check._is_net_compression(100e-6, 100e-6, ss) is False
+
+    def test_1d_fallback_unchanged(self, concrete_c30):
+        check = CrackingCheck(section=_make_section(), concrete=concrete_c30)
+        assert check._is_net_compression(100e-6, 100e-6, None) is True
+        assert check._is_net_compression(100e-6, -50e-6, None) is False
