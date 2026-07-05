@@ -4,6 +4,8 @@ Deterministic unit tests for ShearCheck helper logic (solver-independent).
 
 from __future__ import annotations
 
+import sys
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -943,3 +945,45 @@ class TestCheckSingleCaseBranching:
         )
         assert out.details["governing_component"] == "V_Rd_max"
         assert out.message == "Shear capacity exceeded: compression strut limit V_Rd,max reached."
+
+
+class TestPlotWrappers:
+    """Tests for ShearCheck plotting wrapper methods."""
+
+    def test_plot_wrappers_delegate_to_viewer(self, monkeypatch):
+        check = _make_stub_shear_check()
+
+        class _FakeViewer:
+            def __init__(self, c):
+                self.check = c
+
+            def plot_cot_theta_study(self, *, load_case, **kwargs):
+                return ("cot_theta", load_case, kwargs)
+
+            def plot_link_angle_study(self, *, load_case, **kwargs):
+                return ("link_angle", load_case, kwargs)
+
+            def plot_cot_theta_link_angle_heatmap(self, *, load_case, **kwargs):
+                return ("heatmap", load_case, kwargs)
+
+            def plot_axial_cot_theta_contour(self, *, load_case, **kwargs):
+                return ("axial", load_case, kwargs)
+
+        fake_module = types.SimpleNamespace(ShearViewer=_FakeViewer)
+        monkeypatch.setitem(
+            sys.modules,
+            "materials.reinforced_concrete.analysis.shear_viewer",
+            fake_module,
+        )
+
+        load_case = ShearLoadCase(V_Ed=100.0, M_Ed=20.0, N_Ed=30.0)
+
+        out1 = check.plot_cot_theta_study(load_case=load_case, show=False)
+        out2 = check.plot_link_angle_study(load_case=load_case, show=False)
+        out3 = check.plot_cot_theta_link_angle_heatmap(load_case=load_case, show=False)
+        out4 = check.plot_axial_cot_theta_contour(load_case=load_case, N_min=-100.0, N_max=100.0, show=False)
+
+        assert out1[0] == "cot_theta"
+        assert out2[0] == "link_angle"
+        assert out3[0] == "heatmap"
+        assert out4[0] == "axial"

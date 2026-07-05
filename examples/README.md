@@ -29,6 +29,16 @@ Comprehensive tutorial covering all M-N interaction diagram functions:
 - Performance optimization
 - Complex geometries with Shapely
 
+### [shear_viewer_demonstration.ipynb](shear_viewer_demonstration.ipynb)
+Demonstrates the new ShearCheck visualization wrappers:
+
+1. `plot_cot_theta_study`
+2. `plot_link_angle_study`
+3. `plot_cot_theta_link_angle_heatmap`
+4. `plot_axial_cot_theta_contour`
+
+Includes a complete section/material setup and an example load case.
+
 ## Python Scripts
 
 ### Coming Soon
@@ -66,7 +76,7 @@ python example_name.py
 All examples require:
 - Python 3.10+
 - Materials library and dependencies (see `requirements.txt`)
-- Matplotlib for plotting
+- Plotly for interactive plotting
 - Jupyter for notebook examples
 
 ## Learn More

@@ -1424,6 +1424,71 @@ class ShearCheck(BaseCodeCheck):
         )
 
 
+    # ===============================================
+    # Plotting convenience methods
+    # ===============================================
+
+    def plot_cot_theta_study(
+        self,
+        *,
+        load_case: ShearLoadCase,
+        **kwargs,
+    ) -> Any:
+        """
+        Plot cot(theta) sweep with capacities, utilization, and tension-shift effect.
+
+        Convenience wrapper around ``ShearViewer.plot_cot_theta_study``.
+        See that method for full argument documentation.
+        """
+        from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
+        return ShearViewer(self).plot_cot_theta_study(load_case=load_case, **kwargs)
+
+    def plot_link_angle_study(
+        self,
+        *,
+        load_case: ShearLoadCase,
+        **kwargs,
+    ) -> Any:
+        """
+        Plot link-angle sweep with capacities, utilization, and tension-shift effect.
+
+        Convenience wrapper around ``ShearViewer.plot_link_angle_study``.
+        See that method for full argument documentation.
+        """
+        from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
+        return ShearViewer(self).plot_link_angle_study(load_case=load_case, **kwargs)
+
+    def plot_cot_theta_link_angle_heatmap(
+        self,
+        *,
+        load_case: ShearLoadCase,
+        **kwargs,
+    ) -> Any:
+        """
+        Plot cot(theta)-link-angle heatmap for utilization or capacities.
+
+        Convenience wrapper around ``ShearViewer.plot_cot_theta_link_angle_heatmap``.
+        See that method for full argument documentation.
+        """
+        from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
+        return ShearViewer(self).plot_cot_theta_link_angle_heatmap(load_case=load_case, **kwargs)
+
+    def plot_axial_cot_theta_contour(
+        self,
+        *,
+        load_case: ShearLoadCase,
+        **kwargs,
+    ) -> Any:
+        """
+        Plot axial-force vs cot(theta) heatmap for utilization or capacities.
+
+        Convenience wrapper around ``ShearViewer.plot_axial_cot_theta_contour``.
+        See that method for full argument documentation.
+        """
+        from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
+        return ShearViewer(self).plot_axial_cot_theta_contour(load_case=load_case, **kwargs)
+
+
     # ===========================
     # Utility methods
     # ===========================

@@ -1563,6 +1563,7 @@ class CrackingCheck(BaseCodeCheck):
         is_net_tension: bool,
         suppress_warnings: bool = False,
         actual_bar_diameter: Optional[float] = None,
+        cover_override: Optional[float] = None,
     ) -> CrackingResult:
         """
         Calculate crack width for a single face using iterative h_c,ef.
@@ -1728,10 +1729,13 @@ class CrackingCheck(BaseCodeCheck):
         phi_eq = flexure_utils.find_equivalent_diameter(bar_sizes)
 
         # Cover (computed early — needed for A_c,eff)
-        try:
-            cover = self.section.get_concrete_cover(reference=face)
-        except ValueError:
-            cover = mean_cover
+        if cover_override is not None:
+            cover = cover_override
+        else:
+            try:
+                cover = self.section.get_concrete_cover(reference=face)
+            except ValueError:
+                cover = mean_cover
 
         # Max bar spacing (computed early — needed for A_c,eff)
         bar_spacing = self._compute_max_bar_spacing(
@@ -1825,6 +1829,7 @@ class CrackingCheck(BaseCodeCheck):
         force_cracked: bool = False,
         suppress_warnings: bool = False,
         actual_bar_diameter: Optional[float] = None,
+        cover_override: Optional[float] = None,
         **kwargs,
     ) -> CheckResult:
         """
@@ -1843,6 +1848,11 @@ class CrackingCheck(BaseCodeCheck):
                 to achieve equivalent area (e.g. rounding a non-integer bar count),
                 supply the real bar diameter here. The φ-dependent term of s_r,max
                 is scaled by φ_actual / φ_model.
+            cover_override: If provided, use this value (mm) as the concrete cover
+                to tension reinforcement instead of auto-computing it from the
+                section geometry. Useful for asymmetric sections, minor-axis
+                bending, or rotated neutral axes where the automatic cover
+                detection may not apply.
 
         Returns:
             CheckResult with crack width utilization
@@ -1855,6 +1865,7 @@ class CrackingCheck(BaseCodeCheck):
             force_cracked=force_cracked,
             suppress_warnings=suppress_warnings,
             actual_bar_diameter=actual_bar_diameter,
+            cover_override=cover_override,
         )
 
 
@@ -1868,6 +1879,7 @@ class CrackingCheck(BaseCodeCheck):
         force_cracked: bool = False,
         suppress_warnings: bool = False,
         actual_bar_diameter: Optional[float] = None,
+        cover_override: Optional[float] = None,
     ) -> CheckResult:
         """Internal implementation of crack check."""
         if (
@@ -2068,6 +2080,7 @@ class CrackingCheck(BaseCodeCheck):
                     x=x, is_net_tension=True,
                     suppress_warnings=suppress_warnings,
                     actual_bar_diameter=actual_bar_diameter,
+                    cover_override=cover_override,
                 )
                 if best_cr is None or cr_candidate.w_k > best_cr.w_k:
                     best_cr = cr_candidate
@@ -2084,6 +2097,7 @@ class CrackingCheck(BaseCodeCheck):
                 x=x, is_net_tension=False,
                 suppress_warnings=suppress_warnings,
                 actual_bar_diameter=actual_bar_diameter,
+                cover_override=cover_override,
             )
             cr.governing_face = tension_face
 
@@ -2191,6 +2205,7 @@ class CrackingCheck(BaseCodeCheck):
         force_cracked: bool = False,
         suppress_warnings: bool = False,
         actual_bar_diameter: Optional[float] = None,
+        cover_override: Optional[float] = None,
     ) -> CrackingResult:
         """
         Calculate detailed cracking results without creating CheckResult.
@@ -2206,6 +2221,8 @@ class CrackingCheck(BaseCodeCheck):
             suppress_warnings: If True, suppresses warnings
             actual_bar_diameter: If provided, corrects s_r,max for equivalent-area
                 bar substitution. See ``perform_check`` for details.
+            cover_override: If provided, use this value (mm) as the concrete cover
+                instead of auto-computing from section geometry.
 
         Returns:
             CrackingResult dataclass with all intermediate values
@@ -2301,6 +2318,7 @@ class CrackingCheck(BaseCodeCheck):
                     x=x, is_net_tension=True,
                     suppress_warnings=suppress_warnings,
                     actual_bar_diameter=actual_bar_diameter,
+                    cover_override=cover_override,
                 )
                 if best_result is None or result_candidate.w_k > best_result.w_k:
                     best_result = result_candidate
@@ -2317,6 +2335,7 @@ class CrackingCheck(BaseCodeCheck):
                 x=x, is_net_tension=False,
                 suppress_warnings=suppress_warnings,
                 actual_bar_diameter=actual_bar_diameter,
+                cover_override=cover_override,
             )
             result.governing_face = tension_face
 
