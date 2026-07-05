@@ -7,12 +7,11 @@ iterated result silently reverted to the NDP default cot(theta) cap (e.g. 2.5)
 instead of a supplied cap (e.g. 1.25 for the UK NA with tension).
 """
 
-import pytest
 
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.geometry import (
-    create_rectangular_section,
     create_linear_rebar_layer,
+    create_rectangular_section,
 )
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
 

@@ -14,8 +14,8 @@ from shapely.geometry import Polygon
 import materials.reinforced_concrete.code_checks.ec2_2004.shear_check as sc_mod
 from materials.reinforced_concrete.code_checks.base_check import CheckResult, CheckStatus
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import (
-    ShearCheck,
     LoadCase,
+    ShearCheck,
 )
 from materials.reinforced_concrete.constitutive import ConcreteModelType
 
@@ -310,7 +310,8 @@ class TestPropertiesAndDepths:
     def test_find_effective_depth_fallback_and_warning_branches(self):
         """Test find effective depth fallback and warning branches."""
         check = _make_stub_shear_check()
-        _bbox = lambda: (0.0, 0.0, 300.0, 500.0)  # h=500, 0.9h=450
+        def _bbox():
+            return (0.0, 0.0, 300.0, 500.0)  # h=500, 0.9h=450
 
         # Neither face has rebar → with ratio_of_h policy, still returns 0.9h (no error).
         object.__setattr__(

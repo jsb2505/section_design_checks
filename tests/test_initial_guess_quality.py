@@ -7,7 +7,7 @@ quadrant that are reasonably close to the final solution.
 
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
-from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
+from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 

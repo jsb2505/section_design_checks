@@ -4,16 +4,18 @@ Tests for BendingCheck with simplified tension shift rule implementation.
 The tension shift rule is now automatically applied when M_cap is provided.
 """
 
-import pytest
-import numpy as np
 import warnings
+
+import numpy as np
+import pytest
+
+from materials.reinforced_concrete.code_checks.base_check import CheckStatus
+from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
 from materials.reinforced_concrete.geometry import (
-    create_rectangular_section,
     create_linear_rebar_layer,
+    create_rectangular_section,
 )
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
-from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
-from materials.reinforced_concrete.code_checks.base_check import CheckStatus
 from materials.reinforced_concrete.ndp import CountryCode, get_ndp_context, set_ndp_context
 
 

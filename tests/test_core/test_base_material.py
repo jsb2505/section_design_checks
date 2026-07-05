@@ -2,6 +2,7 @@
 
 import pytest
 from pydantic import ValidationError
+
 from materials.core.base_material import BaseMaterial
 
 
@@ -36,7 +37,7 @@ class TestBaseMaterial:
                 density=2400.0,
                 elastic_modulus=30000.0,
             )
-    
+
     def test_material_name_missing(self):
         """Missing required field should raise a clear validation error."""
         with pytest.raises(ValidationError, match="Field required"):

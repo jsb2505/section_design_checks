@@ -4,9 +4,9 @@ Targeted unit tests for biaxial interaction helper branches.
 
 from __future__ import annotations
 
+import builtins
 import sys
 import types
-import builtins
 from pathlib import Path
 from types import SimpleNamespace
 

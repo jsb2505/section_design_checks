@@ -10,11 +10,11 @@ Based on code review suggestions (Review #4).
 """
 
 import pytest
-from materials.reinforced_concrete.geometry import create_rectangular_section
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
-from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry import RebarGroup
+from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 
 def create_test_section():
@@ -309,7 +309,7 @@ def test_inside_outside_consistency():
     print(f"Inside point: M={M_inside}, N={N_inside}")
     print(f"  is_inside flag: {is_inside_flag}")
     print(f"  utilization: {util_inside:.4f}")
-    assert is_inside_flag == True, "Inside point should have is_inside=True"
+    assert is_inside_flag, "Inside point should have is_inside=True"
     assert util_inside < 1.0, f"Inside point should have util < 1.0, got {util_inside:.4f}"
     print("  [OK] Correctly identified as inside (util < 1.0)")
 
@@ -323,7 +323,7 @@ def test_inside_outside_consistency():
     print(f"\nOutside point: M={M_outside}, N={N_outside}")
     print(f"  is_inside flag: {is_outside_flag}")
     print(f"  utilization: {util_outside:.4f}")
-    assert is_outside_flag == False, "Outside point should have is_inside=False"
+    assert not is_outside_flag, "Outside point should have is_inside=False"
     assert util_outside > 1.0, f"Outside point should have util > 1.0, got {util_outside:.4f}"
     print("  [OK] Correctly identified as outside (util > 1.0)")
 

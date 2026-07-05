@@ -2,15 +2,17 @@
 Tests for reinforced_concrete.materials.rebar module.
 """
 
-import pytest
 import math
 import warnings
+
+import pytest
 from pydantic import ValidationError
+
+from materials.core.units import LENGTH_TO_MM, LengthUnit
 from materials.reinforced_concrete.materials import (
     Rebar,
     ShearRebar,
 )
-from materials.core.units import LENGTH_TO_MM, LengthUnit
 
 
 class TestRebar:

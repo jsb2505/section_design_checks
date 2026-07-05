@@ -10,24 +10,22 @@ These tests verify:
 
 from __future__ import annotations
 
-
 import pytest
 
 from materials.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialMNInteractionSurface,
     create_biaxial_interaction_surface,
 )
-from materials.reinforced_concrete.constitutive.concrete_stress_strain import ConcreteModelType
 from materials.reinforced_concrete.analysis.free_na_adapter import FreeNADiagramAdapter
 from materials.reinforced_concrete.analysis.interaction_diagram import (
     create_interaction_diagram,
 )
+from materials.reinforced_concrete.constitutive.concrete_stress_strain import ConcreteModelType
 from materials.reinforced_concrete.geometry import (
-    create_rectangular_section,
     create_linear_rebar_layer,
+    create_rectangular_section,
 )
 from materials.reinforced_concrete.materials import Rebar
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

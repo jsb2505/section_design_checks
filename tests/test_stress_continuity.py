@@ -6,12 +6,11 @@ This would break Newton convergence badly.
 """
 
 import numpy as np
-from materials.reinforced_concrete.materials import ConcreteMaterial
-from materials.reinforced_concrete.geometry import create_rectangular_section
-from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry import RebarGroup
-from materials.reinforced_concrete.materials import Rebar
+from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 
 def test_stress_continuity_at_cracking():

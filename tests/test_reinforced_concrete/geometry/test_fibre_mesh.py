@@ -4,9 +4,10 @@ Tests for reinforced_concrete.geometry.fibre_mesh module.
 
 from types import SimpleNamespace
 
-import pytest
 import numpy as np
+import pytest
 from shapely.geometry import Point
+
 from materials.reinforced_concrete.geometry import FibreMesh
 from materials.reinforced_concrete.geometry.fibre_mesh import Fibre
 

@@ -13,10 +13,10 @@ test the full stack with real objects.
 
 import math
 from types import SimpleNamespace
+
 import pytest
 
 from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
-
 
 # -------------------------
 # Test doubles / stubs
@@ -78,6 +78,7 @@ class DummyDiagram:
     ):
         """Stub for MNInteractionDiagram.apply_tension_shift."""
         from math import copysign
+
         from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
 
         self.apply_tension_shift_calls += 1

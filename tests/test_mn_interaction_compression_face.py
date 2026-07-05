@@ -7,10 +7,10 @@ Key scenario: Large axial compression + small hogging moment
 """
 
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
 from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
-from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
-from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
 
 
 def test_mn_interaction_overrides_moment_sign():
@@ -144,7 +144,6 @@ def test_approximate_vs_simple_sign_check():
         actual_d = result.details['d']
         # For symmetric section: d=450 means measuring from top (top compressed)
         # This is a simplification - in real case we'd check which face was used
-        actual_face = "top (from solver)"  # Both cases give d=450 for symmetric section
 
         print(f"\n{desc}")
         print(f"  M={M:>6.1f} kN.m, N={N:>4.0f} kN")

@@ -846,9 +846,9 @@ class CircularShearViewer:
 
                 y_eval = float(np.clip(float(y_val), y_lower, y_upper))
                 if moment_on_y_axis:
-                    sweep_case = LoadCase(V_Ed=case.V_Ed, M_Ed=y_eval, N_Ed=fixed_force)
+                    sweep_case = LoadCase(Vy_Ed=case.V_Ed, My_Ed=y_eval, N_Ed=fixed_force)
                 else:
-                    sweep_case = LoadCase(V_Ed=case.V_Ed, M_Ed=fixed_force, N_Ed=y_eval)
+                    sweep_case = LoadCase(Vy_Ed=case.V_Ed, My_Ed=fixed_force, N_Ed=y_eval)
 
                 context = self._build_context(
                     load_case=sweep_case,
@@ -1214,7 +1214,7 @@ class CircularShearViewer:
                 left_bound = float(plot_domain.center_left[i_n])
                 right_bound = float(plot_domain.center_right[i_n])
                 m_eval = float(np.clip(float(m_ed), left_bound, right_bound))
-                case = LoadCase(V_Ed=V_Ed, M_Ed=m_eval, N_Ed=float(n_ed))
+                case = LoadCase(Vy_Ed=V_Ed, My_Ed=m_eval, N_Ed=float(n_ed))
                 context = self._build_context(
                     load_case=case,
                     use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
@@ -1229,7 +1229,7 @@ class CircularShearViewer:
             cot_default_max = max(cot_max_candidates)
         else:
             fallback_context = self._build_context(
-                load_case=LoadCase(V_Ed=V_Ed, M_Ed=0.0, N_Ed=0.0),
+                load_case=LoadCase(Vy_Ed=V_Ed, My_Ed=0.0, N_Ed=0.0),
                 use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
                 diagram=plot_diagram,
             )

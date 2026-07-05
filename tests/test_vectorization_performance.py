@@ -11,12 +11,12 @@ Run with: ``pytest -m slow tests/test_vectorization_performance.py``
 import numpy as np
 import pytest
 
-from materials.reinforced_concrete.geometry import (
-    create_rectangular_section,
-    create_linear_rebar_layer,
-)
 from materials.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialMNInteractionSurface,
+)
+from materials.reinforced_concrete.geometry import (
+    create_linear_rebar_layer,
+    create_rectangular_section,
 )
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 

@@ -4,10 +4,11 @@ Tests for reinforced_concrete.code_checks.base_check module.
 
 import pytest
 from pydantic import ValidationError
+
 from materials.reinforced_concrete.code_checks.base_check import (
-    CheckStatus,
-    CheckResult,
     BaseCodeCheck,
+    CheckResult,
+    CheckStatus,
 )
 
 
@@ -200,7 +201,7 @@ class TestBaseCodeCheck:
 
     def test_create_result_custom_threshold(self):
         """Test custom warning threshold."""
-        check = self.ConcreteCheck()
+        self.ConcreteCheck()
 
         class CustomCheck(BaseCodeCheck):
             def perform_check(self) -> CheckResult:
@@ -221,7 +222,7 @@ class TestBaseCodeCheck:
 
     def test_create_result_custom_message(self):
         """Test custom message."""
-        check = self.ConcreteCheck()
+        self.ConcreteCheck()
 
         class MessageCheck(BaseCodeCheck):
             def perform_check(self) -> CheckResult:
@@ -241,7 +242,7 @@ class TestBaseCodeCheck:
 
     def test_create_result_with_details(self):
         """Test including additional details."""
-        check = self.ConcreteCheck()
+        self.ConcreteCheck()
 
         class DetailCheck(BaseCodeCheck):
             def perform_check(self) -> CheckResult:

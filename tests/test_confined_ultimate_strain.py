@@ -14,13 +14,13 @@ changes confined capacities — review against a validated Mander example before
 
 import pytest
 
+from materials.reinforced_concrete.analysis.biaxial_interaction import BiaxialMNInteractionSurface
+from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.geometry import (
-    create_rectangular_section,
     create_linear_rebar_layer,
+    create_rectangular_section,
 )
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
-from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
-from materials.reinforced_concrete.analysis.biaxial_interaction import BiaxialMNInteractionSurface
 
 
 def _section():

@@ -6,12 +6,12 @@ by using a section with extreme loading conditions.
 """
 
 import warnings
-from materials.reinforced_concrete.geometry import create_rectangular_section
-from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
-from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry import RebarGroup
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
 
 
 def test_lever_arm_clamping_warning():
