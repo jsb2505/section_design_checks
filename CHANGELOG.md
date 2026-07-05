@@ -5,6 +5,13 @@ All notable changes to this project are recorded here. The project is in early
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.1.0] — 2026-07-05
+
+First public release, published to PyPI as
+[`section-design-checks`](https://pypi.org/project/section-design-checks/).
+
 ### Changed — BREAKING: import package renamed `materials` → `section_design_checks`
 
 In preparation for a PyPI listing the distribution is now named
