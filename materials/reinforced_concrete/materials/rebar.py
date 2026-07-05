@@ -89,6 +89,11 @@ class ShearRebar(Rebar):
         angle_rad = radians(self.angle)
         return self.total_area_per_spacing / (self.spacing * sin(angle_rad))
 
+
+    #------------------------
+    # Utility Helper Methods
+    #------------------------
+
     def max_link_spacing(self, effective_depth: float) -> float:
         """EC2 §9.2.2(6): s_l,max = 0.75 d (1 + cot α)."""
         if effective_depth <= 0:

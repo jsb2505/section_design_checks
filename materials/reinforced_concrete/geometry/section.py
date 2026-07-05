@@ -11,18 +11,20 @@ Supports:
 
 from __future__ import annotations
 
+from functools import cached_property
 from typing import TYPE_CHECKING, List, Tuple, Optional, Literal, Any
 
 if TYPE_CHECKING:
-    import plotly.graph_objects as go
     from materials.reinforced_concrete.materials.concrete import ConcreteMaterial
+    from .reinforcement_reconcile import ReinforcementUpdateReport
 
 import numpy as np
 from shapely.geometry import Polygon, Point as ShapelyPoint
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, PrivateAttr
 
 from materials.core.geometry import BaseGeometry, Point2D
 from materials.reinforced_concrete.materials.rebar import Rebar
+from .reinforcement_reconcile import ReinforcementInvalidPolicy
 
 
 # Small tolerance used for geometric checks (mm)
@@ -88,9 +90,13 @@ def _polygon_integrals_about_origin(poly: Polygon) -> Tuple[float, float, float,
 
     Strategy:
         - Compute ring integrals for exterior ring.
-        - Add ring integrals for each interior ring (holes). Orientation is handled
-          via signed area in the formulas (holes should contribute negative area).
-        - Combine to obtain polygon centroid and origin-referenced inertias.
+        - Subtract ring integrals for each interior ring (holes).
+
+    Note:
+        Shapely normalizes all rings to CCW winding, so the shoelace formula
+        produces positive values for both exterior and interior rings. We must
+        explicitly subtract interior ring contributions to get correct results
+        for hollow sections.
     """
     # Exterior
     ext = np.asarray(poly.exterior.coords, dtype=float)
@@ -103,17 +109,18 @@ def _polygon_integrals_about_origin(poly: Polygon) -> Tuple[float, float, float,
     Iyy0 = Iyy_e
     Ixy0 = Ixy_e
 
-    # Interiors (holes)
+    # Interiors (holes) - subtract their contributions
     for ring in poly.interiors:
         coords = np.asarray(ring.coords, dtype=float)
         A_i, Cx_i, Cy_i, Ixx_i, Iyy_i, Ixy_i = _ring_integrals_about_origin(coords)
 
-        A_total += A_i
-        Cx_num += Cx_i * A_i
-        Cy_num += Cy_i * A_i
-        Ixx0 += Ixx_i
-        Iyy0 += Iyy_i
-        Ixy0 += Ixy_i
+        # Subtract hole contributions (Shapely stores holes as CCW, same as exterior)
+        A_total -= abs(A_i)
+        Cx_num -= Cx_i * abs(A_i)
+        Cy_num -= Cy_i * abs(A_i)
+        Ixx0 -= abs(Ixx_i)
+        Iyy0 -= abs(Iyy_i)
+        Ixy0 -= Ixy_i  # Product of inertia keeps sign
 
     if abs(A_total) < 1e-18:
         return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -131,10 +138,8 @@ class RebarGroup(BaseModel):
     """
 
     model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        validate_assignment=True,
+        frozen=True,  # Immutable and hashable
         extra="forbid",
-        frozen=False,
     )
 
     rebar: Rebar = Field(
@@ -142,9 +147,9 @@ class RebarGroup(BaseModel):
         description="Rebar specification (diameter and material)"
     )
 
-    positions: List[Point2D] = Field(
+    positions: tuple[Point2D, ...] = Field(
         ...,
-        description="List of (x, y) coordinates for bar centres (mm)",
+        description="Tuple of (x, y) coordinates for bar centres (mm)",
         min_length=1,
     )
 
@@ -182,13 +187,13 @@ class RebarGroup(BaseModel):
         return self
 
 
-    @property
+    @cached_property
     def n_bars(self) -> int:
         """Number of bars in this group."""
         return len(self.positions)
 
 
-    @property
+    @cached_property
     def total_area(self) -> float:
         """
         Total steel area for this group.
@@ -197,9 +202,18 @@ class RebarGroup(BaseModel):
             Total area in mm²
         """
         return self.n_bars * self.rebar.area
+    
+    @cached_property
+    def centroid(self) -> Point2D:
+        """
+        Centroid of bar group.
 
+        Returns:
+            Centroid coordinates
+        """
+        return self._get_centroid()
 
-    def get_centroid(self) -> Point2D:
+    def _get_centroid(self) -> Point2D:
         """
         Calculate centroid of bar group.
 
@@ -225,18 +239,66 @@ class RCSection(BaseGeometry):
     Coordinate system convention:
     - Origin is at the *centre* of the section by default for helper constructors.
     """
-
+    _suspend_outline_reconcile: bool = PrivateAttr(default=False)
+    
     model_config = ConfigDict(
-        arbitrary_types_allowed=True,
+        arbitrary_types_allowed=False,
         validate_assignment=True,
         extra="forbid",
         frozen=False,
     )
 
-    outline: Polygon = Field(
-        ...,
-        description="Section outline as Shapely Polygon (coordinates in mm)"
+    reinforcement_policy: ReinforcementInvalidPolicy = Field(
+        default=ReinforcementInvalidPolicy.ERROR,
+        description=(
+            "Policy applied automatically when outline coords change. "
+            "error: reject change if any rebar becomes invalid; "
+            "drop_bars: remove invalid bars; "
+            "drop_groups: remove any group with an invalid bar; "
+            "allow_invalid: allow invalid reinforcement."
+        ),
     )
+
+    outline_coords: Tuple[Point2D, ...] = Field(
+        ...,
+        description="Exterior ring coordinates (mm). First/last may be same; will be closed.",
+        min_length=3,
+    )
+
+    voids_coords: Tuple[Tuple[Point2D, ...], ...] = Field(
+        default_factory=tuple,
+        description="Interior rings (holes), each a tuple of coordinates (mm).",
+    )
+
+    @cached_property
+    def outline(self) -> Polygon:
+        """
+        Public Shapely polygon for downstream geometry operations (cached).
+
+        Recomputed only when the cache is invalidated (e.g. after reassigning
+        outline_coords / voids_coords).
+        """
+        return self._build_outline_polygon()
+
+
+    def _invalidate_outline_cache(self) -> None:
+        """Clear cached Shapely outline so it rebuilds next time it's accessed."""
+        self.__dict__.pop("outline", None)  # cached_property stores value on the instance
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """
+        Override to invalidate outline cache when coords change.
+
+        Note: Reconciliation is handled by model_validator (which Pydantic calls
+        after field assignment when validate_assignment=True). For atomic updates
+        with rollback capability, use update_outline() instead.
+        """
+        super().__setattr__(name, value)
+
+        # Invalidate cached outline when geometry coords change
+        if name in {"outline_coords", "voids_coords"}:
+            self._invalidate_outline_cache()
+
 
     rebar_groups: List[RebarGroup] = Field(
         default_factory=list,
@@ -257,29 +319,139 @@ class RCSection(BaseGeometry):
     @model_validator(mode="after")
     def validate_outline_and_rebars(self) -> "RCSection":
         """
-        Validate geometry consistency after model creation.
+        Validate polygon geometry and reconcile reinforcement.
 
-        - outline must be a valid, non-empty polygon with positive area
-        - all rebars (as discs) must lie fully within outline (respects voids)
+        This runs:
+        - During __init__
+        - After any field assignment (when validate_assignment=True)
+
+        For atomic updates with rollback, use update_outline() which sets
+        _suspend_outline_reconcile=True to bypass reconciliation here.
         """
-        if self.outline.is_empty:
+        # Skip if suspended (atomic updates via update_outline handle reconciliation themselves)
+        if getattr(self, "_suspend_outline_reconcile", False):
+            return self
+
+        # Rebuild and validate the polygon
+        self._invalidate_outline_cache()
+        poly = self.outline
+
+        if poly.is_empty:
             raise ValueError("Section outline is empty")
-        if not self.outline.is_valid:
+        if not poly.is_valid:
             raise ValueError("Section outline is not a valid polygon")
-        if self.outline.area <= 0:
+        if poly.area <= 0:
             raise ValueError("Section outline has zero or negative area")
 
-        for group in self.rebar_groups:
-            r = float(group.rebar.diameter) / 2.0
-            for pos in group.positions:
-                disc = ShapelyPoint(pos.x, pos.y).buffer(r)
-                if not self.outline.covers(disc):
-                    raise ValueError(
-                        f"Rebar (ϕ{group.rebar.diameter:g}) at ({pos.x:.1f}, {pos.y:.1f}) "
-                        "is not fully within the section outline (may cross boundary or enter a void)."
-                    )
+        # Reconcile reinforcement according to policy
+        if self.rebar_groups:
+            self._auto_reconcile_reinforcement()
+
         return self
 
+
+    # --- RCSection: add a public atomic outline update method ---
+    def update_outline(
+        self,
+        *,
+        outline_coords: Tuple[Point2D, ...],
+        voids_coords: Tuple[Tuple[Point2D, ...], ...] | None = None,
+        reinforcement_policy: ReinforcementInvalidPolicy | None = None,
+    ) -> "ReinforcementUpdateReport":
+        """
+        Atomically update outline/voids, rebuild outline, then reconcile reinforcement once.
+
+        If policy is "error" and reinforcement becomes invalid, this rolls back to the
+        previous coords and re-raises.
+        """
+        old_outline_coords = self.outline_coords
+        old_voids_coords = self.voids_coords
+
+        if voids_coords is None:
+            voids_coords = old_voids_coords
+
+        # allow temporary override, else use instance policy
+        old_policy = self.reinforcement_policy
+        override = reinforcement_policy is not None
+
+        self._suspend_outline_reconcile = True
+        try:
+            if override:
+                # Use super().__setattr__ to avoid triggering reconcile
+                super().__setattr__("reinforcement_policy", reinforcement_policy)
+
+            # Use super().__setattr__ to bypass __setattr__ reconcile logic
+            super().__setattr__("outline_coords", outline_coords)
+            super().__setattr__("voids_coords", voids_coords)
+
+            self._invalidate_outline_cache()
+            _ = self.outline  # force build / validate polygon
+
+            return self._auto_reconcile_reinforcement()
+
+        except Exception:
+            # rollback everything using super().__setattr__ to avoid triggering reconcile
+            super().__setattr__("outline_coords", old_outline_coords)
+            super().__setattr__("voids_coords", old_voids_coords)
+            if override:
+                # Restore policy while still suspended
+                super().__setattr__("reinforcement_policy", old_policy)
+            self._invalidate_outline_cache()
+            _ = self.outline
+            raise
+
+        finally:
+            # Restore policy while still suspended (before turning off suspend)
+            if override:
+                super().__setattr__("reinforcement_policy", old_policy)
+            self._suspend_outline_reconcile = False
+
+
+    # --- RCSection: update _build_outline_polygon to work with tuples + ensure closure ---
+    def _build_outline_polygon(self) -> Polygon:
+        ext = [(float(p.x), float(p.y)) for p in self.outline_coords]
+        if len(ext) < 3:
+            raise ValueError("outline_coords must contain at least 3 points.")
+        if ext[0] != ext[-1]:
+            ext.append(ext[0])
+
+        holes: list[list[tuple[float, float]]] = []
+        for ring in self.voids_coords:
+            if len(ring) < 3:
+                raise ValueError("Each void ring must have at least 3 points.")
+            coords = [(float(p.x), float(p.y)) for p in ring]
+            if coords[0] != coords[-1]:
+                coords.append(coords[0])
+            holes.append(coords)
+
+        return Polygon(ext, holes=holes)
+    
+
+    def _auto_reconcile_reinforcement(self) -> "ReinforcementUpdateReport":
+        """
+        Enforce reinforcement_policy after outline coords changes.
+        Local import avoids circular imports.
+        """
+        from .reinforcement_reconcile import reconcile_after_outline_change
+        return reconcile_after_outline_change(self, policy=self.reinforcement_policy)
+
+    
+    def invalid_rebars(self) -> tuple[list[str], list[tuple[int, int]]]:
+        '''
+        Utility method to check if there are any invalid bars outside the bounds of the section
+
+        Returns: (tuple)
+            details: a list of reports invalid bars as str
+            indices: a list of tuples containing 'group' index and 'bar' index of invalid bars
+        '''
+        from .reinforcement_reconcile import find_invalid_rebars
+        details, indices = find_invalid_rebars(self)
+        return details, indices
+
+
+    #--------------------------
+    # Geometry Utility Methods
+    #--------------------------
 
     def get_area(self) -> float:
         """
@@ -433,7 +605,7 @@ class RCSection(BaseGeometry):
         if E_cm <= 0:
             raise ValueError(f"Concrete modulus E_c must be positive, got {E_cm}")
         if not self.rebar_groups:
-            raise ValueError("Cannot calculate transformed properties: no rebars in section")
+            return self.get_second_moment_area()
 
         # Gross concrete centroid and second moments (assumed about gross centroid axes)
         cx_g, cy_g = self.get_centroid()
@@ -862,7 +1034,7 @@ def create_rectangular_section(
     ]
 
     return RCSection(
-        outline=Polygon(coords),
+        outline_coords=tuple(Point2D(x=x, y=y) for x, y in coords[:-1]),  # open ring; RCSection will close it
         section_name=section_name or f"Rect {width}×{height}",
     )
 
@@ -932,6 +1104,6 @@ def create_circular_section(
     coords.append(coords[0])  # close
 
     return RCSection(
-        outline=Polygon(coords),
+        outline_coords=tuple(Point2D(x=x, y=y) for x, y in coords[:-1]),  # open ring; RCSection will close it
         section_name=section_name or f"Circular Ø{diameter}",
     )

@@ -13,10 +13,16 @@ from .concrete import ConcreteMaterial
 
 
 class CementClass(StrEnum):
-    '''Cement class for strength development rate'''
-    R = "R"  # Rapid (Class R)
-    N = "N"  # Normal (Class N)
-    S = "S"  # Slow (Class S)
+    '''Cement class for strength development rate.
+
+    Attributes:
+        R: = Rapid (Class R)
+        N: = Normal (Class N)
+        S: = Slow (Class S)
+    '''
+    R = "R"
+    N = "N"
+    S = "S"
 
     @property
     def s_coefficient(self) -> float:

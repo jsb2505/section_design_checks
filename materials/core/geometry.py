@@ -16,7 +16,7 @@ class BaseGeometry(BaseModel, ABC):
 
     model_config = ConfigDict(
         validate_assignment=True,
-        arbitrary_types_allowed=True,
+        arbitrary_types_allowed=False,
         extra="forbid",
     )
 
