@@ -1,18 +1,8 @@
-# Core dependencies
-pydantic>=2.0.0
-numpy>=1.24.0
-shapely>=2.0.0
-
-# Optional dependencies for visualization
-matplotlib>=3.7.0
-
-# Development dependencies
-pytest>=7.4.0
-pytest-cov>=4.1.0
-black>=23.0.0
-ruff>=0.1.0
-mypy>=1.5.0
-
-# API dependencies (optional)
-fastapi>=0.104.0
-uvicorn>=0.24.0
+# Dependencies are declared canonically in pyproject.toml ([project.dependencies]
+# and [project.optional-dependencies]). This file installs the package (editable)
+# with the viz, api and dev extras so there is a single source of truth and no
+# duplicated/drifting version pins.
+#
+#   pip install -r requirements.txt
+#
+-e .[viz,api,dev]

@@ -18,7 +18,6 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import (
     LoadCase,
 )
 from materials.reinforced_concrete.constitutive import ConcreteModelType
-from materials.reinforced_concrete.materials import ShearRebar
 
 
 def _make_stub_shear_check() -> ShearCheck:
@@ -748,7 +747,10 @@ class TestCheckSingleCaseBranching:
             ShearCheck,
             "_get_diagram",
             lambda self, ignore_compression_steel=False: SimpleNamespace(
-                find_strains_for_MN=lambda M_Ed, N_Ed: (0.001, -0.001)
+                find_strains_for_MN=lambda M_Ed, N_Ed: (0.001, -0.001),
+                # Provide the strain-state method too: _check_single_case fetches it
+                # best-effort (None is fine here; the depth/lever-arm helpers are mocked).
+                find_strain_state_for_MN=lambda M_Ed, N_Ed: None,
             ),
         )
         monkeypatch.setattr(ShearCheck, "_find_sigma_cp", lambda self, N_Ed: 1.0)

@@ -6,7 +6,7 @@ and just assume top compression, since moment (not axial load) determines the
 compression face.
 """
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
 from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase

@@ -470,11 +470,19 @@ class FreeNADiagramAdapter:
             [A_tr * dcy,     I_xx_g,      I_xy_g    ],
             [A_tr * dcx,     I_xy_g,      I_yy_g    ],
         ])
+        # np.linalg.solve raises only for an EXACTLY singular K; a near-singular K
+        # (degenerate fibre layout) yields garbage silently. Reject it on the
+        # condition number and fall through to the iterative solver.
+        cond = np.linalg.cond(K)
+        if not np.isfinite(cond) or cond > 1e12:
+            return None
         try:
             # Unit conversion: N [kN→N] *1e3, My/Mz [kN·m→N·mm] *1e6
             rhs = np.array([N * 1e3, My * 1e6, Mz * 1e6]) / E_c
             x = np.linalg.solve(K, rhs)
         except np.linalg.LinAlgError:
+            return None
+        if not np.all(np.isfinite(x)):
             return None
 
         eps_0, kappa_y, kappa_z = float(x[0]), float(x[1]), float(x[2])
@@ -496,6 +504,47 @@ class FreeNADiagramAdapter:
     # ----------------------------
     # Inverse solver
     # ----------------------------
+
+    def _pivot_slope_and_y_na(
+        self, na_depth: float, cos_a: float, sin_a: float
+    ) -> Tuple[float, float]:
+        """EC2 pivot-method strain slope and neutral-axis position for a solved
+        (na_depth, angle).
+
+        Single source of truth shared by ``find_strains_for_MN`` and
+        ``find_strain_state_for_MN`` (the two used to carry verbatim copies of this
+        block, which is exactly how their strain reconstructions could drift apart).
+        Returns ``(slope, y_na)`` in the axis perpendicular to the neutral axis
+        (centroidal coordinates). Zones: tension pivot (eps_ud) below the balanced
+        depth, concrete pivot (eps_cu2) up to the full depth, then the over-
+        compression branch (eps_c2 about z_p).
+        """
+        full_x_rel = self._fibre_x - self.section_centroid_x
+        full_y_rel = self._fibre_y - self.section_centroid_y
+        full_dist = full_y_rel * cos_a + full_x_rel * sin_a
+        y_max_perp = float(np.max(full_dist))
+
+        steel_mask = self._fibre_mat == 'steel'
+        rebar_y_min = (
+            float(np.min(full_dist[steel_mask])) if np.any(steel_mask) else float(np.min(full_dist))
+        )
+        d_eff = y_max_perp - rebar_y_min
+        y_na = y_max_perp - na_depth
+
+        eps_cu2 = self._biaxial.concrete.epsilon_cu2
+        eps_c2 = self._biaxial.concrete.epsilon_c2
+        eps_ud = self._biaxial._eps_tension_limit()
+        x_bal = (eps_cu2 / (eps_cu2 + eps_ud)) * d_eff
+        h_perp = y_max_perp - float(np.min(full_dist))
+        z_p = (1.0 - eps_c2 / eps_cu2) * h_perp
+
+        if na_depth <= x_bal:
+            slope = -eps_ud / (rebar_y_min - y_na)
+        elif na_depth <= h_perp:
+            slope = eps_cu2 / na_depth
+        else:
+            slope = eps_c2 / (na_depth - z_p)
+        return float(slope), float(y_na)
 
     def find_strains_for_MN(
         self,
@@ -605,9 +654,6 @@ class FreeNADiagramAdapter:
         cos_a = np.cos(angle_rad)
         sin_a = np.sin(angle_rad)
 
-        # The solved point
-        pt = self._biaxial.calculate_point_pivot(na_depth_sol, angle_sol)
-
         # Compute strains at top and bottom of the vertical centroidal axis
         # Using the same strain computation as calculate_point_pivot
         x_rel = np.array([0.0, 0.0])  # centroidal axis
@@ -617,35 +663,7 @@ class FreeNADiagramAdapter:
 
         dist_perp = y_rel * cos_a + x_rel * sin_a
 
-        # Get extreme coordinates for pivot logic (from the full fibre set)
-        full_x_rel = self._fibre_x - self.section_centroid_x
-        full_y_rel = self._fibre_y - self.section_centroid_y
-        full_dist = full_y_rel * cos_a + full_x_rel * sin_a
-        y_max_perp = float(np.max(full_dist))
-
-        steel_mask = self._fibre_mat == 'steel'
-        if np.any(steel_mask):
-            rebar_y_min = float(np.min(full_dist[steel_mask]))
-        else:
-            rebar_y_min = float(np.min(full_dist))
-
-        d_eff = y_max_perp - rebar_y_min
-        y_na = y_max_perp - na_depth_sol
-
-        eps_cu2 = self._biaxial.concrete.epsilon_cu2
-        eps_c2 = self._biaxial.concrete.epsilon_c2
-        eps_ud = self._biaxial._eps_tension_limit()
-        x_bal = (eps_cu2 / (eps_cu2 + eps_ud)) * d_eff
-        h_perp = y_max_perp - float(np.min(full_dist))
-        z_p = (1.0 - eps_c2 / eps_cu2) * h_perp
-
-        if na_depth_sol <= x_bal:
-            slope = -eps_ud / (rebar_y_min - y_na)
-        elif na_depth_sol <= h_perp:
-            slope = eps_cu2 / na_depth_sol
-        else:
-            slope = eps_c2 / (na_depth_sol - z_p)
-
+        slope, y_na = self._pivot_slope_and_y_na(na_depth_sol, cos_a, sin_a)
         strains_at_centroidal = slope * (dist_perp - y_na)
         eps_top = float(strains_at_centroidal[0])
         eps_bottom = float(strains_at_centroidal[1])
@@ -751,30 +769,8 @@ class FreeNADiagramAdapter:
         cos_a = np.cos(angle_rad)
         sin_a = np.sin(angle_rad)
 
-        # Reconstruct strain plane coefficients
-        full_x_rel = self._fibre_x - self.section_centroid_x
-        full_y_rel = self._fibre_y - self.section_centroid_y
-        full_dist = full_y_rel * cos_a + full_x_rel * sin_a
-        y_max_perp = float(np.max(full_dist))
-
-        steel_mask = self._fibre_mat == 'steel'
-        rebar_y_min = float(np.min(full_dist[steel_mask])) if np.any(steel_mask) else float(np.min(full_dist))
-        d_eff = y_max_perp - rebar_y_min
-        y_na = y_max_perp - na_depth_sol
-
-        eps_cu2 = self._biaxial.concrete.epsilon_cu2
-        eps_c2 = self._biaxial.concrete.epsilon_c2
-        eps_ud = self._biaxial._eps_tension_limit()
-        x_bal = (eps_cu2 / (eps_cu2 + eps_ud)) * d_eff
-        h_perp = y_max_perp - float(np.min(full_dist))
-        z_p = (1.0 - eps_c2 / eps_cu2) * h_perp
-
-        if na_depth_sol <= x_bal:
-            slope = -eps_ud / (rebar_y_min - y_na)
-        elif na_depth_sol <= h_perp:
-            slope = eps_cu2 / na_depth_sol
-        else:
-            slope = eps_c2 / (na_depth_sol - z_p)
+        # Reconstruct strain plane coefficients (shared pivot logic)
+        slope, y_na = self._pivot_slope_and_y_na(na_depth_sol, cos_a, sin_a)
 
         # strain(x, y) = slope * ((y_rel * cos_a + x_rel * sin_a) - y_na)
         #              = slope * cos_a * y_rel + slope * sin_a * x_rel - slope * y_na

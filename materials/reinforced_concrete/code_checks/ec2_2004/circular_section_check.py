@@ -50,6 +50,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     find_cot_theta_for_V_Ed_from_V_Rd_max,
     find_cot_theta_for_V_Ed_from_V_Rd_s,
     find_alpha_cw,
+    find_nu_factor,
     find_nu_1_factor,
     find_nu_1_factor_note_2,
     find_V_Rd_c_cracked,
@@ -1049,6 +1050,7 @@ class CircularSectionCheck(BaseModel):
             )
         else:
             eps_top, eps_bottom = None, None
+            strain_state_local = None
 
         d = self._shear_check.find_effective_depth(
             My_Ed,
@@ -1102,6 +1104,15 @@ class CircularSectionCheck(BaseModel):
             gamma_c=self._concrete_uls.gamma_c,
         )
         V_Rd_c_uncracked = self.calculate_V_Rd_c_uncracked(sigma_cp_capped)
+        # EC2 §6.2.2(6) Eq. 6.5 upper bound: V_Rd,c <= 0.5·b_w·d·ν·f_cd. The
+        # uncracked principal-stress resistance can exceed this crushing limit, so
+        # cap it (calculate_V_Rd_c_uncracked documented this but never applied it).
+        # ν here is the base 0.6·(1 - f_ck/250), not the NA-modified ν₁.
+        _v_rd_c_cap = to_kn(
+            0.5 * b_w * d * find_nu_factor(f_ck=self._concrete_uls.f_ck) * self._f_cd_design,
+            ForceUnit.N,
+        )
+        V_Rd_c_uncracked = min(V_Rd_c_uncracked, _v_rd_c_cap)
         V_Rd_c = V_Rd_c_uncracked if use_uncracked_V_Rd_c else V_Rd_c_cracked
 
         # Strut parameters

@@ -36,7 +36,7 @@ def test_stress_continuity_at_cracking():
     E_cm = concrete.E_cm
     eps_cr = f_ctm / E_cm
 
-    print(f"Material: C30/37")
+    print("Material: C30/37")
     print(f"  f_ctm = {f_ctm:.6f} MPa")
     print(f"  E_cm = {E_cm:.6f} MPa")
     print(f"  eps_cr (computed) = {eps_cr:.10f}")
@@ -83,7 +83,7 @@ def test_stress_continuity_at_cracking():
     assert jump_left < 1e-5, f"Stress jump on left side: {jump_left} MPa"
     assert jump_right < 1e-5, f"Stress jump on right side: {jump_right} MPa"
     assert abs(actual_stress_at_crack - expected_stress_at_crack) < 1e-5, \
-        f"Stress at cracking doesn't match -f_ctm"
+        "Stress at cracking doesn't match -f_ctm"
 
     print("[OK] Stress is continuous at cracking point")
     print("     eps_cr is correctly defined as f_ctm/E_cm")
@@ -141,11 +141,11 @@ def test_tangent_discontinuity_at_cracking():
 
     # Check which side the boundary value matches
     if abs(E_t[1] - E_t_pre) < abs(E_t[1] - E_t_post):
-        print(f"[INFO] Boundary returns PRE-crack tangent (E_cm)")
-        print(f"       This is the '<=' branch in the code")
+        print("[INFO] Boundary returns PRE-crack tangent (E_cm)")
+        print("       This is the '<=' branch in the code")
     else:
-        print(f"[INFO] Boundary returns POST-crack tangent")
-        print(f"       This is the '>' branch in the code")
+        print("[INFO] Boundary returns POST-crack tangent")
+        print("       This is the '>' branch in the code")
 
     print("\n[OK] Tangent modulus correctly shows discontinuity at cracking")
     print("     This is mathematically correct (kink in stress-strain curve)")

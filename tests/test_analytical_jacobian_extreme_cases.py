@@ -219,7 +219,7 @@ class TestAnalyticalJacobianVsNumerical:
 
         np.testing.assert_allclose(
             J_analytical, J_numerical, rtol=0.02, atol=atol,
-            err_msg=f"Jacobian mismatch at extreme compression"
+            err_msg="Jacobian mismatch at extreme compression"
         )
 
     def test_extreme_tension_matches_numerical(self, test_diagram):
@@ -256,7 +256,7 @@ class TestAnalyticalJacobianVsNumerical:
 
         np.testing.assert_allclose(
             J_analytical, J_numerical, rtol=0.02, atol=atol,
-            err_msg=f"Jacobian mismatch at extreme tension"
+            err_msg="Jacobian mismatch at extreme tension"
         )
 
 

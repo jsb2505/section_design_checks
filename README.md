@@ -57,7 +57,7 @@ pip install -e .
 ### Defining Materials
 
 ```python
-from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 # Create concrete material
 concrete = ConcreteMaterial(
@@ -83,11 +83,11 @@ print(bar.f_yd)  # 434.8 MPa
 ### Creating RC Sections
 
 ```python
-from section_design_checks.reinforced_concrete.geometry import (
+from materials.reinforced_concrete.geometry import (
     create_rectangular_section,
     create_linear_rebar_layer,
 )
-from section_design_checks.core.geometry import Point2D
+from materials.core.geometry import Point2D
 
 # Create 300×500 mm beam section
 section = create_rectangular_section(
@@ -117,7 +117,7 @@ print(f"Reinforcement ratio: {section.reinforcement_ratio:.3f}")
 ### Stress-Strain Models
 
 ```python
-from section_design_checks.reinforced_concrete.constitutive import (
+from materials.reinforced_concrete.constitutive import (
     create_concrete_stress_strain,
     create_steel_stress_strain,
 )
@@ -146,7 +146,7 @@ print(f"Steel stress at ε=0.01: {stress:.1f} MPa")
 ### M-N Interaction Diagrams (Uniaxial Bending)
 
 ```python
-from section_design_checks.reinforced_concrete.analysis import create_interaction_diagram
+from materials.reinforced_concrete.analysis import create_interaction_diagram
 
 # Create M-N interaction diagram
 diagram = create_interaction_diagram(
@@ -180,7 +180,7 @@ print(f"M_Rd at N=1000 kN: ±{M_Rd_pos:.1f} kN·m")
 ### Biaxial M-M-N Interaction Surfaces
 
 ```python
-from section_design_checks.reinforced_concrete.analysis.biaxial_interaction import (
+from materials.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialMNInteractionSurface
 )
 
@@ -231,10 +231,10 @@ surface.plot(
 ### Fiber Mesh for Custom Analysis
 
 ```python
-from section_design_checks.reinforced_concrete.geometry import FiberMesh
+from materials.reinforced_concrete.geometry import FibreMesh
 
 # Generate fiber mesh for custom strain compatibility analysis
-mesh = FiberMesh(
+mesh = FibreMesh(
     section=section,
     n_fibers_width=20,
     n_fibers_height=30,
@@ -242,7 +242,7 @@ mesh = FiberMesh(
 )
 
 print(mesh)
-# FiberMesh(concrete=585, steel=3, total=588)
+# FibreMesh(concrete=585, steel=3, total=588)
 
 # Get fiber data as numpy arrays
 x, y, area, material_type, material_index = mesh.get_fiber_arrays()
@@ -252,7 +252,7 @@ x, y, area, material_type, material_index = mesh.get_fiber_arrays()
 
 ```python
 from shapely.geometry import Polygon
-from section_design_checks.reinforced_concrete.geometry import RCSection, create_circular_perimeter_rebars
+from materials.reinforced_concrete.geometry import RCSection, create_circular_perimeter_rebars
 
 # T-beam section using custom polygon
 t_beam_coords = [
@@ -272,7 +272,7 @@ t_beam = RCSection(
 )
 
 # Circular column with perimeter reinforcement
-from section_design_checks.reinforced_concrete.geometry import create_circular_section
+from materials.reinforced_concrete.geometry import create_circular_section
 
 column = create_circular_section(diameter=400, section_name="Column C1")
 
@@ -350,8 +350,8 @@ Complex 2D sections handled with industry-standard Shapely library:
 ```python
 # Pseudocode for FEA integration
 import json
-from section_design_checks.reinforced_concrete.geometry import create_rectangular_section
-from section_design_checks.reinforced_concrete.code_checks.ec2 import BendingCheck
+from materials.reinforced_concrete.geometry import create_rectangular_section
+from materials.reinforced_concrete.code_checks.ec2 import BendingCheck
 
 # 1. Load FEA results (JSON from post-processing)
 with open("fea_results.json") as f:

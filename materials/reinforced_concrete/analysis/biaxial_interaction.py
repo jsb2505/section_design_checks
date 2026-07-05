@@ -120,6 +120,7 @@ class BiaxialMNInteractionSurface:
         confined_concrete: bool = False,
         confinement_rho_s: Optional[float] = None,
         confinement_f_yh: Optional[float] = None,
+        confinement_eps_su: float = 0.10,
         ignore_compression_steel: bool = False,
         elastic_modulus: Optional[float] = None,
         include_tension: bool = False,
@@ -159,6 +160,7 @@ class BiaxialMNInteractionSurface:
         self.ignore_compression_steel = ignore_compression_steel
         self.confinement_rho_s = confinement_rho_s
         self.confinement_f_yh = confinement_f_yh
+        self.confinement_eps_su = confinement_eps_su
         self.elastic_modulus = elastic_modulus
         self.include_tension = include_tension
         self.crack_to_neutral_axis_on_first_tension_failure = crack_to_neutral_axis_on_first_tension_failure
@@ -207,6 +209,11 @@ class BiaxialMNInteractionSurface:
 
             if self.confinement_f_yh <= 0:
                 raise ValueError(f"confinement_f_yh must be > 0, got {self.confinement_f_yh}")
+
+            if not (0.0 < self.confinement_eps_su <= 0.20):
+                raise ValueError(
+                    f"confinement_eps_su must be in (0, 0.20], got {self.confinement_eps_su}"
+                )
 
         # Generate fibre mesh
         self.mesh = FibreMesh(
@@ -266,6 +273,36 @@ class BiaxialMNInteractionSurface:
     # Concrete stress with options
     # ----------------------------
 
+    def _confined_strength_and_peak_strain(self) -> Tuple[float, float]:
+        """Mander confined characteristic strength f_cc,k and peak strain eps_cc."""
+        assert self.confinement_rho_s is not None
+        assert self.confinement_f_yh is not None
+        rho_s = float(self.confinement_rho_s)
+        f_yh_k = float(self.confinement_f_yh)
+        f_co_k_safe = max(float(self.concrete.f_ck), 1e-6)
+        eps_co = float(self.concrete.epsilon_c2)
+        k_e = 0.75
+        f_l_k = 0.5 * k_e * rho_s * f_yh_k
+        term = max(1.0 + 7.94 * f_l_k / f_co_k_safe, 1e-12)
+        f_cc_k = f_co_k_safe * (2.254 * np.sqrt(term) - 2.0 * f_l_k / f_co_k_safe - 1.254)
+        f_ratio = max(f_cc_k / f_co_k_safe, 1e-6)
+        eps_cc = max(eps_co * (1.0 + 5.0 * (f_ratio - 1.0)), 1e-9)
+        return float(f_cc_k), float(eps_cc)
+
+    def effective_ultimate_strain(self) -> float:
+        """Confined-aware concrete ultimate compressive strain.
+
+        Unconfined: the constitutive model's ultimate strain (~0.0035).
+        Confined: Mander/Priestley ``eps_cu = 0.004 + 1.4·rho_s·f_yh·eps_su / f_cc``.
+        """
+        if not self.confined_concrete:
+            return float(self.concrete_model.get_ultimate_strain())
+        f_cc_k, _ = self._confined_strength_and_peak_strain()
+        rho_s = float(self.confinement_rho_s)
+        f_yh_k = float(self.confinement_f_yh)
+        eps_su = float(self.confinement_eps_su)
+        return 0.004 + 1.4 * rho_s * f_yh_k * eps_su / max(f_cc_k, 1e-6)
+
     def _concrete_stress_with_options(
         self,
         concrete_strains: npt.NDArray[np.float64],
@@ -281,31 +318,12 @@ class BiaxialMNInteractionSurface:
             assert self.confinement_rho_s is not None
             assert self.confinement_f_yh is not None
 
-            rho_s = float(self.confinement_rho_s)
-            f_yh_k = float(self.confinement_f_yh)
-
             comp_mask = concrete_strains > 0.0
             if np.any(comp_mask):
-                f_co_k = float(self.concrete.f_ck)
-                eps_co = float(self.concrete.epsilon_c2)
-
-                k_e = 0.75
-                f_co_k_safe = max(f_co_k, 1e-6)
-
-                f_l_k = 0.5 * k_e * rho_s * f_yh_k
-
-                term = 1.0 + 7.94 * f_l_k / f_co_k_safe
-                term = max(term, 1e-12)
-
-                f_cc_k = f_co_k * (
-                    2.254 * np.sqrt(term) - 2.0 * f_l_k / f_co_k_safe - 1.254
-                )
-
-                f_ratio = max(f_cc_k / f_co_k_safe, 1e-6)
-                eps_cc = eps_co * (1.0 + 5.0 * (f_ratio - 1.0))
-                eps_cc = max(eps_cc, 1e-9)
-
-                eps_cu_conf = 0.004 + 0.14 * rho_s * f_yh_k / f_co_k_safe
+                # Shared helper for f_cc,k / eps_cc; corrected Mander/Priestley
+                # eps_cu_conf (== effective_ultimate_strain, also used by the solver).
+                f_cc_k, eps_cc = self._confined_strength_and_peak_strain()
+                eps_cu_conf = self.effective_ultimate_strain()
 
                 design_factor = float(self.concrete.alpha_cc) / float(self.concrete.gamma_c)
 
@@ -641,7 +659,14 @@ class BiaxialMNInteractionSurface:
         n_max = 0.0
         conc_mask = (mat_type == 'concrete')
         if np.any(conc_mask):
-            stress_c = self.concrete_model.get_stress(eps_cu2)
+            if self.confined_concrete:
+                # Evaluate the confined concrete stress at the confined ultimate
+                # strain so N_max reflects confinement (was the unconfined model at
+                # eps_cu2, making the axial limit inconsistent with the surface).
+                eps_lim = self.effective_ultimate_strain()
+                stress_c = float(self._concrete_stress_with_options(np.array([eps_lim]))[0])
+            else:
+                stress_c = self.concrete_model.get_stress(eps_cu2)
             n_max += to_kn(stress_c * np.sum(area[conc_mask]), ForceUnit.N)
 
         if np.any(steel_mask):

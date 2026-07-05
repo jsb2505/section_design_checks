@@ -6,7 +6,6 @@ import pytest
 import numpy as np
 import json
 import csv
-from pathlib import Path
 from pydantic import ValidationError
 from materials.reinforced_concrete.analysis.interaction_diagram import (
     InteractionPoint,

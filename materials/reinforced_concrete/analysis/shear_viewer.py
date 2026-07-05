@@ -440,6 +440,11 @@ def _build_slider_values(
 
     step_f = float(step)
     n_full = int(np.floor((v_max - v_min) / step_f + 1e-12))
+    # Guard against a pathologically small step (relative to the range) allocating
+    # an unbounded array; fall back to a capped uniform sampling instead.
+    _MAX_SLIDER_POINTS = 10000
+    if n_full + 1 > _MAX_SLIDER_POINTS:
+        return np.linspace(v_min, v_max, _MAX_SLIDER_POINTS)
     vals = v_min + step_f * np.arange(n_full + 1, dtype=float)
     if vals.size == 0:
         vals = np.asarray([v_min], dtype=float)
@@ -1884,7 +1889,14 @@ class ShearViewer:
         if metric_key == "utilization":
             colorbar_title = "Utilization"
             zmin = 0.0
-            zmax = max(1.5, float(np.nanmax(Z)))
+            # Non-computable cells (V_Rd <= 0) are set to +inf above. np.nanmax
+            # does NOT ignore inf, so derive zmax from finite cells only and then
+            # render the inf cells at the saturated colour (mirrors the sibling
+            # contour methods).
+            finite_vals = Z[np.isfinite(Z)]
+            zmax = max(1.5, float(np.nanmax(finite_vals))) if finite_vals.size else 1.5
+            Z = np.array(Z, copy=True)
+            Z[np.isinf(Z)] = zmax
             colorscale = _utilization_colorscale(zmin=zmin, zmax=zmax)
             contour_trace = go.Contour(
                 x=cot_vals,

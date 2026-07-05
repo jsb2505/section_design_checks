@@ -400,3 +400,46 @@ class TestCreateCustomRebarLayer:
         assert len(layer.positions) == 3
         assert layer.positions[1].x == pytest.approx(100.5, rel=1e-12)
         assert layer.positions[2].y == pytest.approx(-20.0, rel=1e-12)
+
+
+class TestLinearGroupSpacingGuard:
+    """Span-sufficiency guard in _create_linear_group_from_line (single-layer path)."""
+
+    def test_spacing_exceeding_line_length_raises(self):
+        """5 bars at 200 mm need an 800 mm span; a 100 mm line must be rejected."""
+        from materials.reinforced_concrete.geometry.rebar_layer import (
+            _create_linear_group_from_line,
+        )
+
+        with pytest.raises(ValueError, match="exceeds the available length"):
+            _create_linear_group_from_line(
+                rebar=_bar(),
+                start_point=(0.0, 0.0),
+                end_point=(100.0, 0.0),
+                n_bars=5,
+                bar_spacing=200.0,
+                layer_name=None,
+                omit_start=False,
+                omit_end=False,
+            )
+
+    def test_spacing_within_line_length_is_placed(self):
+        """3 bars at 40 mm (80 mm span) fit on a 200 mm line."""
+        from materials.reinforced_concrete.geometry.rebar_layer import (
+            _create_linear_group_from_line,
+        )
+
+        grp = _create_linear_group_from_line(
+            rebar=_bar(),
+            start_point=(0.0, 0.0),
+            end_point=(200.0, 0.0),
+            n_bars=3,
+            bar_spacing=40.0,
+            layer_name=None,
+            omit_start=False,
+            omit_end=False,
+        )
+        assert len(grp.positions) == 3
+        xs = [p.x for p in grp.positions]
+        # Centred on the 100 mm midpoint at 40 mm spacing.
+        assert xs == pytest.approx([60.0, 100.0, 140.0], rel=1e-9)

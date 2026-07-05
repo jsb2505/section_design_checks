@@ -14,7 +14,6 @@ from materials.reinforced_concrete.geometry import (
 )
 from materials.reinforced_concrete.geometry.reinforcement_reconcile import (
     ReinforcementInvalidPolicy,
-    ReinforcementUpdateReport,
     find_invalid_rebars,
 )
 

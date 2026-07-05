@@ -7,9 +7,8 @@ from types import SimpleNamespace
 import pytest
 import numpy as np
 from shapely.geometry import Point
-from materials.reinforced_concrete.geometry import FibreMesh, create_linear_rebar_layer
+from materials.reinforced_concrete.geometry import FibreMesh
 from materials.reinforced_concrete.geometry.fibre_mesh import Fibre
-from materials.core.geometry import Point2D
 
 
 class TestFibreMesh:

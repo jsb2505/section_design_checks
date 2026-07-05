@@ -632,3 +632,25 @@ class TestStressStrainViewerPlotFlow:
         fig = viewer.plot(My_Ed=80.0, N_Ed=150.0, show=False, save_path=out)
         assert isinstance(fig, _FakeFigure)
         assert fig.saved_path == str(out)
+
+
+class TestEquilibriumMz:
+    """The equilibrium check must enforce Mz for biaxial loads, otherwise a solve
+    that matched N and My but missed the minor axis is reported as in-equilibrium."""
+
+    def test_mz_enforced_only_when_biaxial(self):
+        # Two equal-and-opposite forces: N = 0; My = 0.2 kN·m; Mz = 0.
+        forces = np.array([100.0, -100.0])        # N
+        y_rel = np.array([1000.0, -1000.0])       # mm -> My = 0.2 kN·m
+        x_rel = np.array([500.0, 500.0])          # mm -> Mz = 0
+        # N and My satisfied; Mz target (5 kN·m) deliberately violated.
+        kw = dict(N_Ed=0.0, My_Ed=0.2, Mz_Ed=5.0)
+
+        uni = StressStrainViewer._compute_equilibrium(forces, x_rel, y_rel, biaxial=False, **kw)
+        bi = StressStrainViewer._compute_equilibrium(forces, x_rel, y_rel, biaxial=True, **kw)
+
+        # tuple = (N, My, Mz, errN, errMy, errMz, failed)
+        assert uni[6] is False, "Mz must be ignored for a uniaxial check"
+        assert bi[6] is True, "Mz violation must fail a biaxial check"
+        assert bi[2] == pytest.approx(0.0)   # achieved Mz
+        assert bi[5] == pytest.approx(5.0)   # Mz error

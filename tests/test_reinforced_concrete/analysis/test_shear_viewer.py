@@ -403,6 +403,30 @@ class TestShearViewer:
         assert "Heatmap" in trace_types
         assert "Contour" in trace_types
 
+    def test_heatmap_zmax_stays_finite_with_noncomputable_cells(self, monkeypatch):
+        """A V_Rd <= 0 cell becomes +inf; zmax must derive from finite cells only.
+
+        Before the fix, np.nanmax did not ignore inf, so a single non-computable
+        cell made zmax = inf and broke the colour scale / rendering.
+        """
+        import math
+
+        _install_fake_plotly(monkeypatch)
+        viewer = ShearViewer(_FakeCheck())
+        # Force every cell non-computable (V_Rd = 0 -> utilization = +inf).
+        monkeypatch.setattr(viewer, "_find_angle_sweep_capacity", lambda **kwargs: (0.0, 0.0))
+
+        fig = viewer.plot_cot_theta_link_angle_heatmap(
+            load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            n_cot=4,
+            n_angles=3,
+            metric="utilization",
+            show=False,
+        )
+
+        heatmap = next(t[0] for t in fig.traces if t[0]["type"] == "Heatmap")
+        assert math.isfinite(heatmap["zmax"]), f"zmax should be finite, got {heatmap['zmax']}"
+
     def test_plot_force_cot_theta_contour_has_heatmap_and_contour(self, monkeypatch):
         _install_fake_plotly(monkeypatch)
         viewer = ShearViewer(_FakeCheck())
@@ -547,3 +571,21 @@ class TestShearViewer:
                 load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
                 show=False,
             )
+
+
+class TestSliderValueAllocation:
+    """_build_slider_values must not allocate an unbounded array for a tiny step."""
+
+    def test_tiny_step_is_capped(self):
+        from materials.reinforced_concrete.analysis.shear_viewer import _build_slider_values
+
+        vals = _build_slider_values(value_min=0.0, value_max=100.0, n_points=10, step=1e-9)
+        assert len(vals) <= 10000
+        assert vals[0] == pytest.approx(0.0)
+        assert vals[-1] == pytest.approx(100.0)
+
+    def test_normal_step_unchanged(self):
+        from materials.reinforced_concrete.analysis.shear_viewer import _build_slider_values
+
+        vals = _build_slider_values(value_min=0.0, value_max=10.0, n_points=5, step=2.0)
+        assert list(vals) == pytest.approx([0.0, 2.0, 4.0, 6.0, 8.0, 10.0])

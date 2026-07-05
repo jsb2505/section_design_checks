@@ -78,7 +78,6 @@ class TestConcreteMaterial:
     def test_elastic_modulus(self, concrete_c30):
         """Test elastic modulus calculation."""
         # E_cm = 22 * (f_cm / 10)^0.3 GPa
-        import math
         E_base_GPa = 22.0 * ((38.0 / 10) ** 0.3)
         expected_MPa = E_base_GPa * 1000.0 * 1.0  # quartzite factor
         assert concrete_c30.E_cm == pytest.approx(expected_MPa, rel=1e-3)

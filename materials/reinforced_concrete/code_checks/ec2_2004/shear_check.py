@@ -10,7 +10,7 @@ This enables checking multiple load cases against the same section efficiently.
 from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union, Dict, TYPE_CHECKING
-from math import atan, atan2, cos, degrees, radians, sin, sqrt
+from math import atan, atan2, cos, degrees, hypot, radians, sin, sqrt
 import warnings
 from pydantic import Field, PrivateAttr, model_validator
 
@@ -906,18 +906,25 @@ class ShearCheck(BaseCodeCheck):
         if I_eff <= 0.0:
             return 0.0
 
-        _, cy = self.section.get_centroid()
-        min_x, min_y, max_x, max_y = self.section.outline.bounds
-        span = max(max_x - min_x, max_y - min_y, 1.0)
-        pad = span
-
-        # First moment S of area above centroidal axis about that axis.
-        # For centroidal axes, top/bottom first moments have equal magnitude.
+        # First moment S of area about the SAME axis as I_eff. Rotate the section by
+        # -shear_angle_deg about its centroid so the shear axis becomes horizontal,
+        # then take the first moment about the (now horizontal) centroidal axis.
+        # At 0° the rotation is a no-op (== previous behaviour, S about the x-axis);
+        # at 90° it yields the vertical-axis first moment, consistent with I_eff=I_yy.
+        # Previously S was always taken about the horizontal axis, inconsistent with
+        # the rotated I_eff for any non-zero shear angle.
+        from shapely.affinity import rotate as _shp_rotate
         from shapely.geometry import box
 
-        top_region = self.section.outline.intersection(
-            box(min_x - pad, cy, max_x + pad, max_y + pad)
-        )
+        cx, cy = self.section.get_centroid()
+        if abs(shear_angle_deg) < 1e-9:
+            poly = self.section.outline  # no rotation needed for vertical shear
+        else:
+            poly = _shp_rotate(self.section.outline, -shear_angle_deg, origin=(cx, cy), use_radians=False)
+        min_x, min_y, max_x, max_y = poly.bounds
+        pad = max(max_x - min_x, max_y - min_y, 1.0)
+
+        top_region = poly.intersection(box(min_x - pad, cy, max_x + pad, max_y + pad))
         A_top = float(top_region.area)
         if A_top <= 0.0:
             return 0.0
@@ -1379,10 +1386,14 @@ class ShearCheck(BaseCodeCheck):
         # Negative shear from FEA sign conventions should not give negative utilization
         V_Ed = abs(V_Ed)
 
-        # Derive effective shear direction from components (if both non-zero)
-        # This overrides self.breadth_shear_direction for this load case
-        if abs(Vz_Ed) > 1e-9 and abs(Vy_Ed) > 1e-9:
-            shear_direction: tuple[float, float] = (Vz_Ed, Vy_Ed)
+        # Derive effective shear direction from the shear components whenever EITHER
+        # is non-zero (was previously AND, so a pure minor-axis shear kept the default
+        # major-axis breadth while the I_eff angle below rotated to 90° — an axis
+        # mismatch). Normalised so pure major-axis shear maps exactly to the default
+        # (0, 1) and uses the cached breadth unchanged.
+        if abs(Vz_Ed) > 1e-9 or abs(Vy_Ed) > 1e-9:
+            _mag = hypot(Vz_Ed, Vy_Ed)
+            shear_direction: tuple[float, float] = (Vz_Ed / _mag, Vy_Ed / _mag)
         else:
             shear_direction = self.breadth_shear_direction
 
@@ -1409,7 +1420,8 @@ class ShearCheck(BaseCodeCheck):
             eps_top, eps_bottom = diagram.find_strains_for_MN(My_Ed, N_Ed, **_mz_kw)
             try:
                 strain_state_local = diagram.find_strain_state_for_MN(My_Ed, N_Ed, **_mz_kw)
-            except Exception:
+            except ValueError:
+                # best-effort full strain state; narrowed so real bugs surface
                 pass
         else:
             eps_top, eps_bottom = None, None
@@ -2013,6 +2025,7 @@ class ShearCheck(BaseCodeCheck):
         N_Ed: float,
         cot_theta: float = 2.5,
         f_ywd: Optional[float] = None,
+        Mz_Ed: float = 0.0,
     ) -> float:
         """
         Calculate required A_sw/s for given shear force.
@@ -2023,6 +2036,9 @@ class ShearCheck(BaseCodeCheck):
             N_Ed: Design axial force in kN
             cot_theta: Cotangent of strut angle
             f_ywd: Design yield strength (uses rebar f_yd if None)
+            Mz_Ed: Design minor axis moment in kN·m. When non-zero the effective
+                depth, reinforcement ratio and lever arm are derived from the
+                biaxial (skewed neutral-axis) strain state rather than a My-only one.
 
         Returns:
             Required A_sw/s in mm²/mm
@@ -2031,16 +2047,45 @@ class ShearCheck(BaseCodeCheck):
         # Negative shear from FEA sign conventions should not give negative reinforcement
         V_Ed = abs(V_Ed)
 
-        d = self.find_effective_depth(My_Ed, N_Ed)
-        sigma_cp = self._find_sigma_cp(N_Ed)
-        rho_l = self._find_rho_l(My_Ed, N_Ed, d)
+        # For biaxial loads, solve the strain state including Mz so d, rho_l and z
+        # reflect the actual skewed neutral axis. For pure-My loads the strain args
+        # stay None and the path is unchanged (the helpers solve internally).
+        eps_top: Optional[float] = None
+        eps_bottom: Optional[float] = None
+        strain_state_local: Optional["StrainState"] = None
+        if abs(Mz_Ed) > 1e-9:
+            diagram = self._get_diagram()
+            if not hasattr(diagram, "get_capacity_biaxial"):
+                raise ValueError(
+                    f"Mz_Ed={Mz_Ed:.1f} kN·m requires a biaxial-capable diagram; "
+                    "set free_neutral_axis=True on the check."
+                )
+            eps_top, eps_bottom = diagram.find_strains_for_MN(My_Ed, N_Ed, Mz_target=Mz_Ed)
+            try:
+                strain_state_local = diagram.find_strain_state_for_MN(
+                    My_target=My_Ed, N_target=N_Ed, Mz_target=Mz_Ed,
+                )
+            except Exception:
+                strain_state_local = None
+
+        if strain_state_local is not None or eps_top is not None:
+            d = self.find_effective_depth(My_Ed, N_Ed, eps_top, eps_bottom, strain_state=strain_state_local)
+            sigma_cp = self._find_sigma_cp(N_Ed)
+            rho_l = self._find_rho_l(My_Ed, N_Ed, d, eps_top, eps_bottom, strain_state=strain_state_local)
+        else:
+            d = self.find_effective_depth(My_Ed, N_Ed)
+            sigma_cp = self._find_sigma_cp(N_Ed)
+            rho_l = self._find_rho_l(My_Ed, N_Ed, d)
 
         V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
 
         if V_Ed <= V_Rd_c:
             return 0.0
 
-        z_ec2, _ = self.find_lever_arm(My_Ed, N_Ed, d)
+        if strain_state_local is not None or eps_top is not None:
+            z_ec2, _ = self.find_lever_arm(My_Ed, N_Ed, d, eps_top, eps_bottom, strain_state=strain_state_local)
+        else:
+            z_ec2, _ = self.find_lever_arm(My_Ed, N_Ed, d)
 
         if f_ywd is None and self.shear_reinforcement is not None:
             f_ywd = self.f_ywd_design

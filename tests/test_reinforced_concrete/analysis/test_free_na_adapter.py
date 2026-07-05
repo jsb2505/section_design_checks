@@ -10,9 +10,7 @@ These tests verify:
 
 from __future__ import annotations
 
-import math
 
-import numpy as np
 import pytest
 
 from materials.reinforced_concrete.analysis.biaxial_interaction import (
@@ -22,14 +20,13 @@ from materials.reinforced_concrete.analysis.biaxial_interaction import (
 from materials.reinforced_concrete.constitutive.concrete_stress_strain import ConcreteModelType
 from materials.reinforced_concrete.analysis.free_na_adapter import FreeNADiagramAdapter
 from materials.reinforced_concrete.analysis.interaction_diagram import (
-    MNInteractionDiagram,
     create_interaction_diagram,
 )
 from materials.reinforced_concrete.geometry import (
     create_rectangular_section,
     create_linear_rebar_layer,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from materials.reinforced_concrete.materials import Rebar
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +114,18 @@ class TestSolveUncrackedElastic:
         adapter = FreeNADiagramAdapter(surface)
         result = adapter._solve_uncracked_elastic(100.0, 0.0, 0.0)
         assert result is None
+
+    def test_near_singular_K_falls_through(self, symmetric_section, concrete_c30, monkeypatch):
+        """A near-singular stiffness matrix must fall through (return None) rather
+        than letting np.linalg.solve return garbage."""
+        import materials.reinforced_concrete.analysis.free_na_adapter as fna
+
+        adapter = _make_adapter(symmetric_section, concrete_c30, 25000.0)
+        # Normal solve works...
+        assert adapter._solve_uncracked_elastic(My=15.0, N=0.0, Mz=0.0) is not None
+        # ...but a near-singular K (huge condition number) is rejected.
+        monkeypatch.setattr(fna.np.linalg, "cond", lambda K: 1e15)
+        assert adapter._solve_uncracked_elastic(My=15.0, N=0.0, Mz=0.0) is None
 
     def test_pure_My_symmetric_gives_zero_kappa_z(self, symmetric_section, concrete_c30):
         """For a symmetric section under pure My, kappa_z should be ≈ 0."""
@@ -247,3 +256,38 @@ class TestFindStrainStateAnalyticalPath:
         assert ss.eps_bottom < ss.eps_top, (
             f"eps_bottom ({ss.eps_bottom:.6f}) should be < eps_top ({ss.eps_top:.6f}) for sagging"
         )
+
+
+class TestSingleSolveConsistency:
+    """The double-solve elimination relies on StrainState.eps_top/eps_bottom being
+    exactly the projection that find_strains_for_MN returns. If that ever drifts,
+    callers that now derive end strains from the state would silently diverge."""
+
+    def test_state_eps_match_strains_solver(self, asymmetric_section, concrete_c30):
+        adapter = _make_adapter(asymmetric_section, concrete_c30, 25000.0)
+        kw = dict(My_target=15.0, N_target=200.0, Mz_target=8.0, strict=True)
+        eps_top, eps_bottom = adapter.find_strains_for_MN(**kw)
+        ss = adapter.find_strain_state_for_MN(**kw)
+        assert ss.eps_top == pytest.approx(eps_top, rel=1e-6, abs=1e-9)
+        assert ss.eps_bottom == pytest.approx(eps_bottom, rel=1e-6, abs=1e-9)
+
+    @pytest.mark.parametrize(
+        "My_target,N_target,Mz_target",
+        [
+            (40.0, -300.0, 0.0),    # tension-controlled (net tension)
+            (60.0, 0.0, 0.0),       # pure bending
+            (30.0, 1500.0, 10.0),   # compression-controlled, biaxial
+        ],
+    )
+    def test_two_methods_agree_across_pivot_zones(
+        self, asymmetric_section, concrete_c30, My_target, N_target, Mz_target
+    ):
+        """After extracting the shared _pivot_slope_and_y_na helper, the strains
+        method and the strain-state method must still agree across the tension /
+        bending / compression pivot zones (guards the consolidation)."""
+        adapter = _make_adapter(asymmetric_section, concrete_c30, 25000.0)
+        kw = dict(My_target=My_target, N_target=N_target, Mz_target=Mz_target)
+        eps_top, eps_bottom = adapter.find_strains_for_MN(**kw)
+        ss = adapter.find_strain_state_for_MN(**kw)
+        assert ss.eps_top == pytest.approx(eps_top, rel=1e-6, abs=1e-9)
+        assert ss.eps_bottom == pytest.approx(eps_bottom, rel=1e-6, abs=1e-9)

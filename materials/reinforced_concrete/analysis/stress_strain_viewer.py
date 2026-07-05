@@ -76,8 +76,11 @@ class _StressStrainPlotState:
     section_failed: bool = False
     achieved_N: float = 0.0
     achieved_M: float = 0.0
+    achieved_Mz: float = 0.0
     equilibrium_error_N: float = 0.0
     equilibrium_error_M: float = 0.0
+    equilibrium_error_Mz: float = 0.0
+    biaxial: bool = False
 
     # Capacity at the applied axial force level
     M_Rd_pos: float | None = None
@@ -210,6 +213,43 @@ class StressStrainViewer:
             utilisation=float(result.utilization) if result.utilization is not None and result.utilization != float("inf") else None,
         )
 
+    @staticmethod
+    def _compute_equilibrium(
+        forces_N: np.ndarray,
+        x_rel: np.ndarray,
+        y_rel: np.ndarray,
+        N_Ed: float,
+        My_Ed: float,
+        Mz_Ed: float,
+        biaxial: bool,
+    ) -> tuple[float, float, float, float, float, float, bool]:
+        """Achieved (N, My, Mz) from fibre forces and the equilibrium-failure flag.
+
+        My uses the y lever arm and Mz the x lever arm (matching
+        :mod:`biaxial_interaction`). For a biaxial load Mz must also be in
+        equilibrium, otherwise a solve that matched N and My but hit its bounds on
+        the minor axis would be reported as a valid (in-equilibrium) section.
+        """
+        achieved_N = to_kn(float(np.sum(forces_N)), ForceUnit.N)
+        achieved_My = to_knm(float(np.sum(forces_N * y_rel)), MomentUnit.NMM)
+        achieved_Mz = to_knm(float(np.sum(forces_N * x_rel)), MomentUnit.NMM)
+        err_N = abs(achieved_N - N_Ed)
+        err_My = abs(achieved_My - My_Ed)
+        err_Mz = abs(achieved_Mz - Mz_Ed)
+        # Tolerance = relative (1%) with a per-quantity absolute floor. The floors
+        # are physically distinct (force vs moment) so they are named separately
+        # rather than lumped under one bare "1.0" literal.
+        REL_TOL = 0.01
+        ABS_TOL_FORCE_KN = 1.0      # kN
+        ABS_TOL_MOMENT_KNM = 1.0    # kN·m
+        failed = (
+            err_N > max(ABS_TOL_FORCE_KN, REL_TOL * abs(N_Ed))
+            or err_My > max(ABS_TOL_MOMENT_KNM, REL_TOL * abs(My_Ed))
+        )
+        if biaxial:
+            failed = failed or err_Mz > max(ABS_TOL_MOMENT_KNM, REL_TOL * abs(Mz_Ed))
+        return achieved_N, achieved_My, achieved_Mz, err_N, err_My, err_Mz, failed
+
     # -----------------------------
     # Build plot state
     # -----------------------------
@@ -280,18 +320,27 @@ class StressStrainViewer:
         F_s_comp = float(np.sum(steel_forces[steel_forces > 0.0])) if steel_forces.size else 0.0
         F_s_tens = float(np.sum(steel_forces[steel_forces < 0.0])) if steel_forces.size else 0.0
 
-        # 5b) Equilibrium check: compute achieved N and M from the strain state
-        achieved_N = to_kn(float(np.sum(forces_N)), ForceUnit.N)
+        # 5b) Equilibrium check: achieved N, My (and Mz when biaxial) from the
+        # strain state. Mz is now included in the failure decision so a biaxial
+        # solve that matched N and My but not the minor axis is not shown as valid.
         centroid_x, centroid_y = d.section.get_centroid()
-        achieved_M_raw = float(np.sum(forces_N * (y_coords - centroid_y)))
-        achieved_M = to_knm(achieved_M_raw, MomentUnit.NMM)
-
-        equilibrium_error_N = abs(achieved_N - N_Ed)
-        equilibrium_error_M = abs(achieved_M - My_Ed)
-
-        tol_N = max(1.0, 0.01 * abs(N_Ed))  # 1% or 1 kN
-        tol_M = max(1.0, 0.01 * abs(My_Ed))  # 1% or 1 kN·m
-        section_failed = equilibrium_error_N > tol_N or equilibrium_error_M > tol_M
+        (
+            achieved_N,
+            achieved_M,
+            achieved_Mz,
+            equilibrium_error_N,
+            equilibrium_error_M,
+            equilibrium_error_Mz,
+            section_failed,
+        ) = self._compute_equilibrium(
+            forces_N,
+            x_coords - centroid_x,
+            y_coords - centroid_y,
+            N_Ed,
+            My_Ed,
+            Mz_Ed,
+            biaxial,
+        )
 
         # 6) Centroids (mm) — weight by forces in N
         conc_comp_mask = conc_mask & (forces_N > 0.0)
@@ -418,8 +467,11 @@ class StressStrainViewer:
             section_failed=section_failed,
             achieved_N=achieved_N,
             achieved_M=achieved_M,
+            achieved_Mz=achieved_Mz,
             equilibrium_error_N=equilibrium_error_N,
             equilibrium_error_M=equilibrium_error_M,
+            equilibrium_error_Mz=equilibrium_error_Mz,
+            biaxial=biaxial,
             strain_state=strain_state_obj,
             is_biaxial=is_biaxial,
             na_angle_deg=na_angle_deg,
@@ -1563,15 +1615,21 @@ class StressStrainViewer:
 
         # Show equilibrium error if section failed
         if s.section_failed:
+            mz_err = (
+                f"<br>{indent}ΔMz = {s.equilibrium_error_Mz:.1f} kN·m" if s.biaxial else ""
+            )
+            mz_ach = (
+                f"<br>{indent}Mz = {s.achieved_Mz:.1f} kN·m" if s.biaxial else ""
+            )
             left_blocks.append(
                 '<span style="color:red"><b>Equilibrium Error:</b><br>'
                 f"{indent}ΔN = {s.equilibrium_error_N:.1f} kN<br>"
-                f"{indent}ΔM = {s.equilibrium_error_M:.1f} kN·m</span>"
+                f"{indent}ΔM = {s.equilibrium_error_M:.1f} kN·m{mz_err}</span>"
             )
             right_blocks.append(
                 '<br><span style="color:red"><b>Achieved:</b><br>'
                 f"{indent}N = {s.achieved_N:.1f} kN<br>"
-                f"{indent}M = {s.achieved_M:.1f} kN·m</span>"
+                f"{indent}M = {s.achieved_M:.1f} kN·m{mz_ach}</span>"
             )
 
         return (block_gap.join(left_blocks), block_gap.join(right_blocks))

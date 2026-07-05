@@ -87,7 +87,7 @@ def test_lever_arm_clamping_warning():
                 if len(w) > 0:
                     print(f"  [OK] Warning issued: '{w[0].message}'")
                 else:
-                    print(f"  [FAIL] WARNING: Clamping applied but no warning issued!")
+                    print("  [FAIL] WARNING: Clamping applied but no warning issued!")
             else:
                 print(f"  [OK] No clamping needed (z_mech <= {check.z_d_ratio_upper:.2f}d)")
 
@@ -130,7 +130,7 @@ def test_lever_arm_clamping_warning():
             if len(clamping_warnings) > 0:
                 print(f"  [FAIL] WARNING: Unexpected clamping warning with wide bounds: '{clamping_warnings[0].message}'")
             else:
-                print(f"  [OK] No clamping warning (as expected)")
+                print("  [OK] No clamping warning (as expected)")
 
     print()
     print("=" * 80)

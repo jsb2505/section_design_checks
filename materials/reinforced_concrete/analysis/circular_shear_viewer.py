@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple, TYPE_CHECKING, Union
+from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, Union
 
 import numpy as np
 
@@ -228,6 +228,11 @@ class CircularShearViewer:
 
     def _find_V_Rd_max(self, cot_theta: float, context: _CircularStudyContext) -> float:
         """V_Rd,max with circular equivalent web width (kN)."""
+        # cot(theta) must be strictly positive: tan_theta = 1/cot_theta divides by
+        # it below, and a non-positive strut angle is non-physical. Guard against
+        # user-supplied bounds reaching 0/negative (was a ZeroDivisionError).
+        if cot_theta <= 0.0:
+            return 0.0
         assert self.check._concrete_uls is not None
         f_cd = self.check._f_cd_design
         f_ck = self.check._concrete_uls.f_ck
@@ -288,6 +293,11 @@ class CircularShearViewer:
         cot_max = context.cot_max if cot_theta_max is None else float(cot_theta_max)
         if cot_min > cot_max:
             cot_min, cot_max = cot_max, cot_min
+        if cot_min <= 0.0:
+            raise ValueError(
+                f"cot(theta) bounds must be strictly positive (1/cot_theta is taken "
+                f"in V_Rd,max); got cot_theta_min={cot_min}, cot_theta_max={cot_max}."
+            )
 
         cot_vals = np.linspace(cot_min, cot_max, max(2, int(n_points)))
 
@@ -305,7 +315,10 @@ class CircularShearViewer:
             V_Rd_s = self._find_V_Rd_s(cot_theta_f, context)
             V_Rd_max_theta = self._find_V_Rd_max(cot_theta_f, context)
 
-            V_Rd = min(V_Rd_s, V_Rd_max_design)
+            # Govern by the per-cot strut capacity, not the constant peak value at
+            # cot_min: V_Rd,max(theta) genuinely falls as cot grows, so utilization
+            # must use min(V_Rd_s(theta), V_Rd_max(theta)) at each cot sample.
+            V_Rd = min(V_Rd_s, V_Rd_max_theta)
             util = context.V_Ed / V_Rd if V_Rd > 0.0 else float("inf")
 
             shift = calculate_tension_shift(

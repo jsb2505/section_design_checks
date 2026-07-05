@@ -493,8 +493,9 @@ class CrackingCheck(BaseCodeCheck):
 
         For biaxial bending (``na_angle_deg`` provided and non-zero), the
         second moment of area about the rotated NA direction is approximated
-        as ``I_eff = I_yy * cos²θ + I_xx * sin²θ``, and the tension face
-        distance is measured along the compression direction.
+        as ``I_eff = I_xx * cos²θ + I_yy * sin²θ`` (matching the implementation and
+        reducing to I_xx at θ=0), and the tension face distance is measured along
+        the compression direction.
 
         Compressive axial load increases M_cr (delays cracking).
         Tensile axial load decreases M_cr (promotes cracking).
@@ -2286,6 +2287,30 @@ class CrackingCheck(BaseCodeCheck):
             cover_override=cover_override,
         )
 
+    def _is_net_compression(
+        self,
+        eps_top: float,
+        eps_bottom: float,
+        strain_state: Optional["StrainState"],
+    ) -> bool:
+        """Whether the whole section is in compression (so no cracking is possible).
+
+        For a 1D strain state the vertical extremes ``eps_top``/``eps_bottom`` bound
+        the strain. For a biaxial (skewed neutral-axis) state the minimum strain can
+        occur at an in-plane corner, not at the vertical faces, so the strain plane
+        is evaluated over the section outline. Using only eps_top/eps_bottom there
+        was non-conservative — it could report a genuinely cracked biaxial section
+        as uncracked. Compression is positive, so all-fibres >= 0 means net
+        compression.
+        """
+        if strain_state is not None and strain_state.is_biaxial:
+            cx, cy = self.section.get_centroid()
+            min_strain = min(
+                strain_state.strain_at(p.x - cx, p.y - cy)
+                for p in self.section.outline_coords
+            )
+            return min_strain >= 0.0
+        return eps_top >= 0.0 and eps_bottom >= 0.0
 
     def _check_single_case(
         self,
@@ -2427,8 +2452,10 @@ class CrackingCheck(BaseCodeCheck):
                 },
             )
 
+        # strict=True so this reuses the strict find_strains_for_MN result above
+        # (the strain cache keys on `strict`) instead of triggering a re-solve.
         strain_state_local = diagram_for_check.find_strain_state_for_MN(
-            My_target=M_Ed, N_target=N_Ed, **_mz_kw,
+            My_target=M_Ed, N_target=N_Ed, strict=True, **_mz_kw,
         )
 
         # Step 2.5: Stress limitation checks (EC2 §7.2) and non-linear creep
@@ -2505,8 +2532,8 @@ class CrackingCheck(BaseCodeCheck):
                     )
                     nonlinear_creep_applied = True
 
-        # --- Net compression: both faces in compression → w_k = 0 ---
-        if eps_top >= 0 and eps_bottom >= 0:
+        # --- Net compression (whole section in compression) → w_k = 0 ---
+        if self._is_net_compression(eps_top, eps_bottom, strain_state_local):
             return self._create_result(
                 check_name="Cracking check (EC2 §7.3)",
                 code_reference="EC2 §7.3",
@@ -2940,8 +2967,8 @@ class CrackingCheck(BaseCodeCheck):
                     )
                     nonlinear_creep_applied = True
 
-        # --- Net compression: both faces in compression → w_k = 0 ---
-        if eps_top >= 0 and eps_bottom >= 0:
+        # --- Net compression (whole section in compression) → w_k = 0 ---
+        if self._is_net_compression(eps_top, eps_bottom, strain_state_local):
             return CrackingResult(
                 w_k=0.0, w_k_limit=self.w_k_limit, s_r_max=0.0,
                 eps_sm_minus_eps_cm=0.0, sigma_s=0.0, rho_p_eff=0.0,
@@ -2979,6 +3006,24 @@ class CrackingCheck(BaseCodeCheck):
             eps_top, eps_bottom, section_h_d,
         )
 
+        # Biaxial effective depth — mirror _check_single_case so this public entry
+        # point returns the SAME crack width as perform_check for biaxial loads.
+        # Without this, _calculate_face_crack_width fell back to the 1D face-based
+        # effective depth here, diverging from perform_check.
+        _d_override_d: Optional[float] = None
+        if strain_state_local is not None and strain_state_local.is_biaxial:
+            _d_override_d = flexure_utils.find_effective_depth_for_flexure(
+                section=self.section,
+                diagram=diagram_for_check,
+                M_Ed=M_Ed,
+                N_Ed=N_Ed,
+                eps_top=eps_top,
+                eps_bottom=eps_bottom,
+                strain_state=strain_state_local,
+                warn_on_fallback=not suppress_warnings,
+                _stacklevel=4,
+            )
+
         if is_net_tension:
             # Both faces in tension (EC2 Fig 7.1, case c)
             # Check both faces independently and report the worst crack width.
@@ -2997,6 +3042,8 @@ class CrackingCheck(BaseCodeCheck):
                 )
                 if cover_override is not None:
                     crack_width_kwargs["cover_override"] = cover_override
+                if _d_override_d is not None:
+                    crack_width_kwargs["d_override"] = _d_override_d
                 result_candidate = self._calculate_face_crack_width(
                     eps_top, eps_bottom, face=face_candidate,
                     x=x, is_net_tension=True,
@@ -3027,6 +3074,8 @@ class CrackingCheck(BaseCodeCheck):
             )
             if cover_override is not None:
                 crack_width_kwargs["cover_override"] = cover_override
+            if _d_override_d is not None:
+                crack_width_kwargs["d_override"] = _d_override_d
             result = self._calculate_face_crack_width(
                 eps_top, eps_bottom, face=tension_face,
                 x=x, is_net_tension=False,

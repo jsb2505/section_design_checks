@@ -9,7 +9,6 @@ Key scenario: Large axial compression + small hogging moment
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
 from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
-from materials.reinforced_concrete.code_checks.base_check import CheckStatus
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
 
@@ -203,11 +202,11 @@ def test_lever_arm_difference():
     d_rigorous = result_rigorous.details['d']
     z_rigorous = result_rigorous.details['z']
 
-    print(f"\nApproximate mode:")
+    print("\nApproximate mode:")
     print(f"  d = {d_approx:.1f} mm (from M-N solver)")
     print(f"  z = {z_approx:.1f} mm (should be 0.9*d = {0.9*d_approx:.1f} mm)")
 
-    print(f"\nRigorous mode:")
+    print("\nRigorous mode:")
     print(f"  d = {d_rigorous:.1f} mm (from M-N solver)")
     print(f"  z = {z_rigorous:.1f} mm (from force centroids)")
 

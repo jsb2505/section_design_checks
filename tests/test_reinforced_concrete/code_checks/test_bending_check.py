@@ -868,3 +868,23 @@ class TestMultipleLoadCases:
         # Diagram should be the same object (cached, inputs unchanged)
         assert check._diagram is diagram_ref
 
+
+class TestStrainSolveExceptionNarrowing:
+    """The strain-solve try/except blocks now catch only ValueError (solver
+    non-convergence). A genuine bug (any other exception) must surface, not be
+    silently swallowed into a None strain state."""
+
+    def test_non_valueerror_in_strain_state_solve_propagates(self, test_beam, concrete_c30, monkeypatch):
+        from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+
+        check = BendingCheck(section=test_beam, concrete=concrete_c30)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated bug, not a convergence ValueError")
+
+        # find_strain_state_for_MN is only reached in the (now ValueError-only)
+        # best-effort block; a RuntimeError there must propagate.
+        monkeypatch.setattr(MNInteractionDiagram, "find_strain_state_for_MN", boom)
+        with pytest.raises(RuntimeError, match="simulated bug"):
+            check.perform_check(My_Ed=100.0, N_Ed=500.0)
+

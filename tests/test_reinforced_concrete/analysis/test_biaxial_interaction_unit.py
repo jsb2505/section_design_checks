@@ -42,6 +42,7 @@ def _make_surface_stub() -> BiaxialMNInteractionSurface:
     s.elastic_modulus = None
     s.include_tension = False
     s.crack_to_neutral_axis_on_first_tension_failure = True
+    s.confinement_eps_su = 0.10  # transverse-steel rupture strain (ctor default)
     return s
 
 

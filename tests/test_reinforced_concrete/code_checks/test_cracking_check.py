@@ -7,7 +7,6 @@ from __future__ import annotations
 import math
 import sys
 import types
-import warnings
 
 import numpy as np
 import pytest
@@ -26,7 +25,7 @@ from materials.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from materials.reinforced_concrete.materials import Rebar
 from materials.reinforced_concrete.ndp import ndp_override
 
 
