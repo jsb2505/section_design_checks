@@ -18,7 +18,6 @@ from materials.reinforced_concrete.materials.rebar import (
     Rebar,
     ShearRebar,
     BarDiameter,
-    create_standard_rebar,
 )
 
 __all__ = [
@@ -31,5 +30,4 @@ __all__ = [
     "Rebar",
     "ShearRebar",
     "BarDiameter",
-    "create_standard_rebar",
 ]

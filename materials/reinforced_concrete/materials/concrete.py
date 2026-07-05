@@ -5,12 +5,12 @@ Implements characteristic strengths, design strengths, elastic modulus,
 and stress-strain parameters for concrete grades C12/15 to C90/105.
 """
 
-from typing import Literal, Optional
+from typing import Literal, Optional, get_args
 from pydantic import Field, field_validator, computed_field
 from materials.core.base_material import BaseMaterial
 
 
-# Concrete grades according to EC2 Table 3.1
+# Concrete grades according to EC2 Table 3.1 (single source of truth)
 ConcreteGrade = Literal[
     "C12/15", "C16/20", "C20/25", "C25/30", "C30/37", "C35/45", "C40/50",
     "C45/55", "C50/60", "C55/67", "C60/75", "C70/85", "C80/95", "C90/105"
@@ -46,7 +46,7 @@ class ConcreteMaterial(BaseMaterial):
     )
 
     alpha_cc: float = Field(
-        default=1.0,
+        default=0.85,
         description="Coefficient for long-term effects on strength (§3.1.6(1)P)",
         gt=0,
         le=1.0,
@@ -75,14 +75,11 @@ class ConcreteMaterial(BaseMaterial):
     @classmethod
     def validate_grade(cls, v: str) -> str:
         """Validate concrete grade format."""
-        valid_grades = [
-            "C12/15", "C16/20", "C20/25", "C25/30", "C30/37", "C35/45", "C40/50",
-            "C45/55", "C50/60", "C55/67", "C60/75", "C70/85", "C80/95", "C90/105"
-        ]
+        valid_grades = get_args(ConcreteGrade)
         if v not in valid_grades:
             raise ValueError(
                 f"Invalid concrete grade: {v}. "
-                f"Must be one of {valid_grades}"
+                f"Must be one of {list(valid_grades)}"
             )
         return v
 
@@ -260,6 +257,7 @@ class ConcreteMaterial(BaseMaterial):
         Returns:
             ε_c1 (dimensionless, e.g., 0.0022 for 2.2‰)
         """
+        # TODO: CHECK THIS FORMULA FOR F_CK > 50 (NEW EC2?)
         if self.f_ck <= 50:
             return min(0.7 * (self.f_cm ** 0.31) / 1000, 0.0028)
         else:

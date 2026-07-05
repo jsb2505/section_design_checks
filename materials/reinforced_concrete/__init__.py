@@ -14,7 +14,6 @@ from materials.reinforced_concrete.materials import (
     Rebar,
     ShearRebar,
     BarDiameter,
-    create_standard_rebar,
 )
 
 # Constitutive models
@@ -50,7 +49,6 @@ __all__ = [
     "Rebar",
     "ShearRebar",
     "BarDiameter",
-    "create_standard_rebar",
     # Constitutive
     "ConcreteStressStrainSchematic",
     "ConcreteStressStrainParabolaRectangle",

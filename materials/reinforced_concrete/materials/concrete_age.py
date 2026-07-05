@@ -1,12 +1,12 @@
 """Time-dependent concrete material properties according to Eurocode 2.
 
 This module provides ConcreteAge which extends ConcreteMaterial with time-dependent
-properties for early-age concrete behavior and strength development.
+properties for early-age concrete behaviour and strength development.
 """
 
-from typing import Literal, Optional
+from typing import Literal
 from math import exp, sqrt
-from pydantic import BaseModel, Field, field_validator, computed_field
+from pydantic import BaseModel, Field, computed_field
 
 from .concrete import ConcreteMaterial
 
@@ -22,8 +22,8 @@ class ConcreteAge(BaseModel):
     Uses composition to extend ConcreteMaterial with age-dependent properties
     according to EC2 §3.1.2 for strength development over time.
 
-    The minimum valid age is 3 days (VALID_MIN_AGE) as EC2 formulas for
-    strength development require t > 3 days. For earlier ages, testing is required.
+    The minimum valid age is 3 days as EC2 formulas for strength development
+    require t > 3 days. For earlier ages, testing is required.
 
     Attributes:
         concrete: Base concrete material (28-day properties)
@@ -74,21 +74,6 @@ class ConcreteAge(BaseModel):
         ...,
         description="Cement strength class: R (rapid), N (normal), S (slow)",
     )
-
-    alpha_ct: float = Field(
-        default=0.7,
-        gt=0,
-        le=1.0,
-        description="Coefficient for long-term effects on tensile strength",
-    )
-
-    # Class constant
-    VALID_MIN_AGE: float = 3.0  # days (exclusive)
-
-    @classmethod
-    def is_valid_age(cls, age_in_days: float) -> bool:
-        """Check if age is valid (> 3 days)."""
-        return age_in_days > cls.VALID_MIN_AGE
 
     @computed_field
     @property
@@ -173,13 +158,14 @@ class ConcreteAge(BaseModel):
         f_ctd(t) = α_ct · f_ctm(t) / γ_c
 
         Uses 0.7 · f_ctm(t) as characteristic value.
+        Uses alpha_ct from the composed concrete material.
 
         Returns:
             f_ctd(t) in MPa
         """
         # Use 0.7 factor for characteristic tensile strength
         f_ctk_t = 0.7 * self.f_ctm_t
-        return self.alpha_ct * f_ctk_t / self.concrete.gamma_c
+        return self.concrete.alpha_ct * f_ctk_t / self.concrete.gamma_c
 
     @computed_field
     @property

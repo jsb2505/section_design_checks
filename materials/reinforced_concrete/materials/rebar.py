@@ -2,17 +2,16 @@
 Rebar (reinforcing bar) with geometry and material properties.
 """
 
-from typing import Literal, Optional
+from typing import Literal, get_args
 import math
 from pydantic import Field, computed_field, field_validator
 from materials.reinforced_concrete.materials.reinforcing_steel import (
     ReinforcingSteel,
-    ReinforcingSteelGrade,
 )
 
 
-# Standard bar diameters in mm (EC2 common practice)
-BarDiameter = Literal[6, 8, 10, 12, 16, 20, 25, 32, 40]
+# Standard bar diameters in mm (EC2 common practice) - single source of truth
+BarDiameter = Literal[6, 8, 10, 12, 16, 20, 25, 28, 32, 40]
 
 
 class Rebar(ReinforcingSteel):
@@ -31,11 +30,13 @@ class Rebar(ReinforcingSteel):
     @field_validator("diameter")
     @classmethod
     def validate_diameter(cls, v: float) -> float:
-        """Validate bar diameter is reasonable."""
-        if v < 6 or v > 50:
+        """Validate bar diameter is a standard size."""
+        standard_diameters = get_args(BarDiameter)
+
+        if v not in standard_diameters:
             raise ValueError(
-                f"Bar diameter {v} mm is outside typical range (6-50 mm). "
-                "Check if this is correct."
+                f"Bar diameter {v} mm is not a standard size. "
+                f"Must be one of {list(standard_diameters)} mm."
             )
         return v
 
@@ -138,40 +139,45 @@ class ShearRebar(Rebar):
         angle_rad = math.radians(self.angle)
         return self.total_area_per_spacing / (self.spacing * math.sin(angle_rad))
 
+    def find_max_link_spacing(self, effective_depth: float) -> float:
+        """
+        Maximum longitudinal spacing between shear links (EC2 §9.2.2(6), Eq. 9.6N).
+
+        s_l,max = 0.75 · d · (1 + cot α)
+
+        where:
+        - d is the effective depth
+        - α is the angle of links to member axis
+
+        For vertical links (α = 90°), cot(90°) = 0, so s_l,max = 0.75·d
+
+        Args:
+            effective_depth: Effective depth of section in mm
+
+        Returns:
+            Maximum spacing in mm
+        """
+        angle_rad = math.radians(self.angle)
+        cot_alpha = 1.0 / math.tan(angle_rad)
+        return 0.75 * effective_depth * (1 + cot_alpha)
+
+    def find_max_leg_spacing(self, effective_depth: float) -> float:
+        """
+        Maximum transverse spacing between link legs (EC2 §9.2.2(8), Eq. 9.8N).
+
+        s_t,max = max(600 mm, 0.75·d)
+
+        Args:
+            effective_depth: Effective depth of section in mm
+
+        Returns:
+            Maximum leg spacing in mm
+        """
+        return max(600.0, 0.75 * effective_depth)
+
     def __str__(self) -> str:
         """User-friendly representation."""
         return (
             f"ϕ{self.diameter} {self.grade} links @ {self.spacing}mm c/c, "
             f"{self.n_legs} legs, {self.angle}°"
         )
-
-
-def create_standard_rebar(
-    diameter: BarDiameter,
-    grade: ReinforcingSteelGrade = "B500B",
-    name: Optional[str] = None,
-) -> Rebar:
-    """
-    Factory function to create standard rebars.
-
-    Args:
-        diameter: Standard bar diameter (6-40 mm)
-        grade: Steel grade (default: B500B)
-        name: Optional custom name
-
-    Returns:
-        Rebar instance
-
-    Example:
-        >>> bar = create_standard_rebar(16, "B500B")
-        >>> print(bar)
-        ϕ16 B500B (A=201.1 mm²)
-    """
-    if name is None:
-        name = f"ϕ{diameter} {grade}"
-
-    return Rebar(
-        name=name,
-        grade=grade,
-        diameter=float(diameter),
-    )

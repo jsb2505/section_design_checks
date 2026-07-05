@@ -4,12 +4,12 @@ Reinforcing steel material properties according to Eurocode 2.
 Implements characteristic and design strengths for reinforcing bar grades.
 """
 
-from typing import Literal, Optional
+from typing import Literal, Optional, get_args
 from pydantic import Field, field_validator, computed_field
 from materials.core.base_material import BaseMaterial
 
 
-# Steel grades according to EC2 §C.1
+# Steel grades according to EC2 §C.1 (single source of truth)
 ReinforcingSteelGrade = Literal["B500A", "B500B", "B500C"]
 
 
@@ -27,8 +27,8 @@ class ReinforcingSteel(BaseMaterial):
 
     name: str = Field(default="Reinforcing Steel", description="Material name")
     grade: ReinforcingSteelGrade = Field(
-        ...,
-        description="Steel grade per EC2 Annex C"
+        default="B500B",
+        description="Steel grade per EC2 Annex C (defaults to B500B)"
     )
 
     gamma_s: float = Field(
@@ -54,11 +54,11 @@ class ReinforcingSteel(BaseMaterial):
     @classmethod
     def validate_grade(cls, v: str) -> str:
         """Validate steel grade."""
-        valid_grades = ["B500A", "B500B", "B500C"]
+        valid_grades = get_args(ReinforcingSteelGrade)
         if v not in valid_grades:
             raise ValueError(
                 f"Invalid steel grade: {v}. "
-                f"Must be one of {valid_grades}"
+                f"Must be one of {list(valid_grades)}"
             )
         return v
 

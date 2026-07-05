@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from materials.reinforced_concrete.materials import (
     Rebar,
     ShearRebar,
-    create_standard_rebar,
 )
 
 
@@ -47,13 +46,13 @@ class TestRebar:
         assert rebar_16.perimeter == pytest.approx(expected, rel=1e-6)
 
     def test_diameter_validation_too_small(self):
-        """Test that very small diameters trigger warning."""
-        with pytest.raises(ValidationError, match="outside typical range"):
+        """Test that non-standard diameters are rejected."""
+        with pytest.raises(ValidationError, match="not a standard size"):
             Rebar(diameter=4, grade="B500B")
 
     def test_diameter_validation_too_large(self):
-        """Test that very large diameters trigger warning."""
-        with pytest.raises(ValidationError, match="outside typical range"):
+        """Test that non-standard diameters are rejected."""
+        with pytest.raises(ValidationError, match="not a standard size"):
             Rebar(diameter=60, grade="B500B")
 
     def test_diameter_validation_negative(self):
@@ -175,30 +174,29 @@ class TestShearRebar:
         assert "90" in s  # angle
 
 
-class TestCreateStandardRebar:
-    """Tests for create_standard_rebar factory function."""
+class TestRebarInstantiation:
+    """Tests for Rebar instantiation with default grade."""
 
-    def test_create_standard_rebar_default(self):
-        """Test creating standard rebar with defaults."""
-        bar = create_standard_rebar(16)
+    def test_rebar_default_grade(self):
+        """Test creating rebar with default grade."""
+        bar = Rebar(diameter=16)
         assert bar.diameter == 16
         assert bar.grade == "B500B"
-        assert "ϕ16" in bar.name or "16" in bar.name
 
-    def test_create_standard_rebar_custom_grade(self):
+    def test_rebar_custom_grade(self):
         """Test creating with custom grade."""
-        bar = create_standard_rebar(20, grade="B500C")
+        bar = Rebar(diameter=20, grade="B500C")
         assert bar.diameter == 20
         assert bar.grade == "B500C"
 
-    def test_create_standard_rebar_custom_name(self):
+    def test_rebar_custom_name(self):
         """Test creating with custom name."""
-        bar = create_standard_rebar(16, name="Main reinforcement")
+        bar = Rebar(diameter=16, name="Main reinforcement")
         assert bar.name == "Main reinforcement"
 
-    def test_create_all_standard_diameters(self):
+    def test_all_standard_diameters(self):
         """Test creating all standard diameters."""
         diameters = [6, 8, 10, 12, 16, 20, 25, 32, 40]
         for d in diameters:
-            bar = create_standard_rebar(d)
+            bar = Rebar(diameter=d)
             assert bar.diameter == d

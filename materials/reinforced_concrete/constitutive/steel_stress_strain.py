@@ -22,15 +22,15 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
     - Elastic branch: σ = E_s · ε (up to ε_yd)
     - Plastic branch: σ = f_yd (horizontal) or linearly increases to f_t (inclined)
 
-    Formulation (inclined branch):
+    Formulation (inclined branch - §3.2.7(2), option a):
         σ_s = E_s · ε                           for |ε| ≤ ε_yd
         σ_s = f_yd + (f_t - f_yd)·(ε - ε_yd)/(ε_ud - ε_yd)  for ε_yd < |ε| ≤ ε_ud
         σ_s = 0                                  for |ε| > ε_ud
 
-    Formulation (horizontal branch):
+    Formulation (horizontal branch - §3.2.7(2), option b):
         σ_s = E_s · ε                           for |ε| ≤ ε_yd
-        σ_s = f_yd                              for ε_yd < |ε| ≤ ε_ud
-        σ_s = 0                                  for |ε| > ε_ud
+        σ_s = f_yd                              for |ε| > ε_yd
+        (No strain limit - continues indefinitely at f_yd)
     """
 
     steel: ReinforcingSteel = Field(
@@ -80,18 +80,18 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         abs_strain = abs(strain)
         sign = 1.0 if strain >= 0 else -1.0
 
-        # Beyond ultimate strain
-        if abs_strain > self.steel.epsilon_ud:
-            return 0.0
-
         # Elastic region
         if abs_strain <= self.epsilon_y:
             return self.steel.E_s * strain
 
         # Plastic region
         if self.branch_type == "horizontal":
+            # Horizontal branch: no strain limit per EC2 §3.2.7(2) option b
             return sign * self.f_y
         else:  # inclined
+            # Inclined branch: strain limit applies per EC2 §3.2.7(2) option a
+            if abs_strain > self.steel.epsilon_ud:
+                return 0.0
             # Linear interpolation from f_y to f_t
             strain_ratio = (abs_strain - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
             stress = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
@@ -107,23 +107,32 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         elastic = abs_strains <= self.epsilon_y
         stresses[elastic] = self.steel.E_s * strains[elastic]
 
-        # Plastic region (below ultimate)
-        plastic = (abs_strains > self.epsilon_y) & (abs_strains <= self.steel.epsilon_ud)
-
+        # Plastic region
         if self.branch_type == "horizontal":
+            # Horizontal branch: no strain limit (all strains beyond yield)
+            plastic = abs_strains > self.epsilon_y
             stresses[plastic] = signs[plastic] * self.f_y
         else:  # inclined
+            # Inclined branch: only up to ultimate strain
+            plastic = (abs_strains > self.epsilon_y) & (abs_strains <= self.steel.epsilon_ud)
             strain_ratio = (abs_strains[plastic] - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
             stress_magnitude = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
             stresses[plastic] = signs[plastic] * stress_magnitude
-
-        # Beyond ultimate: already zero
+            # Beyond ultimate: already zero
 
         return stresses
 
     def get_ultimate_strain(self) -> float:
-        """Return ultimate strain."""
-        return self.steel.epsilon_ud
+        """
+        Return ultimate strain.
+
+        For inclined branch: ε_ud (strain limit applies)
+        For horizontal branch: inf (no strain limit per EC2 §3.2.7(2) option b)
+        """
+        if self.branch_type == "horizontal":
+            return float('inf')
+        else:
+            return self.steel.epsilon_ud
 
     def get_yield_stress(self) -> float:
         """Return yield strength."""
