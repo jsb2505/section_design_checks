@@ -30,7 +30,7 @@ class TestBaseMaterial:
         assert mat.density == 2400.0
         assert mat.get_elastic_modulus() == 30000.0
 
-    def test_material_name_required(self):
+    def test_material_name_non_empty(self):
         """Test that name is required."""
         with pytest.raises(ValidationError):
             ConcreteMaterialTest(
@@ -38,6 +38,14 @@ class TestBaseMaterial:
                 density=2400.0,
                 elastic_modulus=30000.0,
             )
+    
+    def test_material_name_missing(self):
+        with pytest.raises(ValidationError):
+            ConcreteMaterialTest(density=2400.0, elastic_modulus=30000.0)
+
+    def test_base_material_cannot_instantiate(self):
+        with pytest.raises(TypeError):
+            BaseMaterial(name="X", density=1.0)  # abstract
 
     def test_density_positive(self):
         """Test that density must be positive."""
@@ -84,6 +92,7 @@ class TestBaseMaterial:
         with pytest.raises(ValidationError):
             ConcreteMaterialTest(
                 name="Test",
+                density=2400.0,
                 elastic_modulus=30000.0,
                 extra_field="not allowed",
             )

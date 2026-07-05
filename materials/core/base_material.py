@@ -5,7 +5,6 @@ Provides common interface and validation for material properties.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 
@@ -19,7 +18,7 @@ class BaseMaterial(BaseModel, ABC):
 
     model_config = ConfigDict(
         validate_assignment=True,
-        arbitrary_types_allowed=True,
+        arbitrary_types_allowed=False,
         extra="forbid",
         frozen=False,
     )
@@ -48,7 +47,10 @@ class BaseMaterial(BaseModel, ABC):
 
     def __repr__(self) -> str:
         """String representation."""
-        return f"{self.__class__.__name__}(name='{self.name}')"
+        return (
+            f"{self.__class__.__name__}, "
+            f"(name='{self.name}, density='{self.density}')"
+        )
 
     def __str__(self) -> str:
         """User-friendly string representation."""
