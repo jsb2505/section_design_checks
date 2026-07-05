@@ -98,6 +98,19 @@ def _show_or_save(fig: Any, *, save_path: Optional[Union[str, Path]], show: bool
         fig.show()
 
 
+def _utilization_colorscale(*, zmin: float, zmax: float) -> list[list[Union[float, str]]]:
+    """Return a colorscale with utilization 1.0 fixed at white."""
+    if np.isclose(zmax, zmin):
+        white_anchor = 0.5
+    else:
+        white_anchor = float(np.clip((1.0 - zmin) / (zmax - zmin), 0.0, 1.0))
+    return [
+        [0.0, "#1a9850"],
+        [white_anchor, "#ffffff"],
+        [1.0, "#d73027"],
+    ]
+
+
 class ShearViewer:
     """Plotting utilities for ``ShearCheck`` comparative studies."""
 
@@ -121,9 +134,21 @@ class ShearViewer:
         N_Ed = float(load_case.N_Ed)
 
         if abs(M_Ed) > 1e-6:
-            eps_top, eps_bottom = self.check._get_diagram(ignore_compression_steel).find_strains_for_MN(M_Ed, N_Ed)
+            diagram = self.check._get_diagram(ignore_compression_steel)
+            eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed)
+            # Detect if the load case is outside the interaction envelope.
+            # When strict=True fails, the strains from strict=False are
+            # "nearest feasible" projections — not true equilibrium — so
+            # z_mech from those strains can be misleading.  Force the
+            # virtual lever arm in that case.
+            try:
+                diagram.find_strains_for_MN(M_Ed, N_Ed, strict=True)
+                force_virtual = False
+            except ValueError:
+                force_virtual = True
         else:
             eps_top, eps_bottom = None, None
+            force_virtual = False
 
         d = self.check.find_effective_depth(
             M_Ed,
@@ -152,6 +177,7 @@ class ShearViewer:
             eps_top=eps_top,
             eps_bottom=eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
+            force_virtual=force_virtual,
         )
         cot_min, cot_max = self.check._find_cot_theta_limits(sigma_cp=sigma_cp, z=z, V_Ed=V_Ed)
 
@@ -355,7 +381,7 @@ class ShearViewer:
 
         Args:
             load_case: Shear demand definition as either ``ShearLoadCase`` or a
-                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
+                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN·m).
             n_points: Number of cot(theta) samples in the sweep.
             cot_theta_min: Optional lower bound for cot(theta). If ``None``,
                 the EC2-based minimum from the current check context is used.
@@ -529,7 +555,7 @@ class ShearViewer:
 
         Args:
             load_case: Shear demand definition as either ``ShearLoadCase`` or a
-                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
+                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN·m).
             n_points: Number of cot(theta) samples in the sweep.
             cot_theta_min: Optional lower bound for cot(theta). If ``None``,
                 the EC2-based minimum from the current check context is used.
@@ -590,7 +616,7 @@ class ShearViewer:
                 mode="lines",
                 name="M_add (tension shift)",
                 line=dict(color="#9467bd"),
-                hovertemplate="cot(theta): %{x:.3f}<br>M_add: %{y:.2f} kN*m<extra></extra>",
+                hovertemplate="cot(theta): %{x:.3f}<br>M_add: %{y:.2f} kN·m<extra></extra>",
             ),
             secondary_y=True,
         )
@@ -600,15 +626,45 @@ class ShearViewer:
                 y=[1.0] * len(series.cot_vals),
                 mode="lines",
                 name="Utilization = 1.0",
-                line=dict(color="black", dash="dot"),
+                line=dict(color="#ff0000", dash="dot"),
                 hovertemplate="Utilization limit<extra></extra>",
             ),
             secondary_y=False,
         )
 
+        util_intersection = self._find_curve_intersection_x(
+            series.cot_vals,
+            series.util_vals,
+            [1.0] * len(series.cot_vals),
+        )
+        if util_intersection is not None:
+            m_add_intersection = float(
+                np.interp(
+                    util_intersection,
+                    series.cot_vals,
+                    np.asarray(series.M_add_vals, dtype=float),
+                ),
+            )
+            y_vertical = np.linspace(0.0, 1.0, 25)
+            fig.add_trace(
+                go.Scatter(
+                    x=[util_intersection] * len(y_vertical),
+                    y=y_vertical,
+                    mode="lines",
+                    name="Utilization = 1.0 intercept",
+                    line=dict(color="#2f2f2f", dash="dash"),
+                    customdata=[[util_intersection, m_add_intersection]] * len(y_vertical),
+                    hovertemplate=(
+                        "cot(theta): %{customdata[0]:.3f}<br>"
+                        "M_add: %{customdata[1]:.2f} kN·m<extra></extra>"
+                    ),
+                ),
+                secondary_y=False,
+            )
+
         fig.update_xaxes(title_text="cot(theta)")
         fig.update_yaxes(title_text="Utilization (-)", secondary_y=False)
-        fig.update_yaxes(title_text="M_add (kN*m)", secondary_y=True)
+        fig.update_yaxes(title_text="M_add (kN·m)", secondary_y=True)
         fig.update_layout(
             title=title or "Tension-Shift Study vs cot(theta)",
             template="plotly_white",
@@ -728,7 +784,7 @@ class ShearViewer:
 
         Args:
             load_case: Shear demand definition as either ``ShearLoadCase`` or a
-                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
+                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN·m).
             cot_theta: Fixed cot(theta) used for the angle sweep. If ``None``,
                 it is derived from ``V_Ed`` and section context.
             angle_min: Minimum link angle (degrees).
@@ -859,7 +915,7 @@ class ShearViewer:
 
         Args:
             load_case: Shear demand definition as either ``ShearLoadCase`` or a
-                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
+                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN·m).
             cot_theta: Fixed cot(theta) used for the angle sweep. If ``None``,
                 it is derived from ``V_Ed`` and section context.
             angle_min: Minimum link angle (degrees).
@@ -983,7 +1039,7 @@ class ShearViewer:
 
         Args:
             load_case: Shear demand definition as either ``ShearLoadCase`` or a
-                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
+                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN·m).
             cot_theta_min: Optional lower bound for cot(theta). If ``None``,
                 the EC2-based minimum from the current check context is used.
             cot_theta_max: Optional upper bound for cot(theta). If ``None``,
@@ -1062,9 +1118,9 @@ class ShearViewer:
 
         if metric_key == "utilization":
             colorbar_title = "Utilization (-)"
-            colorscale = "RdYlGn_r"
             zmin = 0.0
             zmax = max(1.5, float(np.nanmax(Z)))
+            colorscale = _utilization_colorscale(zmin=zmin, zmax=zmax)
             contour_trace = go.Contour(
                 x=cot_vals,
                 y=angle_vals,
@@ -1221,9 +1277,9 @@ class ShearViewer:
 
         if metric_key == "utilization":
             colorbar_title = "Utilization (-)"
-            colorscale = "RdYlGn_r"
             zmin = 0.0
             zmax = max(1.5, float(np.nanmax(Z)))
+            colorscale = _utilization_colorscale(zmin=zmin, zmax=zmax)
             contour_trace = go.Contour(
                 x=cot_vals,
                 y=n_vals,

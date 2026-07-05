@@ -45,7 +45,7 @@ def test_mn_interaction_overrides_moment_sign():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=False,  # Approximate mode
+        use_mechanical_lever_arm=False,  # Approximate mode
     )
 
     # Large compression + small hogging moment
@@ -64,7 +64,7 @@ def test_mn_interaction_overrides_moment_sign():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
     )
 
     result_rigorous = check_rigorous.perform_check(load_case=load_case)
@@ -115,7 +115,7 @@ def test_approximate_vs_simple_sign_check():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=False,
+        use_mechanical_lever_arm=False,
     )
 
     print("\n=== Test Cases Comparing M-N Solver vs Naive Sign Check ===")
@@ -179,7 +179,7 @@ def test_lever_arm_difference():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=False,
+        use_mechanical_lever_arm=False,
     )
 
     # Rigorous mode
@@ -187,7 +187,7 @@ def test_lever_arm_difference():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
     )
 
     load_case = ShearLoadCase(V_Ed=150, M_Ed=50, N_Ed=100)

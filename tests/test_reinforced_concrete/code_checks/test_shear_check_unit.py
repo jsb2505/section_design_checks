@@ -63,7 +63,7 @@ def _make_stub_shear_check() -> ShearCheck:
     object.__setattr__(check, "concrete", concrete)
     object.__setattr__(check, "shear_reinforcement", shear_reinf)
     object.__setattr__(check, "use_accidental", False)
-    object.__setattr__(check, "use_rigorous", True)
+    object.__setattr__(check, "use_mechanical_lever_arm", True)
     object.__setattr__(check, "allow_negative_sigma_cp", True)
     object.__setattr__(check, "use_transformed_area_for_sigma_cp", True)
     object.__setattr__(check, "use_sigma_cp_for_alpha_cw", False)
@@ -294,11 +294,11 @@ class TestPropertiesAndDepths:
         assert d3 == pytest.approx(450.0, rel=1e-12)
 
         # Non-rigorous lever arm.
-        object.__setattr__(check, "use_rigorous", False)
+        object.__setattr__(check, "use_mechanical_lever_arm", False)
         assert check.find_lever_arm(M_Ed=10.0, N_Ed=0.0, d=400.0) == (360.0, None)
 
         # Rigorous lever arm path delegates to diagram.
-        object.__setattr__(check, "use_rigorous", True)
+        object.__setattr__(check, "use_mechanical_lever_arm", True)
         object.__setattr__(
             check,
             "_get_diagram",
@@ -421,7 +421,7 @@ class TestPropertiesAndDepths:
         check = _make_stub_shear_check()
 
         # Approximate mode with strain input delegates to strain helper method.
-        object.__setattr__(check, "use_rigorous", False)
+        object.__setattr__(check, "use_mechanical_lever_arm", False)
         monkeypatch.setattr(ShearCheck, "_compute_rho_l_from_strains", lambda self, eps_top, eps_bottom, d: 0.011)
         assert check._find_rho_l(M_Ed=10.0, N_Ed=0.0, d=400.0, eps_top=0.001, eps_bottom=-0.001) == pytest.approx(0.011, rel=1e-12)
 
@@ -430,7 +430,7 @@ class TestPropertiesAndDepths:
         assert check._find_rho_l(M_Ed=10.0, N_Ed=0.0, d=400.0) == pytest.approx(0.0, rel=1e-12)
 
         # Rigorous mode pulls strains from diagram when missing.
-        object.__setattr__(check, "use_rigorous", True)
+        object.__setattr__(check, "use_mechanical_lever_arm", True)
         object.__setattr__(
             check,
             "_get_diagram",
@@ -440,7 +440,7 @@ class TestPropertiesAndDepths:
         assert check._find_rho_l(M_Ed=10.0, N_Ed=0.0, d=400.0) == pytest.approx(0.015, rel=1e-12)
 
         # Approximate centroid fallback with tension bars -> clamp to 0.02.
-        object.__setattr__(check, "use_rigorous", False)
+        object.__setattr__(check, "use_mechanical_lever_arm", False)
         check.section.rebar_groups = [
             SimpleNamespace(
                 rebar=SimpleNamespace(area=6000.0),

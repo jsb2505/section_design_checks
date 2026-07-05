@@ -552,7 +552,7 @@ def apply_tension_shift_to_beam(
     shear_reinforcement: "ShearRebar | None" = None,
     cot_theta_override: "float | None" = None,
     iterate_z: bool = False,
-    prefer_rigorous: bool = False,
+    use_mechanical_lever_arm: bool = False,
     z_d_upper: float = 0.95,
     z_d_lower: float = 0.65,
     z_d_approx: float = 0.9,
@@ -573,7 +573,7 @@ def apply_tension_shift_to_beam(
             shear_reinforcement, this value is used directly instead of calculating
             cot(θ) from V_Ed and V_Rd,max. Must be in range [1.0, 2.5].
         iterate_z: If True, iterate to find z at each section (more accurate but slower)
-        prefer_rigorous: If True, attempt to compute the rigorous centroid-based
+        use_mechanical_lever_arm: If True, attempt to compute the rigorous centroid-based
             lever arm from strain analysis. If False (default), use the simplified
             z_d_approx * d approach per EC2 §6.2.3(1).
         z_d_upper: Upper bound for z/d in rigorous mode (default 0.95).
@@ -612,7 +612,7 @@ def apply_tension_shift_to_beam(
             shear_reinforcement=shear_reinforcement,
             cot_theta_override=cot_theta_override,
             iterate_z=iterate_z,
-            prefer_rigorous=prefer_rigorous,
+            use_mechanical_lever_arm=use_mechanical_lever_arm,
             z_d_upper=z_d_upper,
             z_d_lower=z_d_lower,
             z_d_approx=z_d_approx,

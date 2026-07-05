@@ -35,7 +35,7 @@ class _FakeRebar:
 
 
 class _FakeDiagram:
-    def find_strains_for_MN(self, M_Ed: float, N_Ed: float):
+    def find_strains_for_MN(self, M_Ed: float, N_Ed: float, strict: bool = False):
         return (0.001, -0.001)
 
 
@@ -89,6 +89,7 @@ class _FakeCheck:
         eps_top=None,
         eps_bottom=None,
         ignore_compression_steel: bool = False,
+        force_virtual: bool = False,
     ):
         return (450.0, None)
 
@@ -185,6 +186,24 @@ class TestShearViewer:
         assert isinstance(fig, _FakeFigure)
         trace_types = [t[0]["type"] for t in fig.traces]
         assert trace_types.count("Scatter") >= 3
+
+    def test_plot_cot_theta_moment_shift_study_adds_utilization_intercept_trace(self, monkeypatch):
+        _install_fake_plotly(monkeypatch)
+        viewer = ShearViewer(_FakeCheck())
+
+        fig = viewer.plot_cot_theta_moment_shift_study(
+            load_case={"V_Ed": 220.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            n_points=12,
+            show=False,
+        )
+
+        scatter_traces = [t[0] for t in fig.traces if t[0]["type"] == "Scatter"]
+        names = [t.get("name") for t in scatter_traces]
+        assert "Utilization = 1.0 intercept" in names
+
+        intercept_trace = next(t for t in scatter_traces if t.get("name") == "Utilization = 1.0 intercept")
+        assert "cot(theta)" in intercept_trace.get("hovertemplate", "")
+        assert "M_add at util=1.0" in intercept_trace.get("hovertemplate", "")
 
     def test_plot_link_angle_study_builds_traces(self, monkeypatch):
         _install_fake_plotly(monkeypatch)

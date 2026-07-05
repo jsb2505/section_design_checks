@@ -33,7 +33,7 @@ def test_optional_M_Ed():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=False,
+        use_mechanical_lever_arm=False,
     )
 
     # Create load case without M_Ed (should default to 0.0)
@@ -74,7 +74,7 @@ def test_approximate_mode_compression_face():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=False,  # Approximate mode
+        use_mechanical_lever_arm=False,  # Approximate mode
     )
 
     # Test Case 1: M_Ed = 0 (should default to top compression)
@@ -143,7 +143,7 @@ def test_rigorous_mode_with_optional_M():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,  # Rigorous mode
+        use_mechanical_lever_arm=True,  # Rigorous mode
     )
 
     # Test with M_Ed omitted (defaults to 0.0)
@@ -181,7 +181,7 @@ def test_simple_use_case():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=False,  # Fast mode
+        use_mechanical_lever_arm=False,  # Fast mode
     )
 
     # Simplest possible load case - just V_Ed!

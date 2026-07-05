@@ -79,7 +79,7 @@ class BeamCheck(BaseModel):
         description="Use accidental limit state partial factors",
     )
 
-    use_rigorous: bool = Field(
+    use_mechanical_lever_arm: bool = Field(
         default=True,
         description="Use rigorous solver mode in ShearCheck",
     )
@@ -265,7 +265,7 @@ class BeamCheck(BaseModel):
             concrete=self.concrete,
             shear_reinforcement=self.shear_reinforcement,
             use_accidental=self.use_accidental,
-            use_rigorous=self.use_rigorous,
+            use_mechanical_lever_arm=self.use_mechanical_lever_arm,
             allow_negative_sigma_cp=self.allow_negative_sigma_cp,
             use_transformed_area_for_sigma_cp=self.use_transformed_area_for_sigma_cp,
             use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,

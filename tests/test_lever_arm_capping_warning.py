@@ -50,7 +50,7 @@ def test_lever_arm_clamping_warning():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
     )
 
     # Try low moments to maximize lever arm
@@ -104,7 +104,7 @@ def test_lever_arm_clamping_warning():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
         z_d_ratio_upper=1.0,
         z_d_ratio_lower=0.10,
     )

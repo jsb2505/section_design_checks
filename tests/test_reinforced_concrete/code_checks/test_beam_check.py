@@ -145,18 +145,18 @@ def test_with_updates_rebuilds_sub_checks(
         section=rectangular_beam_with_rebars,
         concrete=concrete_c30,
         shear_reinforcement=shear_links,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
         w_k_limit=0.30,
     )
 
-    updated = check.with_updates(use_rigorous=False, w_k_limit=0.20)
+    updated = check.with_updates(use_mechanical_lever_arm=False, w_k_limit=0.20)
 
     assert updated is not check
-    assert check.use_rigorous is True
-    assert updated.use_rigorous is False
+    assert check.use_mechanical_lever_arm is True
+    assert updated.use_mechanical_lever_arm is False
     assert updated.w_k_limit == pytest.approx(0.20, rel=1e-12)
-    assert check.shear.kwargs["use_rigorous"] is True
-    assert updated.shear.kwargs["use_rigorous"] is False
+    assert check.shear.kwargs["use_mechanical_lever_arm"] is True
+    assert updated.shear.kwargs["use_mechanical_lever_arm"] is False
 
 
 def test_ndp_context_warning():

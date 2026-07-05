@@ -734,7 +734,7 @@ def test_get_lever_arm_invalid_depth_raises(diagram: MNInteractionDiagram) -> No
 
 def test_get_lever_arm_simple_09d_path(diagram: MNInteractionDiagram) -> None:
     """Test get lever arm simple 09d path."""
-    z, z_mech = diagram.get_lever_arm(M_Ed=10.0, N_Ed=0.0, d=500.0, prefer_rigorous=False)
+    z, z_mech = diagram.get_lever_arm(M_Ed=10.0, N_Ed=0.0, d=500.0, use_mechanical_lever_arm=False)
     assert z == pytest.approx(450.0)
     assert z_mech is None
 
@@ -744,7 +744,7 @@ def test_get_lever_arm_computes_depth_when_missing(
 ) -> None:
     """Test get lever arm computes depth when missing."""
     monkeypatch.setattr(diagram, "get_effective_depth", lambda *_args, **_kwargs: 500.0)
-    z, z_mech = diagram.get_lever_arm(M_Ed=10.0, N_Ed=0.0, d=None, prefer_rigorous=False)
+    z, z_mech = diagram.get_lever_arm(M_Ed=10.0, N_Ed=0.0, d=None, use_mechanical_lever_arm=False)
     assert z == pytest.approx(450.0)
     assert z_mech is None
 
@@ -759,7 +759,7 @@ def test_get_lever_arm_fallback_and_cap_branches(
             M_Ed=0.0,
             N_Ed=0.0,
             d=500.0,
-            prefer_rigorous=True,
+            use_mechanical_lever_arm=True,
             warn_on_fallback=True,
         )
     assert z0 == pytest.approx(450.0)
@@ -774,7 +774,7 @@ def test_get_lever_arm_fallback_and_cap_branches(
             d=500.0,
             eps_top=0.001,
             eps_bottom=-0.001,
-            prefer_rigorous=True,
+            use_mechanical_lever_arm=True,
             warn_on_fallback=True,
         )
     assert z1 == pytest.approx(450.0)
@@ -789,7 +789,7 @@ def test_get_lever_arm_fallback_and_cap_branches(
             d=500.0,
             eps_top=0.001,
             eps_bottom=-0.001,
-            prefer_rigorous=True,
+            use_mechanical_lever_arm=True,
             warn_on_fallback=True,
         )
     assert z2 == pytest.approx(325.0)
@@ -804,7 +804,7 @@ def test_get_lever_arm_fallback_and_cap_branches(
             d=500.0,
             eps_top=0.001,
             eps_bottom=-0.001,
-            prefer_rigorous=True,
+            use_mechanical_lever_arm=True,
         )
     assert z3 == pytest.approx(475.0)
     assert z_mech3 == pytest.approx(600.0)
@@ -822,22 +822,27 @@ def test_get_lever_arm_fallback_full_compression_uses_lower_bound(
             d=500.0,
             eps_top=0.001,
             eps_bottom=0.0005,
-            prefer_rigorous=True,
+            use_mechanical_lever_arm=True,
             warn_on_fallback=True,
         )
     assert z == pytest.approx(325.0)  # z_d_lower * d
     assert z_mech is None
 
 
-def test_get_lever_arm_fallback_mixed_strain_but_no_tension_uses_lower_bound(
+def test_get_lever_arm_fallback_no_tension_uses_virtual(
     diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If there is no tension resultant, fallback should be lower bound."""
+    """No tension resultant should use virtual lever arm.
+
+    Virtual z = |y_C − extreme_tension_rebar_y|.  Compression at top
+    (eps_top > eps_bottom), so extreme tension rebar = min steel y = 50.
+    y_C = (200*350 + 800*450) / 1000 = 430. z = |430 − 50| = 380.
+    """
     monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: None)
     monkeypatch.setattr(
         diagram,
         "get_fibre_forces_from_end_strains",
-        lambda *_: (np.array([5.0, 10.0]), np.array([0.0, 100.0]), np.array([1.0, 1.0])),
+        lambda *_: (np.array([200.0, 800.0]), np.array([350.0, 450.0]), np.array([1.0, 1.0])),
     )
     with pytest.warns(UserWarning, match="unable to compute"):
         z, z_mech = diagram.get_lever_arm(
@@ -845,36 +850,93 @@ def test_get_lever_arm_fallback_mixed_strain_but_no_tension_uses_lower_bound(
             N_Ed=500.0,
             d=500.0,
             eps_top=0.001,
-            eps_bottom=-0.001,  # mixed signs, but no tension resultant in forces
-            prefer_rigorous=True,
+            eps_bottom=-0.001,
+            use_mechanical_lever_arm=True,
             warn_on_fallback=True,
         )
-    assert z == pytest.approx(325.0)  # z_d_lower * d
+    # y_C = (200*350 + 800*450)/1000 = 430; extreme rebar = 50; z = 380
+    assert z == pytest.approx(380.0)
     assert z_mech is None
 
 
-def test_get_lever_arm_fallback_near_pure_tension_uses_upper_bound(
+def test_get_lever_arm_fallback_near_pure_tension_uses_virtual(
     diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Tiny compression resultant should still be treated as near pure tension."""
+    """Pure tension resultant (no compression) should use virtual lever arm.
+
+    Virtual z = |comp_face − y_T|. With compression at top (eps_top > eps_bottom),
+    comp_face = max concrete fibre y (468.75 for 8-fibre mesh on 500mm section).
+    Tension centroid y_T = 150.0. z = |468.75 − 150| = 318.75, clamped to
+    z_lower = 0.65 × 500 = 325.
+    """
     monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: None)
     monkeypatch.setattr(
         diagram,
         "get_fibre_forces_from_end_strains",
-        lambda *_: (np.array([-1000.0, 1.0]), np.array([0.0, 100.0]), np.array([1.0, 1.0])),
+        lambda *_: (np.array([-500.0, -500.0]), np.array([50.0, 250.0]), np.array([1.0, 1.0])),
     )
     with pytest.warns(UserWarning, match="unable to compute"):
         z, z_mech = diagram.get_lever_arm(
             M_Ed=10.0,
             N_Ed=-500.0,
             d=500.0,
-            eps_top=-0.001,
-            eps_bottom=0.001,
-            prefer_rigorous=True,
+            eps_top=0.001,
+            eps_bottom=-0.001,
+            use_mechanical_lever_arm=True,
             warn_on_fallback=True,
         )
-    assert z == pytest.approx(475.0)  # z_d_upper * d
+    # z_fb = |468.75 − 150| = 318.75 < z_lower = 325 → clamped
+    assert z == pytest.approx(325.0)
     assert z_mech is None
+
+
+def test_get_lever_arm_force_virtual_skips_z_mech(
+    diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """force_virtual=True bypasses centroid z_mech even when it would succeed."""
+    # _compute_lever_arm_from_centroids would return 400 if called
+    monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: 400.0)
+    # Provide forces with only tension (no compression) so virtual path triggers
+    monkeypatch.setattr(
+        diagram,
+        "get_fibre_forces_from_end_strains",
+        lambda *_: (np.array([-800.0, -200.0]), np.array([50.0, 450.0]), np.array([1.0, 1.0])),
+    )
+    with pytest.warns(UserWarning, match="unable to compute"):
+        z, z_mech = diagram.get_lever_arm(
+            M_Ed=10.0,
+            N_Ed=-500.0,
+            d=500.0,
+            eps_top=0.001,
+            eps_bottom=-0.001,
+            use_mechanical_lever_arm=True,
+            warn_on_fallback=True,
+            force_virtual=True,
+        )
+    # y_T = (800*50 + 200*450)/1000 = 130; comp_face = 468.75 (top concrete fibre)
+    # z = |468.75 − 130| = 338.75
+    assert z == pytest.approx(338.75)
+    assert z_mech is None
+
+
+def test_extreme_tension_rebar_y_compression_at_top(
+    diagram: MNInteractionDiagram,
+) -> None:
+    """Compression at top → extreme tension rebar is the one with min y."""
+    # eps_top=0.002 > eps_bottom=-0.001 → compression at top
+    y = diagram._extreme_tension_rebar_y(0.002, -0.001)
+    # Bottom rebars at y=50 in the fixture
+    assert y == pytest.approx(50.0)
+
+
+def test_extreme_tension_rebar_y_compression_at_bottom(
+    diagram: MNInteractionDiagram,
+) -> None:
+    """Compression at bottom → extreme tension rebar is the one with max y."""
+    # eps_bottom=0.002 > eps_top=-0.001 → compression at bottom
+    y = diagram._extreme_tension_rebar_y(-0.001, 0.002)
+    # Only bottom rebars at y=50 in the fixture (no top steel)
+    assert y == pytest.approx(50.0)
 
 
 def test_get_lever_arm_valid_rigorous_value(diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -887,7 +949,7 @@ def test_get_lever_arm_valid_rigorous_value(diagram: MNInteractionDiagram, monke
         M_Ed=50.0,
         N_Ed=10.0,
         d=500.0,
-        prefer_rigorous=True,
+        use_mechanical_lever_arm=True,
         z_d_lower=0.10,
     )
     assert z == pytest.approx(300.0)
@@ -942,16 +1004,17 @@ def test_compute_lever_arm_from_centroids_zero_total_branch(
     assert diagram._compute_lever_arm_from_centroids(0.001, -0.001) is None
 
 
-def test_compute_lever_arm_from_centroids_unbalanced_resultants_returns_none(
+def test_compute_lever_arm_from_centroids_unbalanced_resultants_computes_z(
     diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Near one-sided resultants should be treated as ill-conditioned."""
+    """Unbalanced resultants still produce a valid centroid lever arm."""
     monkeypatch.setattr(
         diagram,
         "get_fibre_forces_from_end_strains",
         lambda *_: (np.array([-1.0, 1000.0]), np.array([0.0, 100.0]), np.array([1.0, 1.0])),
     )
-    assert diagram._compute_lever_arm_from_centroids(0.001, -0.001) is None
+    # y_T = 0.0 (tension at fibre 0), y_C = 100.0 (compression at fibre 1)
+    assert diagram._compute_lever_arm_from_centroids(0.001, -0.001) == pytest.approx(100.0)
 
 
 def test_capacity_vector_insufficient_points(diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1193,7 +1256,7 @@ def test_apply_tension_shift_iterative_with_shear_reinforcement(
         N_Ed=200.0,
         shear_reinforcement=shear_links,
         iterate_z=True,
-        prefer_rigorous=True,
+        use_mechanical_lever_arm=True,
     )
 
     assert len(calls) >= 3

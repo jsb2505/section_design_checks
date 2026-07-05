@@ -51,7 +51,7 @@ class DummyDiagram:
         d,
         eps_top,
         eps_bottom,
-        prefer_rigorous,
+        use_mechanical_lever_arm,
         z_d_upper,
         z_d_lower,
         z_d_approx,

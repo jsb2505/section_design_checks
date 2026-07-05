@@ -1602,6 +1602,32 @@ class MNInteractionDiagram:
             warn_on_fallback=False,
         )
 
+    def _extreme_tension_rebar_y(
+        self, eps_top: float, eps_bottom: float
+    ) -> float:
+        """Y-coordinate of the rebar layer furthest from the compression face.
+
+        When the section is in net compression (no tension resultant), this
+        provides a geometric anchor for the virtual lever arm — the point where
+        tension was last present before vanishing.
+        """
+        steel_mask = self._fibre_mat == "steel"
+        steel_y = self._fibre_y[steel_mask]
+        if len(steel_y) == 0:
+            # No steel fibres — fall back to section boundary on the tension side
+            if eps_top >= eps_bottom:
+                return self.section_bottom
+            return self.section_top
+
+        # Compression face is at the end with higher (more compressive) strain.
+        # The extreme tension rebar is the one furthest from the compression face.
+        if eps_top >= eps_bottom:
+            # Compression at top → tension side is bottom → min y
+            return float(np.min(steel_y))
+        else:
+            # Compression at bottom → tension side is top → max y
+            return float(np.max(steel_y))
+
     def get_lever_arm(
         self,
         M_Ed: float,
@@ -1610,25 +1636,32 @@ class MNInteractionDiagram:
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
         *,
-        prefer_rigorous: bool = True,
+        use_mechanical_lever_arm: bool = True,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
         warn_on_fallback: bool = True,
+        force_virtual: bool = False,
     ) -> tuple[float, Optional[float]]:
         """
         Returns (z_design, z_mech).
 
         z_design is ALWAYS usable for design (finite, positive):
-        - If not prefer_rigorous: returns z_d_approx * d
-        - If prefer_rigorous: computes z_mech from force centroids, then clamps
+        - If not use_mechanical_lever_arm: returns z_d_approx * d
+        - If use_mechanical_lever_arm: computes z_mech from force centroids, then clamps
           to [z_d_lower * d, z_d_upper * d]
-        - Fallback for ill-posed states:
-          no tension resultant / net compression → z_d_lower * d,
-          no compression resultant / net tension → z_d_upper * d,
-          otherwise → z_d_approx * d
+        - Fallback for ill-posed states: uses a virtual lever arm computed from
+          the remaining force resultant centroid and a geometric reference
+          (section boundary or extreme tension rebar position), clamped to bounds.
 
         z_mech is the unclamped centroid-based lever arm if computed, else None.
+
+        Parameters
+        ----------
+        force_virtual : bool
+            If True, skip the centroid-based z_mech and go directly to the
+            virtual lever arm computation.  Used when strains are approximate
+            (e.g. outside the interaction envelope with ``strict=False``).
         """
         # Effective depth
         if d is None:
@@ -1643,7 +1676,7 @@ class MNInteractionDiagram:
         z_approx = z_d_approx * d
 
         # Codified lever arm (non-rigorous)
-        if not prefer_rigorous:
+        if not use_mechanical_lever_arm:
             return (z_approx, None)
 
         # Near-zero moment: centroid lever arm is ill-posed / numerically unstable
@@ -1668,42 +1701,67 @@ class MNInteractionDiagram:
             eps_top, eps_bottom = self.find_strains_for_MN(M_target=M_Ed, N_target=N_Ed)
 
         # Try rigorous centroid-based lever arm
-        z_mech = self._compute_lever_arm_from_centroids(eps_top, eps_bottom)
+        if force_virtual:
+            z_mech = None
+        else:
+            z_mech = self._compute_lever_arm_from_centroids(eps_top, eps_bottom)
 
-        # If not meaningful / suspicious, fall back based on resultant state first
+        # If z_mech is unavailable (one resultant absent, or force_virtual),
+        # compute a virtual lever arm from the remaining resultant centroid
+        # and a geometric reference point.
         if z_mech is None or (not np.isfinite(z_mech)):
-            # Determine fallback from actual force resultants.
-            # This robustly handles cases where strain signs are mixed but there is
-            # effectively no tension resultant (e.g., cracked concrete in tension).
-            forces, _, _ = self.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
-            T_total = float(np.sum(-forces[forces < 0.0]))
-            C_total = float(np.sum(forces[forces > 0.0]))
-
-            # Treat highly unbalanced resultants as effectively one-sided.
-            # This avoids unstable lever-arm switching in near-axial states where
-            # one resultant is numerically tiny.
-            resultant_ratio_tol = 0.02
-            has_meaningful_tension = T_total > 0.0 and (
-                C_total <= 0.0 or (T_total / max(C_total, 1e-12)) >= resultant_ratio_tol
+            forces, y_coords, _ = self.get_fibre_forces_from_end_strains(
+                eps_top, eps_bottom
             )
-            has_meaningful_compression = C_total > 0.0 and (
-                T_total <= 0.0 or (C_total / max(T_total, 1e-12)) >= resultant_ratio_tol
-            )
+            T_mask = forces < 0
+            C_mask = forces > 0
+            T_total = float(np.sum(-forces[T_mask])) if np.any(T_mask) else 0.0
+            C_total = float(np.sum(forces[C_mask])) if np.any(C_mask) else 0.0
 
-            if has_meaningful_compression and not has_meaningful_tension:
-                z_fb = z_lower
-            elif has_meaningful_tension and not has_meaningful_compression:
-                z_fb = z_upper
+            # Compression face: use outermost concrete fibre centroid rather
+            # than the section boundary.  This is the maximum y_C the fibre
+            # model can produce for a vanishingly thin compression zone,
+            # ensuring z_virtual ≤ max(z_mech) and a smooth boundary transition.
+            conc_mask = self._fibre_mat == "concrete"
+            if eps_top >= eps_bottom:
+                comp_face = (
+                    float(np.max(self._fibre_y[conc_mask]))
+                    if np.any(conc_mask)
+                    else self.section_top
+                )
             else:
-                # Secondary fallback from strain signs (compression positive).
-                both_compressive = (eps_top >= 0 and eps_bottom >= 0)
-                both_tensile = (eps_top <= 0 and eps_bottom <= 0)
+                comp_face = (
+                    float(np.min(self._fibre_y[conc_mask]))
+                    if np.any(conc_mask)
+                    else self.section_bottom
+                )
+
+            if T_total > 0.0 and C_total <= 0.0:
+                # No compression: z from section boundary to tension centroid
+                y_T = float(
+                    np.sum((-forces[T_mask]) * y_coords[T_mask]) / T_total
+                )
+                z_fb = abs(comp_face - y_T)
+            elif C_total > 0.0 and T_total <= 0.0:
+                # No tension: z from compression centroid to extreme tension rebar
+                y_C = float(
+                    np.sum((forces[C_mask]) * y_coords[C_mask]) / C_total
+                )
+                y_rebar = self._extreme_tension_rebar_y(eps_top, eps_bottom)
+                z_fb = abs(y_C - y_rebar)
+            else:
+                # Both zero or edge case — strain-sign heuristic
+                both_compressive = eps_top >= 0 and eps_bottom >= 0
+                both_tensile = eps_top <= 0 and eps_bottom <= 0
                 if both_compressive:
                     z_fb = z_lower
                 elif both_tensile:
                     z_fb = z_upper
                 else:
                     z_fb = z_approx
+
+            z_fb = max(z_lower, min(z_fb, z_upper))
+
             if warn_on_fallback:
                 warnings.warn(
                     f"Lever arm fallback to {z_fb:.1f} mm ({z_fb/d:.2f}d): unable to compute "
@@ -1758,11 +1816,6 @@ class MNInteractionDiagram:
 
         # Guard against pathological near-zero totals
         if T_total <= 0 or C_total <= 0:
-            return None
-
-        # Near one-sided resultant states give ill-conditioned centroid lever arms.
-        resultant_ratio = min(T_total, C_total) / max(T_total, C_total)
-        if resultant_ratio < 0.02:
             return None
 
         y_T = np.sum((-forces[tension_mask]) * y_coords[tension_mask]) / T_total
@@ -2355,7 +2408,7 @@ class MNInteractionDiagram:
         *,
         M_Ed: float,
         N_Ed: float,
-        prefer_rigorous: bool = False,
+        use_mechanical_lever_arm: bool = False,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
@@ -2367,7 +2420,7 @@ class MNInteractionDiagram:
         Args:
             M_Ed: Moment for strain analysis (kN·m)
             N_Ed: Axial force (kN, positive = compression)
-            prefer_rigorous: If True, attempt to compute the rigorous centroid-based
+            use_mechanical_lever_arm: If True, attempt to compute the rigorous centroid-based
                 lever arm from strain analysis. If False (default), use the simplified
                 z_d_approx * d approach per EC2 §6.2.3(1).
             z_d_upper: Upper bound for z/d in rigorous mode (default 0.95).
@@ -2396,7 +2449,7 @@ class MNInteractionDiagram:
             d=d,
             eps_top=eps_top,
             eps_bottom=eps_bottom,
-            prefer_rigorous=prefer_rigorous,
+            use_mechanical_lever_arm=use_mechanical_lever_arm,
             z_d_upper=z_d_upper,
             z_d_lower=z_d_lower,
             z_d_approx=z_d_approx,
@@ -2416,7 +2469,7 @@ class MNInteractionDiagram:
         use_v_rd_s_for_cot_theta: bool = False,
         cot_max_override: Optional[float] = None,
         iterate_z: bool = False,
-        prefer_rigorous: bool = False,
+        use_mechanical_lever_arm: bool = False,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
@@ -2449,10 +2502,10 @@ class MNInteractionDiagram:
             iterate_z: If True, iteratively recalculate z based on M_design until
                       convergence (0.5% tolerance, max 5 iterations). Only has an
                       effect when BOTH shear_reinforcement is provided (so a_l depends
-                      on z) AND prefer_rigorous=True (so z depends on M). With
-                      prefer_rigorous=False, z is always z_d_approx*d so iteration
+                      on z) AND use_mechanical_lever_arm=True (so z depends on M). With
+                      use_mechanical_lever_arm=False, z is always z_d_approx*d so iteration
                       is skipped.
-            prefer_rigorous: If True, attempt to compute the rigorous centroid-based
+            use_mechanical_lever_arm: If True, attempt to compute the rigorous centroid-based
                 lever arm from strain analysis. If False (default), use the simplified
                 z_d_approx * d approach per EC2 §6.2.3(1).
             z_d_upper: Upper bound for z/d in rigorous mode (default 0.95).
@@ -2484,7 +2537,7 @@ class MNInteractionDiagram:
         z, d = self._compute_z_d_for_moment(
             M_Ed=M_Ed_original,
             N_Ed=N_Ed,
-            prefer_rigorous=prefer_rigorous,
+            use_mechanical_lever_arm=use_mechanical_lever_arm,
             z_d_upper=z_d_upper,
             z_d_lower=z_d_lower,
             z_d_approx=z_d_approx,
@@ -2526,10 +2579,10 @@ class MNInteractionDiagram:
             cot_max_override=cot_max_override,
         )
 
-        # Iterate z if requested, shear reinforcement is provided, AND prefer_rigorous=True
+        # Iterate z if requested, shear reinforcement is provided, AND use_mechanical_lever_arm=True
         # - Without shear reinforcement: a_l = d which doesn't depend on z
-        # - Without prefer_rigorous: z = 0.9d always (doesn't depend on M)
-        if iterate_z and shear_reinforcement is not None and prefer_rigorous:
+        # - Without use_mechanical_lever_arm: z = 0.9d always (doesn't depend on M)
+        if iterate_z and shear_reinforcement is not None and use_mechanical_lever_arm:
             MAX_ITERATIONS = 5
             CONVERGENCE_TOL = 0.005  # 0.5%
 
@@ -2538,7 +2591,7 @@ class MNInteractionDiagram:
                 z_new, d_new = self._compute_z_d_for_moment(
                     M_Ed=shift_result.M_design,
                     N_Ed=N_Ed,
-                    prefer_rigorous=prefer_rigorous,
+                    use_mechanical_lever_arm=use_mechanical_lever_arm,
                     z_d_upper=z_d_upper,
                     z_d_lower=z_d_lower,
                     z_d_approx=z_d_approx,

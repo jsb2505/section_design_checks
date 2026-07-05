@@ -692,6 +692,174 @@ class TestCrackingAdditionalBranches:
         assert all(c["is_net_tension"] for c in captured_faces)
         assert out_bottom.governing_face == "bottom"
 
+    def test_perform_check_reports_unsolved_when_nonlinear_creep_resolve_fails(
+        self, monkeypatch, concrete_c30
+    ):
+        """Non-linear creep re-solve failure should return an unsolved fail result."""
+        check = CrackingCheck(
+            section=_make_section(),
+            concrete=concrete_c30,
+            check_k2_stress=True,
+            apply_nonlinear_creep=True,
+            iterate_nonlinear_creep=True,
+        )
+
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_get_diagram",
+            lambda self, ignore_compression_steel=False: _FakeDiagram(
+                eps_top=0.0010, eps_bottom=-0.0010
+            ),
+        )
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_get_peak_concrete_stress",
+            lambda self, eps_top, eps_bottom, diagram=None: 24.0,
+        )
+        monkeypatch.setattr(
+            cc_mod,
+            "check_quasi_permanent_concrete_stress",
+            lambda sigma_c, f_ck: (True, "k2"),
+        )
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_compute_nonlinear_creep_coefficient",
+            lambda self, sigma_c: 3.0,
+        )
+
+        class _FailingDiagram(_FakeDiagram):
+            def find_strains_for_MN(self, *args, **kwargs):
+                raise ValueError("outside capacity envelope")
+
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_build_diagram_with_E_c_eff",
+            lambda self, E_c_eff, ignore_compression_steel=False: _FailingDiagram(
+                eps_top=0.0, eps_bottom=0.0
+            ),
+        )
+
+        with pytest.warns(UserWarning, match="k2"):
+            out = check.perform_check(
+                M_Ed=100.0,
+                N_Ed=0.0,
+                force_cracked=True,
+                suppress_warnings=True,
+            )
+
+        assert out.utilization == float("inf")
+        assert out.details["solved"] is False
+        assert out.details["solver_stage"] == "nonlinear_creep"
+        assert out.details["solver_error"] is not None
+        assert "outside capacity envelope" in out.details["solver_error"]
+        assert out.details["solver_residual_N"] is None
+        assert out.details["solver_residual_M"] is None
+        assert out.details["eps_top_pre_nl"] == pytest.approx(0.0010, rel=1e-12)
+        assert out.details["eps_bottom_pre_nl"] == pytest.approx(-0.0010, rel=1e-12)
+
+    def test_calculate_detailed_returns_unsolved_when_nonlinear_creep_resolve_fails(
+        self, monkeypatch, concrete_c30
+    ):
+        """Detailed API should return an unsolved payload when NL creep re-solve fails."""
+        check = CrackingCheck(
+            section=_make_section(),
+            concrete=concrete_c30,
+            check_k2_stress=True,
+            apply_nonlinear_creep=True,
+            iterate_nonlinear_creep=True,
+        )
+
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_get_diagram",
+            lambda self, ignore_compression_steel=False: _FakeDiagram(
+                eps_top=0.0010, eps_bottom=-0.0010
+            ),
+        )
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_get_peak_concrete_stress",
+            lambda self, eps_top, eps_bottom, diagram=None: 24.0,
+        )
+        monkeypatch.setattr(
+            cc_mod,
+            "check_quasi_permanent_concrete_stress",
+            lambda sigma_c, f_ck: (True, "k2"),
+        )
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_compute_nonlinear_creep_coefficient",
+            lambda self, sigma_c: 3.0,
+        )
+
+        class _FailingDiagram(_FakeDiagram):
+            def find_strains_for_MN(self, *args, **kwargs):
+                raise ValueError("outside capacity envelope")
+
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_build_diagram_with_E_c_eff",
+            lambda self, E_c_eff, ignore_compression_steel=False: _FailingDiagram(
+                eps_top=0.0, eps_bottom=0.0
+            ),
+        )
+
+        out = check.calculate_detailed(
+            M_Ed=100.0,
+            N_Ed=0.0,
+            force_cracked=True,
+            suppress_warnings=True,
+        )
+
+        assert out.solved is False
+        assert out.solver_stage == "nonlinear_creep"
+        assert out.solver_error is not None
+        assert "outside capacity envelope" in out.solver_error
+        assert out.solver_residual_N is None
+        assert out.solver_residual_M is None
+        assert out.w_k is None
+        assert out.s_r_max is None
+        assert out.sigma_s is None
+        assert out.creep_coefficient_used == pytest.approx(check.creep_coefficient, rel=1e-12)
+
+    def test_calculate_detailed_unsolved_includes_solver_residuals(
+        self, monkeypatch, concrete_c30
+    ):
+        """Residual dN/dM should be parsed into detailed result when available."""
+        check = CrackingCheck(
+            section=_make_section(),
+            concrete=concrete_c30,
+            apply_nonlinear_creep=False,
+        )
+
+        class _FailingDiagram(_FakeDiagram):
+            def find_strains_for_MN(self, *args, **kwargs):
+                raise ValueError(
+                    "Inverse solver could not match M=500.00 kN.m, N=2000.00 kN within tolerance. "
+                    "Best residuals: dN=-3.487 kN, dM=-26.751 kN.m. "
+                    "Target may be outside section capacity envelope."
+                )
+
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_get_diagram",
+            lambda self, ignore_compression_steel=False: _FailingDiagram(
+                eps_top=0.0, eps_bottom=0.0
+            ),
+        )
+
+        out = check.calculate_detailed(
+            M_Ed=500.0,
+            N_Ed=2000.0,
+            force_cracked=True,
+            suppress_warnings=True,
+        )
+
+        assert out.solved is False
+        assert out.solver_stage == "cracked_state"
+        assert out.solver_residual_N == pytest.approx(-3.487, rel=1e-12)
+        assert out.solver_residual_M == pytest.approx(-26.751, rel=1e-12)
+
     def test_net_tension_face_override_in_perform_and_detailed(self, monkeypatch, concrete_c30):
         """Test net tension face override in perform and detailed."""
         check = CrackingCheck(

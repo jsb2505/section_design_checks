@@ -30,7 +30,7 @@ def test_new_api_single_case():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,  # Default - accurate
+        use_mechanical_lever_arm=True,  # Default - accurate
     )
     print("Initialization complete!")
 
@@ -77,7 +77,7 @@ def test_new_api_multiple_cases():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
     )
 
     # Multiple load cases - use list comprehension
@@ -116,7 +116,7 @@ def test_approximate_mode():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=False,  # Fast approximate mode
+        use_mechanical_lever_arm=False,  # Fast approximate mode
     )
     print("Initialization complete (should be instant)!")
 

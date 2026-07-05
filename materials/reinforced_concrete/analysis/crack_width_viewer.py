@@ -34,6 +34,8 @@ class _LoadCaseResult:
     w_k: float
     w_k_limit: float
     is_cracked: bool
+    solved: bool
+    solver_error: Optional[str]
     passes: bool
 
 
@@ -45,14 +47,18 @@ def _compute_load_case_result(
 ) -> _LoadCaseResult:
     """Run the cracking calculation and wrap the result."""
     result: CrackingResult = check.calculate_detailed(M_Ed=M_Ed, N_Ed=N_Ed)
+    solved = bool(getattr(result, "solved", True))
+    w_k = float(result.w_k) if result.w_k is not None else float("nan")
     return _LoadCaseResult(
         name=name,
         M_Ed=M_Ed,
         N_Ed=N_Ed,
-        w_k=result.w_k,
+        w_k=w_k,
         w_k_limit=result.w_k_limit,
         is_cracked=result.is_cracked,
-        passes=result.w_k <= result.w_k_limit,
+        solved=solved,
+        solver_error=getattr(result, "solver_error", None),
+        passes=bool(solved and np.isfinite(w_k) and w_k <= result.w_k_limit),
     )
 
 
@@ -94,7 +100,9 @@ def _eval_w_k(
             result = check.calculate_detailed(
                 M_Ed=M, N_Ed=N, force_cracked=force_cracked,
             )
-        return result.w_k
+        if not bool(getattr(result, "solved", True)):
+            return float("nan")
+        return float(result.w_k) if result.w_k is not None else float("nan")
     except (ValueError, ZeroDivisionError):
         return float("nan")
 
@@ -264,30 +272,36 @@ class CrackWidthViewer:
 
         # --- Stems ---
         for r in results:
-            color = "green" if r.passes else "red"
+            color = "green" if r.passes else ("gray" if not r.solved else "red")
+            z_top = r.w_k if np.isfinite(r.w_k) else 0.0
             fig.add_trace(go.Scatter3d(
                 x=[r.M_Ed, r.M_Ed],
                 y=[r.N_Ed, r.N_Ed],
-                z=[0.0, r.w_k],
+                z=[0.0, z_top],
                 mode="lines",
                 line=dict(color=color, width=4),
                 name=r.name,
                 showlegend=False,
                 hoverinfo="skip",
             ))
-            status = "PASS" if r.passes else "FAIL"
+            status = "PASS" if r.passes else ("UNSOLVED" if not r.solved else "FAIL")
+            w_k_text = f"{r.w_k:.3f}" if np.isfinite(r.w_k) else "N/A"
+            solver_error_html = (
+                f"<br>Solver: {r.solver_error}" if (not r.solved and r.solver_error) else ""
+            )
             hover = (
                 f"<b>{r.name}</b><br>"
                 f"M_Ed: {r.M_Ed:.1f} kN·m<br>"
                 f"N_Ed: {r.N_Ed:.1f} kN<br>"
-                f"w_k: {r.w_k:.3f} mm<br>"
+                f"w_k: {w_k_text} mm<br>"
                 f"Limit: {r.w_k_limit:.2f} mm<br>"
                 f"Status: {status}"
+                f"{solver_error_html}"
             )
             fig.add_trace(go.Scatter3d(
                 x=[r.M_Ed],
                 y=[r.N_Ed],
-                z=[r.w_k],
+                z=[z_top],
                 mode="markers+text",
                 marker=dict(size=6, color=color),
                 text=[r.name],
@@ -443,15 +457,20 @@ class CrackWidthViewer:
                 N_Ed = float(lc.get("N_Ed", 0.0))
                 name = str(lc.get("name", f"LC {idx + 1}"))
                 r = _compute_load_case_result(self.check, M_Ed, N_Ed, name)
-                color = "green" if r.passes else "red"
-                status = "PASS" if r.passes else "FAIL"
+                color = "green" if r.passes else ("gray" if not r.solved else "red")
+                status = "PASS" if r.passes else ("UNSOLVED" if not r.solved else "FAIL")
+                w_k_text = f"{r.w_k:.3f}" if np.isfinite(r.w_k) else "N/A"
+                solver_error_html = (
+                    f"<br>Solver: {r.solver_error}" if (not r.solved and r.solver_error) else ""
+                )
                 hover = (
                     f"<b>{r.name}</b><br>"
                     f"M_Ed: {r.M_Ed:.1f} kN·m<br>"
                     f"N_Ed: {r.N_Ed:.1f} kN<br>"
-                    f"w_k: {r.w_k:.3f} mm<br>"
+                    f"w_k: {w_k_text} mm<br>"
                     f"Limit: {r.w_k_limit:.2f} mm<br>"
                     f"Status: {status}"
+                    f"{solver_error_html}"
                 )
                 fig.add_trace(go.Scatter(
                     x=[M_Ed],

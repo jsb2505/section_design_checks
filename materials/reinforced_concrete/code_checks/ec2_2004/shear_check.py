@@ -71,10 +71,10 @@ class ShearCheck(BaseCodeCheck):
     EC2 shear check using Variable Strut Inclination Method (§6.2).
 
     Supports two modes:
-    - **Rigorous mode** (use_rigorous=True, default): Uses M-N interaction solver for
+    - **Rigorous mode** (use_mechanical_lever_arm=True, default): Uses M-N interaction solver for
       accurate neutral axis, compression face detection, and lever arm computation from
       force resultant centroids. Most accurate. Initialization: ~100ms.
-    - **Approximate mode** (use_rigorous=False): Uses M-N solver only for compression
+    - **Approximate mode** (use_mechanical_lever_arm=False): Uses M-N solver only for compression
       face detection (when M_Ed or N_Ed provided), but always uses z=z_d_ratio*d for
       lever arm (default 0.9d, configurable). Faster but less accurate for eccentric loading.
 
@@ -94,7 +94,7 @@ class ShearCheck(BaseCodeCheck):
         shear_reinforcement: Shear links/stirrups (optional)
         use_accidental:
             Use accidental limit state partial factors (default: False)
-        use_rigorous:
+        use_mechanical_lever_arm:
             Use solver-based approach for NA and lever arm (default: True)
         allow_negative_sigma_cp:
             Allow negative σ_cp from tensile axial forces (default: True)
@@ -132,12 +132,12 @@ class ShearCheck(BaseCodeCheck):
         >>> concrete = ConcreteMaterial(grade="C30/37")
         >>> shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
         >>>
-        >>> # Create check once (diagram created on init if use_rigorous=True)
+        >>> # Create check once (diagram created on init if use_mechanical_lever_arm=True)
         >>> check = ShearCheck(
         ...     section=section,
         ...     concrete=concrete,
         ...     shear_reinforcement=shear_rebar,
-        ...     use_rigorous=True,  # Default - accurate NA and lever arm
+        ...     use_mechanical_lever_arm=True,  # Default - accurate NA and lever arm
         ... )
         >>>
         >>> # Simple check - just shear force (M_Ed and N_Ed default to 0)
@@ -186,7 +186,7 @@ class ShearCheck(BaseCodeCheck):
         description="Use accidental limit state partial factors (gamma_c_accidental, gamma_s_accidental)",
     )
 
-    use_rigorous: bool = Field(
+    use_mechanical_lever_arm: bool = Field(
         default=False,
         description=(
             "Use rigorous mode: compute lever arm from force centroids. "
@@ -222,7 +222,7 @@ class ShearCheck(BaseCodeCheck):
     z_d_ratio: float = Field(
         default=0.9,
         description=(
-            "Lever arm ratio z/d for approximate mode (use_rigorous=False). "
+            "Lever arm ratio z/d for approximate mode (use_mechanical_lever_arm=False). "
             "Default 0.9 per EC2 §6.2.3(1). For circular sections use ~0.77."
         ),
         gt=0.0,
@@ -337,12 +337,12 @@ class ShearCheck(BaseCodeCheck):
 
     concrete_model_type: ConcreteModelType = Field(
         default=ConcreteModelType.PARABOLA_RECTANGLE,
-        description="Concrete stress-strain model type (used if use_rigorous=True)",
+        description="Concrete stress-strain model type (used if use_mechanical_lever_arm=True)",
     )
 
     steel_model_type: SteelModelType = Field(
         default=SteelModelType.INCLINED,
-        description="Steel stress-strain branch type (used if use_rigorous=True)",
+        description="Steel stress-strain branch type (used if use_mechanical_lever_arm=True)",
     )
 
     concrete_model_override: Optional[Any] = Field(
@@ -626,20 +626,21 @@ class ShearCheck(BaseCodeCheck):
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
         ignore_compression_steel: bool = False,
+        force_virtual: bool = False,
     ) -> tuple[float, Optional[float]]:
         """
         Lever arm for this load case.
 
         Behaviour:
-            If use_rigorous=True: computes from force resultant centroids, clamped
+            If use_mechanical_lever_arm=True: computes from force resultant centroids, clamped
                 to [z_d_ratio_lower * d, z_d_ratio_upper * d]
-            If use_rigorous=False: uses z_d_ratio * d approximation
+            If use_mechanical_lever_arm=False: uses z_d_ratio * d approximation
 
         Returns:
             (z_design, z_mech)
         """
         # No diagram available (or user opted out) => always use configured ratio
-        if not self.use_rigorous:
+        if not self.use_mechanical_lever_arm:
             return (self.z_d_ratio * d, None)
 
         # Delegate to MNInteractionDiagram with configured bounds
@@ -649,10 +650,11 @@ class ShearCheck(BaseCodeCheck):
             d=d,
             eps_top=eps_top,
             eps_bottom=eps_bottom,
-            prefer_rigorous=True,
+            use_mechanical_lever_arm=True,
             z_d_upper=self.z_d_ratio_upper,
             z_d_lower=self.z_d_ratio_lower,
             z_d_approx=self.z_d_ratio,
+            force_virtual=force_virtual,
         )
 
 
@@ -683,7 +685,7 @@ class ShearCheck(BaseCodeCheck):
         Returns:
             ρ_l (dimensionless)
         """
-        if not self.use_rigorous:
+        if not self.use_mechanical_lever_arm:
             # Approximate mode: if we have strain information, use it to determine tension side
             # This handles hogging/sagging and N-M interaction correctly
             if eps_top is not None and eps_bottom is not None:
@@ -1561,7 +1563,7 @@ class ShearCheck(BaseCodeCheck):
             "leg_spacing_max_allowable": leg_spacing_max_allowable if reinforcement else None,
             # ShearCheck-specific
             "rho_l": rho_l,
-            "z_mode": "rigorous" if self.use_rigorous else "approximate",
+            "z_mode": "rigorous" if self.use_mechanical_lever_arm else "approximate",
             "z_d_ratio": self.z_d_ratio,
             "z_d_ratio_upper": self.z_d_ratio_upper,
             "z_d_ratio_lower": self.z_d_ratio_lower,

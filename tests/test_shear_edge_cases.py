@@ -34,7 +34,7 @@ def test_pure_axial_compression_face():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
     )
 
     # Pure axial load: M_Ed = 0, N_Ed > 0, small V_Ed
@@ -57,7 +57,7 @@ def test_pure_axial_compression_face():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=False,
+        use_mechanical_lever_arm=False,
     )
 
     result_approx = check_approximate.perform_check(load_case=load_case)
@@ -96,7 +96,7 @@ def test_very_small_moment():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
     )
 
     print("\n=== Testing Very Small Moment ===")

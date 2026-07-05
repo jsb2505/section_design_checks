@@ -413,7 +413,7 @@ class CircularSectionCheck(BaseModel):
             concrete=concrete_uls,
             shear_reinforcement=self.shear_reinforcement,
             use_accidental=self.use_accidental,
-            use_rigorous=True,
+            use_mechanical_lever_arm=True,
             z_d_ratio=0.77,           # Circular z_mech ≈ 0.77d (Orr 2012)
             z_d_ratio_upper=0.95,
             z_d_ratio_lower=0.65,

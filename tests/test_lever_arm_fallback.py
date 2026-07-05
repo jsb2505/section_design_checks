@@ -42,7 +42,7 @@ def test_lever_arm_fallback_respects_compression_face():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
     )
 
     print("\n=== Test: Lever Arm Fallback with Correct Compression Face ===")
@@ -113,7 +113,7 @@ def test_pure_axial_fallback():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
     )
 
     print("\n=== Test: Pure Axial Edge Case ===")

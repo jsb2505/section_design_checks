@@ -598,7 +598,7 @@ class FreeNADiagramAdapter:
         self,
         M_Ed: float,
         N_Ed: float = 0.0,
-        prefer_rigorous: bool = False,
+        use_mechanical_lever_arm: bool = False,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
@@ -613,7 +613,7 @@ class FreeNADiagramAdapter:
         z, _ = self.get_lever_arm(
             M_Ed=M_Ed, N_Ed=N_Ed, d=d,
             eps_top=eps_top, eps_bottom=eps_bottom,
-            prefer_rigorous=prefer_rigorous,
+            use_mechanical_lever_arm=use_mechanical_lever_arm,
             z_d_upper=z_d_upper,
             z_d_lower=z_d_lower,
             z_d_approx=z_d_approx,
@@ -661,11 +661,12 @@ class FreeNADiagramAdapter:
         d: Optional[float] = None,
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
-        prefer_rigorous: bool = False,
+        use_mechanical_lever_arm: bool = False,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
         warn_on_fallback: bool = False,
+        force_virtual: bool = False,
     ) -> Tuple[float, Optional[float]]:
         """Lever arm z and rigorous lever arm (if computed)."""
         if d is None:
@@ -675,7 +676,7 @@ class FreeNADiagramAdapter:
         z_upper = z_d_upper * d
         z_lower = z_d_lower * d
 
-        if not prefer_rigorous:
+        if not use_mechanical_lever_arm:
             return (z_approx, None)
 
         # Rigorous: compute from fibre forces
@@ -712,7 +713,7 @@ class FreeNADiagramAdapter:
         use_v_rd_s_for_cot_theta: bool = False,
         cot_max_override: Optional[float] = None,
         iterate_z: bool = False,
-        prefer_rigorous: bool = False,
+        use_mechanical_lever_arm: bool = False,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
@@ -726,7 +727,7 @@ class FreeNADiagramAdapter:
 
         z, d = self._compute_z_d_for_moment(
             M_Ed=M_Ed, N_Ed=N_Ed,
-            prefer_rigorous=prefer_rigorous,
+            use_mechanical_lever_arm=use_mechanical_lever_arm,
             z_d_upper=z_d_upper,
             z_d_lower=z_d_lower,
             z_d_approx=z_d_approx,

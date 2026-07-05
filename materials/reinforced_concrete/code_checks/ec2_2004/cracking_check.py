@@ -8,6 +8,7 @@ elastic/cracked section analysis to calculate crack widths.
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
+import re
 import warnings
 
 import numpy as np
@@ -64,18 +65,23 @@ class LoadDuration(StrEnum):
 @dataclass
 class CrackingResult:
     """Detailed results from crack width calculation."""
-    w_k: float  # Calculated crack width (mm)
+    w_k: Optional[float]  # Calculated crack width (mm)
     w_k_limit: float  # Allowable crack width (mm)
-    s_r_max: float  # Maximum crack spacing (mm)
-    eps_sm_minus_eps_cm: float  # Difference in mean strains (dimensionless)
-    sigma_s: float  # Steel stress in tension rebar (MPa)
-    rho_p_eff: float  # Effective reinforcement ratio (dimensionless)
-    h_c_ef: float  # Effective height of concrete in tension (mm)
+    s_r_max: Optional[float]  # Maximum crack spacing (mm)
+    eps_sm_minus_eps_cm: Optional[float]  # Difference in mean strains (dimensionless)
+    sigma_s: Optional[float]  # Steel stress in tension rebar (MPa)
+    rho_p_eff: Optional[float]  # Effective reinforcement ratio (dimensionless)
+    h_c_ef: Optional[float]  # Effective height of concrete in tension (mm)
     x: Optional[float]  # Neutral axis depth from compression face (mm)
     is_cracked: bool  # Whether section is cracked
-    phi_eq: float  # Equivalent bar diameter (mm)
-    cover: float  # Concrete cover to tension rebar (mm)
-    sigma_c_peak: float = 0.0  # Peak concrete compressive stress (MPa)
+    phi_eq: Optional[float]  # Equivalent bar diameter (mm)
+    cover: Optional[float]  # Concrete cover to tension rebar (mm)
+    solved: bool = True  # Whether full equilibrium-based result was solved
+    solver_stage: Optional[str] = None  # Stage where solve failed (if any)
+    solver_error: Optional[str] = None  # Solver failure message
+    solver_residual_N: Optional[float] = None  # dN (kN) from solver, if available
+    solver_residual_M: Optional[float] = None  # dM (kN.m) from solver, if available
+    sigma_c_peak: Optional[float] = None  # Peak concrete compressive stress (MPa)
     nonlinear_creep_applied: bool = False  # Whether non-linear creep adjustment was applied
     creep_coefficient_used: float = 0.0  # Actual creep coefficient used (may be φ_NL)
     steel_yielded: bool = False  # Whether σ_s > f_yk (EC2 §7.2(4)P inelastic strain)
@@ -480,7 +486,7 @@ class CrackingCheck(BaseCodeCheck):
     # ===============================================
     # h_c,ef calculation (EC2 §7.3.2(3), Fig 7.1)
     # ===============================================
-    # TODO EU_DE gives a a broader range of limits, make ndps
+
     def find_h_c_ef(
         self,
         d: float,
@@ -1440,6 +1446,67 @@ class CrackingCheck(BaseCodeCheck):
             crack_to_neutral_axis_on_first_tension_failure=True,
         )
 
+    @staticmethod
+    def _extract_solver_residuals(error_message: str) -> Tuple[Optional[float], Optional[float]]:
+        """Extract dN and dM residuals from inverse solver error text."""
+        match = re.search(
+            r"dN=([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*kN,\s*dM=([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*kN\.m",
+            error_message,
+        )
+        if not match:
+            return (None, None)
+        try:
+            return (float(match.group(1)), float(match.group(2)))
+        except ValueError:
+            return (None, None)
+
+    def _build_unsolved_cracking_result(
+        self,
+        *,
+        is_cracked: bool,
+        solver_stage: str,
+        solver_error: str,
+        sigma_c_peak: Optional[float] = None,
+        nonlinear_creep_applied: bool = False,
+        creep_coefficient_used: Optional[float] = None,
+    ) -> CrackingResult:
+        """Create a detailed result payload for non-solvable load cases."""
+        dN, dM = self._extract_solver_residuals(solver_error)
+        return CrackingResult(
+            w_k=None,
+            w_k_limit=self.w_k_limit,
+            s_r_max=None,
+            eps_sm_minus_eps_cm=None,
+            sigma_s=None,
+            rho_p_eff=None,
+            h_c_ef=None,
+            x=None,
+            is_cracked=is_cracked,
+            phi_eq=None,
+            cover=None,
+            solved=False,
+            solver_stage=solver_stage,
+            solver_error=solver_error,
+            solver_residual_N=dN,
+            solver_residual_M=dM,
+            sigma_c_peak=sigma_c_peak,
+            nonlinear_creep_applied=nonlinear_creep_applied,
+            creep_coefficient_used=(
+                float(creep_coefficient_used)
+                if creep_coefficient_used is not None
+                else float(self.creep_coefficient)
+            ),
+        )
+
+    @staticmethod
+    def _require_result_value(value: Optional[float], field_name: str) -> float:
+        """Return a float from an optional result field, or raise a clear error."""
+        if value is None:
+            raise RuntimeError(
+                f"Expected solved cracking result to define '{field_name}', but got None."
+            )
+        return float(value)
+
     def _is_cracked_by_solver(
         self,
         *,
@@ -1936,6 +2003,11 @@ class CrackingCheck(BaseCodeCheck):
                     "M_Ed": float(M_Ed),
                     "N_Ed": float(N_Ed),
                     "is_cracked": False,
+                    "solved": True,
+                    "solver_stage": None,
+                    "solver_error": None,
+                    "solver_residual_N": None,
+                    "solver_residual_M": None,
                     "w_k": 0.0,
                     "w_k_limit": self.w_k_limit,
                     "crack_detection_method": crack_detection_method,
@@ -1966,6 +2038,8 @@ class CrackingCheck(BaseCodeCheck):
                 strict=True,
             )
         except ValueError as e:
+            solver_error = str(e)
+            dN, dM = self._extract_solver_residuals(solver_error)
             # Load point outside capacity - section fails
             return self._create_result(
                 check_name="Cracking check (EC2 §7.3)",
@@ -1976,7 +2050,14 @@ class CrackingCheck(BaseCodeCheck):
                 capacity_components={"w_k_limit": self.w_k_limit},
                 units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm"},
                 message=f"Failed to solve strain state: {e}",
-                details={"error": str(e)},
+                details={
+                    "error": solver_error,
+                    "solver_error": solver_error,
+                    "solved": False,
+                    "solver_stage": "cracked_state",
+                    "solver_residual_N": dN,
+                    "solver_residual_M": dM,
+                },
             )
 
         # Step 2.5: Stress limitation checks (EC2 §7.2) and non-linear creep
@@ -2005,13 +2086,41 @@ class CrackingCheck(BaseCodeCheck):
                     if abs(E_c_eff_NL - (self.concrete.get_elastic_modulus() / (1.0 + creep_coefficient_used))) < 1.0:
                         break  # Converged (within 1 MPa)
 
+                    diagram_nl = self._build_diagram_with_E_c_eff(E_c_eff_NL, ignore_compression_steel)
+                    try:
+                        eps_top, eps_bottom = diagram_nl.find_strains_for_MN(
+                            M_target=M_Ed,
+                            N_target=N_Ed,
+                            strict=True,
+                        )
+                    except ValueError as exc:
+                        solver_error = str(exc)
+                        dN, dM = self._extract_solver_residuals(solver_error)
+                        return self._create_result(
+                            check_name="Cracking check (EC2 §7.3)",
+                            code_reference="EC2 §7.3",
+                            warning_threshold=warning_threshold,
+                            utilization=float("inf"),
+                            demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
+                            capacity_components={"w_k_limit": self.w_k_limit},
+                            units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm"},
+                            message="Failed to solve strain state after non-linear creep update",
+                            details={
+                                "error": solver_error,
+                                "solver_error": solver_error,
+                                "solved": False,
+                                "solver_stage": "nonlinear_creep",
+                                "solver_residual_N": dN,
+                                "solver_residual_M": dM,
+                                "eps_top_pre_nl": float(eps_top),
+                                "eps_bottom_pre_nl": float(eps_bottom),
+                                "sigma_c_peak_pre_nl": float(sigma_c_peak),
+                                "creep_coefficient_used_pre_nl": float(creep_coefficient_used),
+                            },
+                        )
+
                     creep_coefficient_used = phi_NL
-                    diagram_for_check = self._build_diagram_with_E_c_eff(E_c_eff_NL, ignore_compression_steel)
-                    eps_top, eps_bottom = diagram_for_check.find_strains_for_MN(
-                        M_target=M_Ed,
-                        N_target=N_Ed,
-                        strict=True,
-                    )
+                    diagram_for_check = diagram_nl
                     sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_for_check)
                     nonlinear_creep_applied = True
 
@@ -2037,6 +2146,11 @@ class CrackingCheck(BaseCodeCheck):
                     "sigma_c_peak": float(sigma_c_peak),
                     "nonlinear_creep_applied": nonlinear_creep_applied,
                     "creep_coefficient_used": float(creep_coefficient_used),
+                    "solved": True,
+                    "solver_stage": None,
+                    "solver_error": None,
+                    "solver_residual_N": None,
+                    "solver_residual_M": None,
                     "crack_detection_method": crack_detection_method,
                     "probe_solver_error": probe_solver_error,
                     "probe_eps_top": float(probe_eps_top) if probe_eps_top is not None else None,
@@ -2086,9 +2200,15 @@ class CrackingCheck(BaseCodeCheck):
                     x=x, is_net_tension=True,
                     **crack_width_kwargs,
                 )
-                if best_cr is None or cr_candidate.w_k > best_cr.w_k:
+                candidate_w_k = self._require_result_value(cr_candidate.w_k, "w_k")
+                if best_cr is None:
                     best_cr = cr_candidate
                     governing_face_result = face_candidate
+                else:
+                    best_w_k = self._require_result_value(best_cr.w_k, "w_k")
+                    if candidate_w_k > best_w_k:
+                        best_cr = cr_candidate
+                        governing_face_result = face_candidate
 
             assert best_cr is not None  # at least one face always checked
             cr = best_cr
@@ -2114,28 +2234,39 @@ class CrackingCheck(BaseCodeCheck):
         cr.nonlinear_creep_applied = nonlinear_creep_applied
         cr.creep_coefficient_used = creep_coefficient_used
 
+        # From this point we are in a solved branch; required fields must exist.
+        w_k = self._require_result_value(cr.w_k, "w_k")
+        sigma_s = self._require_result_value(cr.sigma_s, "sigma_s")
+        h_c_ef = self._require_result_value(cr.h_c_ef, "h_c_ef")
+        phi_eq = self._require_result_value(cr.phi_eq, "phi_eq")
+        cover = self._require_result_value(cr.cover, "cover")
+        rho_p_eff = self._require_result_value(cr.rho_p_eff, "rho_p_eff")
+        s_r_max = self._require_result_value(cr.s_r_max, "s_r_max")
+        eps_sm_minus_eps_cm = self._require_result_value(
+            cr.eps_sm_minus_eps_cm, "eps_sm_minus_eps_cm"
+        )
+
         # EC2 §7.2(5): Reinforcement stress limit
         f_yk = self._get_f_yk_max()
         if self.check_k3_stress:
-            exceeded, msg = check_characteristic_reinforcement_stress(cr.sigma_s, f_yk)
+            exceeded, msg = check_characteristic_reinforcement_stress(sigma_s, f_yk)
             if exceeded:
                 warnings.warn(msg, stacklevel=3)
 
         # EC2 §7.2(4)P: Check for inelastic strain (yielding)
         if self.check_yielding:
-            exceeded, msg = check_reinforcement_yielding(cr.sigma_s, f_yk)
+            exceeded, msg = check_reinforcement_yielding(sigma_s, f_yk)
             if exceeded:
                 cr.steel_yielded = True
                 warnings.warn(msg, stacklevel=3)
 
         # EC2 §7.2(5): Imposed deformation stress limit
         if self.check_k4_stress:
-            exceeded, msg = check_imposed_deformation_stress(cr.sigma_s, f_yk)
+            exceeded, msg = check_imposed_deformation_stress(sigma_s, f_yk)
             if exceeded:
                 warnings.warn(msg, stacklevel=3)
 
         # Build utilization and result
-        w_k = cr.w_k
         utilization = w_k / self.w_k_limit if self.w_k_limit > 0 else float("inf")
         k_2 = self.find_k_2(eps_top, eps_bottom)
 
@@ -2146,13 +2277,13 @@ class CrackingCheck(BaseCodeCheck):
             "eps_top": float(eps_top),
             "eps_bottom": float(eps_bottom),
             "x": float(cr.x) if cr.x is not None else None,
-            "h_c_ef": float(cr.h_c_ef),
-            "phi_eq": float(cr.phi_eq),
-            "cover": float(cr.cover),
-            "rho_p_eff": float(cr.rho_p_eff),
-            "sigma_s": float(cr.sigma_s),
-            "s_r_max": float(cr.s_r_max),
-            "eps_sm_minus_eps_cm": float(cr.eps_sm_minus_eps_cm),
+            "h_c_ef": h_c_ef,
+            "phi_eq": phi_eq,
+            "cover": cover,
+            "rho_p_eff": rho_p_eff,
+            "sigma_s": sigma_s,
+            "s_r_max": s_r_max,
+            "eps_sm_minus_eps_cm": eps_sm_minus_eps_cm,
             "w_k": float(w_k),
             "w_k_limit": float(self.w_k_limit),
             "k_t": float(self.k_t),
@@ -2165,6 +2296,11 @@ class CrackingCheck(BaseCodeCheck):
             "steel_yielded": cr.steel_yielded,
             "nonlinear_creep_applied": nonlinear_creep_applied,
             "creep_coefficient_used": float(creep_coefficient_used),
+            "solved": True,
+            "solver_stage": None,
+            "solver_error": None,
+            "solver_residual_N": None,
+            "solver_residual_M": None,
             "is_net_tension": is_net_tension,
             "governing_face": cr.governing_face,
             "crack_detection_method": crack_detection_method,
@@ -2233,7 +2369,10 @@ class CrackingCheck(BaseCodeCheck):
                 instead of auto-computing from section geometry.
 
         Returns:
-            CrackingResult dataclass with all intermediate values
+            CrackingResult dataclass with all intermediate values.
+            If equilibrium cannot be solved (strict mode), returns
+            ``solved=False`` with ``solver_error``/residuals populated and
+            undefined response quantities set to ``None``.
         """
         # Determine cracked state using an uncracked solver probe.
         if force_cracked:
@@ -2267,9 +2406,18 @@ class CrackingCheck(BaseCodeCheck):
 
         # Solve strain state on cracked-analysis diagram
         diagram_for_check = self._get_diagram(ignore_compression_steel)
-        eps_top, eps_bottom = diagram_for_check.find_strains_for_MN(
-            M_Ed, N_Ed, strict=True
-        )
+        try:
+            eps_top, eps_bottom = diagram_for_check.find_strains_for_MN(
+                M_Ed, N_Ed, strict=True
+            )
+        except ValueError as exc:
+            return self._build_unsolved_cracking_result(
+                is_cracked=True,
+                solver_stage="cracked_state",
+                solver_error=str(exc),
+                nonlinear_creep_applied=False,
+                creep_coefficient_used=self.creep_coefficient,
+            )
 
         # Stress limitation and non-linear creep (same logic as _check_single_case)
         sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_for_check)
@@ -2285,9 +2433,21 @@ class CrackingCheck(BaseCodeCheck):
                     E_c_eff_NL = self.concrete.get_elastic_modulus() / (1.0 + phi_NL)
                     if abs(E_c_eff_NL - (self.concrete.get_elastic_modulus() / (1.0 + creep_coefficient_used))) < 1.0:
                         break
-                    creep_coefficient_used = phi_NL
                     diagram_nl = self._build_diagram_with_E_c_eff(E_c_eff_NL, ignore_compression_steel)
-                    eps_top, eps_bottom = diagram_nl.find_strains_for_MN(M_Ed, N_Ed, strict=True)
+                    try:
+                        eps_top, eps_bottom = diagram_nl.find_strains_for_MN(M_Ed, N_Ed, strict=True)
+                    except ValueError as exc:
+                        return self._build_unsolved_cracking_result(
+                            is_cracked=True,
+                            solver_stage="nonlinear_creep",
+                            solver_error=str(exc),
+                            sigma_c_peak=float(sigma_c_peak),
+                            nonlinear_creep_applied=nonlinear_creep_applied,
+                            creep_coefficient_used=creep_coefficient_used,
+                        )
+
+                    creep_coefficient_used = phi_NL
+                    diagram_for_check = diagram_nl
                     sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_nl)
                     nonlinear_creep_applied = True
 
@@ -2332,9 +2492,15 @@ class CrackingCheck(BaseCodeCheck):
                     x=x, is_net_tension=True,
                     **crack_width_kwargs,
                 )
-                if best_result is None or result_candidate.w_k > best_result.w_k:
+                candidate_w_k = self._require_result_value(result_candidate.w_k, "w_k")
+                if best_result is None:
                     best_result = result_candidate
                     governing_face_result = face_candidate
+                else:
+                    best_w_k = self._require_result_value(best_result.w_k, "w_k")
+                    if candidate_w_k > best_w_k:
+                        best_result = result_candidate
+                        governing_face_result = face_candidate
 
             assert best_result is not None  # at least one face always checked
             result = best_result

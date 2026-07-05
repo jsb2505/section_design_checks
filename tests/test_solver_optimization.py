@@ -36,7 +36,7 @@ def test_solver_not_called_when_M_zero():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=False,  # Approximate mode
+        use_mechanical_lever_arm=False,  # Approximate mode
     )
 
     print("\n=== Test: Solver NOT called when M_Ed = 0 ===")
@@ -108,7 +108,7 @@ def test_results_consistent_with_optimization():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=False,
+        use_mechanical_lever_arm=False,
     )
 
     # Rigorous mode
@@ -116,7 +116,7 @@ def test_results_consistent_with_optimization():
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
-        use_rigorous=True,
+        use_mechanical_lever_arm=True,
     )
 
     # Test pure axial: M=0, N=500
