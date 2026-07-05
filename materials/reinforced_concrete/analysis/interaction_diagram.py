@@ -1855,16 +1855,32 @@ class MNInteractionDiagram:
         )
 
 
-    def _compute_z_d_for_moment(self, *, M_Ed: float, N_Ed: float) -> tuple[float, float]:
+    def _compute_z_d_for_moment(
+        self,
+        *,
+        M_Ed: float,
+        N_Ed: float,
+        prefer_rigorous: bool = False,
+        cap_to_09d: bool = True,
+        warn_on_fallback: bool = False,
+    ) -> tuple[float, float]:
         """
         Compute lever arm z and effective depth d for a given moment value.
 
         Args:
             M_Ed: Moment for strain analysis (kN·m)
             N_Ed: Axial force (kN, positive = compression)
+            prefer_rigorous: If True, attempt to compute the rigorous centroid-based
+                lever arm from strain analysis. If False (default), use the simplified
+                0.9d approach per EC2 §6.2.3(1).
+            cap_to_09d: If True (default), cap the lever arm to 0.9d per EC2.
+                Only relevant when prefer_rigorous=True.
+            warn_on_fallback: If True, emit a warning when the rigorous lever arm
+                calculation falls back to 0.9d (e.g., near-zero moment, numerical
+                issues). Default False to avoid noise in batch calculations.
 
         Returns:
-            (z, d) in mm, where z is capped to 0.9d per EC2
+            (z, d) in mm, where z may be capped to 0.9d depending on settings
         """
         eps_top, eps_bottom = None, None
         if abs(M_Ed) > 1e-6:
@@ -1882,9 +1898,9 @@ class MNInteractionDiagram:
             d=d,
             eps_top=eps_top,
             eps_bottom=eps_bottom,
-            prefer_rigorous=False,
-            cap_to_09d=True,
-            warn_on_fallback=False,
+            prefer_rigorous=prefer_rigorous,
+            cap_to_09d=cap_to_09d,
+            warn_on_fallback=warn_on_fallback,
         )
         return z, d
 
@@ -1897,6 +1913,9 @@ class MNInteractionDiagram:
         M_cap: Optional[float] = None,
         shear_reinforcement: Optional["ShearRebar"] = None,
         iterate_z: bool = False,
+        prefer_rigorous: bool = False,
+        cap_to_09d: bool = True,
+        warn_on_fallback: bool = False,
     ) -> "TensionShiftResult":
         """
         Apply EC2 §9.2.1.3 tension shift rule to a bending moment.
@@ -1916,6 +1935,14 @@ class MNInteractionDiagram:
             iterate_z: If True, iteratively recalculate z based on M_design until
                       convergence (0.5% tolerance, max 5 iterations). Only affects
                       cases with shear reinforcement where a_l depends on z.
+            prefer_rigorous: If True, attempt to compute the rigorous centroid-based
+                lever arm from strain analysis. If False (default), use the simplified
+                0.9d approach per EC2 §6.2.3(1).
+            cap_to_09d: If True (default), cap the lever arm to 0.9d per EC2.
+                Only relevant when prefer_rigorous=True.
+            warn_on_fallback: If True, emit a warning when the rigorous lever arm
+                calculation falls back to 0.9d (e.g., near-zero moment, numerical
+                issues). Default False to avoid noise in batch calculations.
 
         Returns:
             TensionShiftResult with shifted moment and calculation details.
@@ -1936,7 +1963,13 @@ class MNInteractionDiagram:
         N_Ed = float(N_Ed)
 
         # Compute initial z and d
-        z, d = self._compute_z_d_for_moment(M_Ed=M_Ed_original, N_Ed=N_Ed)
+        z, d = self._compute_z_d_for_moment(
+            M_Ed=M_Ed_original,
+            N_Ed=N_Ed,
+            prefer_rigorous=prefer_rigorous,
+            cap_to_09d=cap_to_09d,
+            warn_on_fallback=warn_on_fallback,
+        )
 
         # Compute parameters needed for shear reinforcement case
         b_w: Optional[float] = None
@@ -1976,12 +2009,15 @@ class MNInteractionDiagram:
             MAX_ITERATIONS = 5
             CONVERGENCE_TOL = 0.005  # 0.5%
 
-            # TODO check why z_original is created but not used? Artifact from old logic before refactoring?
-            z_original = z
-
-            for iteration in range(MAX_ITERATIONS):
+            for _ in range(MAX_ITERATIONS):
                 # Recalculate z for the current M_design
-                z_new, d_new = self._compute_z_d_for_moment(M_Ed=shift_result.M_design, N_Ed=N_Ed)
+                z_new, d_new = self._compute_z_d_for_moment(
+                    M_Ed=shift_result.M_design,
+                    N_Ed=N_Ed,
+                    prefer_rigorous=prefer_rigorous,
+                    cap_to_09d=cap_to_09d,
+                    warn_on_fallback=warn_on_fallback,
+                )
 
                 # Check convergence
                 if z > 1e-6:

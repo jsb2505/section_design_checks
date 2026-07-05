@@ -5,7 +5,7 @@ Docstring for materials.reinforced_concrete.code_checks.ec2.shear_utils
 Utility functions for shear design checks according to Eurocode 2 (EC2).
 '''
 from dataclasses import dataclass
-from math import sqrt, isfinite, radians, copysign
+from math import sqrt, isfinite, radians, copysign, tan
 from typing import Optional
 
 from materials.utils.helpers import cot
@@ -152,7 +152,13 @@ def calculate_tension_shift(
             K=K,
             link_angle_degrees=shear_reinforcement.angle,
         )
-        a_l = 0.5 * z * cot_theta
+        # EC2 §9.2.1.3: a_l = z(cot θ - cot α)/2
+        # where α is the stirrup angle (90° for vertical, typically 45° for inclined)
+        alpha_rad = radians(float(shear_reinforcement.angle))
+        cot_alpha = 1.0 / tan(alpha_rad) if shear_reinforcement.angle != 90 else 0.0
+        a_l = z * (cot_theta - cot_alpha) / 2.0
+        # Ensure a_l is non-negative (inclined stirrups with steep strut angles could give negative)
+        a_l = max(a_l, 0.0)
     else:
         # No shear reinforcement: a_l = d (EC2 §9.2.1.3(2))
         a_l = d
