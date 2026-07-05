@@ -16,13 +16,13 @@ def create_test_section():
     section = create_rectangular_section(width=300, height=500)
     rebar_20 = Rebar(diameter=20, grade="B500B")
 
-    # Bottom bars
-    bottom_positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    # Bottom bars (50mm cover from edges)
+    bottom_positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     bottom_group = RebarGroup(rebar=rebar_20, positions=bottom_positions)
     section.add_rebar_group(bottom_group)
 
-    # Top bars
-    top_positions = [Point2D(x=-50, y=200), Point2D(x=50, y=200)]
+    # Top bars (50mm cover from edges)
+    top_positions = [Point2D(x=50, y=450), Point2D(x=250, y=450)]
     top_group = RebarGroup(rebar=rebar_20, positions=top_positions)
     section.add_rebar_group(top_group)
 

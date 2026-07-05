@@ -118,42 +118,17 @@ class TestFiberMesh:
 
     def test_calculate_section_forces(self, mesh_simple):
         """Test calculating section forces from fiber stresses."""
-        # Create dummy strains and stresses
-        n_fibers = mesh_simple.total_fibers
-        strains = np.ones(n_fibers) * 0.001
-        stresses = np.ones(n_fibers) * 20.0  # 20 MPa constant
-
-        N, M = mesh_simple.calculate_section_forces(strains, stresses)
-
-        # N should be positive (compression)
-        assert N > 0
-
-        # M depends on distribution, but should be calculable
-        assert isinstance(M, float)
+        # NOTE: calculate_section_forces() method was removed from FiberMesh.
+        # Force calculation is now handled by MNInteractionDiagram.calculate_point_from_end_strains()
+        # This test is skipped as the method no longer exists.
+        pytest.skip("calculate_section_forces() method removed - force calculation moved to MNInteractionDiagram")
 
     def test_calculate_forces_uniform_stress(self, rectangular_beam):
         """Test force calculation with uniform stress."""
-        # Simple section with no rebars
-        mesh = FiberMesh(
-            section=rectangular_beam,
-            n_fibers_width=10,
-            n_fibers_height=10,
-        )
-
-        # Uniform compression stress of 10 MPa
-        n_fibers = mesh.total_fibers
-        strains = np.ones(n_fibers) * 0.001
-        stresses = np.ones(n_fibers) * 10.0
-
-        N, M = mesh.calculate_section_forces(strains, stresses)
-
-        # N ≈ σ · A = 10 MPa · 150,000 mm² = 1,500,000 N = 1,500 kN
-        # (approximate due to mesh discretization)
-        expected_N = 10.0 * rectangular_beam.get_area() / 1000  # Convert to kN
-        assert N == pytest.approx(expected_N, rel=0.05)
-
-        # M should be ~0 for uniform stress about centroid
-        assert abs(M) < 10.0  # Small compared to N
+        # NOTE: calculate_section_forces() method was removed from FiberMesh.
+        # Force calculation is now handled by MNInteractionDiagram.calculate_point_from_end_strains()
+        # This test is skipped as the method no longer exists.
+        pytest.skip("calculate_section_forces() method removed - force calculation moved to MNInteractionDiagram")
 
     def test_mesh_conservation_of_area(self, rectangular_beam):
         """Test that total fiber area approximately equals section area."""

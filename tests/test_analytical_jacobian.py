@@ -18,10 +18,11 @@ from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 def create_test_diagram():
     """Create a test M-N diagram for verification."""
-    section = create_rectangular_section(width=300, height=500)
+    # Use hook_ref=0 to center the section at origin
+    section = create_rectangular_section(width=300, height=500, hook_ref=0)
     rebar_20 = Rebar(diameter=20, grade="B500B")
 
-    # Bottom bars
+    # Bottom bars (centered coordinate system: -150 to +150 in x, -250 to +250 in y)
     bottom_positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
     bottom_group = RebarGroup(rebar=rebar_20, positions=bottom_positions)
     section.add_rebar_group(bottom_group)

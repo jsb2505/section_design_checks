@@ -11,18 +11,19 @@ from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 def create_test_section():
     """Create a simple rectangular section with reinforcement."""
+    # Use default hook_ref=1 (positive quadrant: 0 to 300 in x, 0 to 500 in y)
     section = create_rectangular_section(width=300, height=500)
 
     # Add 4H20 bars (2 top, 2 bottom)
     rebar_20 = Rebar(diameter=20, grade="B500B")
 
-    # Bottom bars (tension for sagging): y = -250 + 50 = -200
-    bottom_positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    # Bottom bars (50mm cover from left/right edges, 50mm from bottom)
+    bottom_positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     bottom_group = RebarGroup(rebar=rebar_20, positions=bottom_positions)
     section.add_rebar_group(bottom_group)
 
-    # Top bars (compression for sagging): y = 250 - 50 = 200
-    top_positions = [Point2D(x=-50, y=200), Point2D(x=50, y=200)]
+    # Top bars (50mm cover from left/right edges, 50mm from top)
+    top_positions = [Point2D(x=50, y=450), Point2D(x=250, y=450)]
     top_group = RebarGroup(rebar=rebar_20, positions=top_positions)
     section.add_rebar_group(top_group)
 

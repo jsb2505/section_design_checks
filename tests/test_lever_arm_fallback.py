@@ -26,12 +26,12 @@ def test_lever_arm_fallback_respects_compression_face():
     rebar_20 = Rebar(diameter=20, grade="B500B")
 
     # Bottom bars
-    bottom_positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    bottom_positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     bottom_group = RebarGroup(rebar=rebar_20, positions=bottom_positions)
     section.add_rebar_group(bottom_group)
 
     # Top bars
-    top_positions = [Point2D(x=-50, y=200), Point2D(x=50, y=200)]
+    top_positions = [Point2D(x=50, y=450), Point2D(x=250, y=450)]
     top_group = RebarGroup(rebar=rebar_20, positions=top_positions)
     section.add_rebar_group(top_group)
 
@@ -98,11 +98,11 @@ def test_pure_axial_fallback():
     rebar_20 = Rebar(diameter=20, grade="B500B")
 
     # Add symmetric reinforcement
-    bottom_positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    bottom_positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     bottom_group = RebarGroup(rebar=rebar_20, positions=bottom_positions)
     section.add_rebar_group(bottom_group)
 
-    top_positions = [Point2D(x=-50, y=200), Point2D(x=50, y=200)]
+    top_positions = [Point2D(x=50, y=450), Point2D(x=250, y=450)]
     top_group = RebarGroup(rebar=rebar_20, positions=top_positions)
     section.add_rebar_group(top_group)
 

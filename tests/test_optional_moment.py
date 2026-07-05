@@ -21,7 +21,7 @@ def test_optional_M_Ed():
     # Create simple section
     section = create_rectangular_section(width=300, height=500)
     rebar_20 = Rebar(diameter=20, grade="B500B")
-    positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     group = RebarGroup(rebar=rebar_20, positions=positions)
     section.add_rebar_group(group)
 
@@ -58,12 +58,12 @@ def test_approximate_mode_compression_face():
     rebar_20 = Rebar(diameter=20, grade="B500B")
 
     # Bottom bars
-    bottom_positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    bottom_positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     bottom_group = RebarGroup(rebar=rebar_20, positions=bottom_positions)
     section.add_rebar_group(bottom_group)
 
     # Top bars
-    top_positions = [Point2D(x=-50, y=200), Point2D(x=50, y=200)]
+    top_positions = [Point2D(x=50, y=450), Point2D(x=250, y=450)]
     top_group = RebarGroup(rebar=rebar_20, positions=top_positions)
     section.add_rebar_group(top_group)
 
@@ -127,11 +127,11 @@ def test_rigorous_mode_with_optional_M():
     section = create_rectangular_section(width=300, height=500)
     rebar_20 = Rebar(diameter=20, grade="B500B")
 
-    bottom_positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    bottom_positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     bottom_group = RebarGroup(rebar=rebar_20, positions=bottom_positions)
     section.add_rebar_group(bottom_group)
 
-    top_positions = [Point2D(x=-50, y=200), Point2D(x=50, y=200)]
+    top_positions = [Point2D(x=50, y=450), Point2D(x=250, y=450)]
     top_group = RebarGroup(rebar=rebar_20, positions=top_positions)
     section.add_rebar_group(top_group)
 
@@ -169,7 +169,7 @@ def test_simple_use_case():
     # Simple section
     section = create_rectangular_section(width=300, height=500)
     rebar_20 = Rebar(diameter=20, grade="B500B")
-    positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     group = RebarGroup(rebar=rebar_20, positions=positions)
     section.add_rebar_group(group)
 

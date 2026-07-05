@@ -16,7 +16,7 @@ def test_new_api_single_case():
 
     # Add bottom bars (tension for sagging)
     rebar_20 = Rebar(diameter=20, grade="B500B")
-    positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     group = RebarGroup(rebar=rebar_20, positions=positions)
     section.add_rebar_group(group)
 
@@ -59,12 +59,12 @@ def test_new_api_multiple_cases():
     rebar_20 = Rebar(diameter=20, grade="B500B")
 
     # Bottom bars (tension for sagging)
-    bottom_positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    bottom_positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     bottom_group = RebarGroup(rebar=rebar_20, positions=bottom_positions)
     section.add_rebar_group(bottom_group)
 
     # Top bars (tension for hogging)
-    top_positions = [Point2D(x=-50, y=200), Point2D(x=50, y=200)]
+    top_positions = [Point2D(x=50, y=450), Point2D(x=250, y=450)]
     top_group = RebarGroup(rebar=rebar_20, positions=top_positions)
     section.add_rebar_group(top_group)
 
@@ -104,7 +104,7 @@ def test_approximate_mode():
     """Test approximate mode (fast, less accurate)."""
     section = create_rectangular_section(width=300, height=500)
     rebar_20 = Rebar(diameter=20, grade="B500B")
-    positions = [Point2D(x=-50, y=-200), Point2D(x=50, y=-200)]
+    positions = [Point2D(x=50, y=50), Point2D(x=250, y=50)]
     group = RebarGroup(rebar=rebar_20, positions=positions)
     section.add_rebar_group(group)
 
