@@ -6,9 +6,9 @@ Utility functions for shear design checks according to Eurocode 2 (EC2).
 '''
 from dataclasses import dataclass
 from math import sqrt, isfinite, radians, copysign, tan, sin
-from typing import Optional, cast
+from typing import Literal, Optional, cast
 
-from shapely.geometry import MultiLineString, Point
+from shapely.geometry import GeometryCollection, LineString, MultiLineString, Point
 
 from materials.utils.helpers import cot
 from materials.reinforced_concrete.geometry import RCSection
@@ -240,71 +240,142 @@ def calculate_tension_shift(
 def calculate_section_breadth(
     section: RCSection,
     n_slices: int = 50,
+    policy: Literal["minimum", "average"] = "minimum",
+    average_height_ratio: float = 0.8,
+    shear_direction: tuple[float, float] = (0.0, 1.0),
 ) -> float:
     """
-    Calculate the minimum web breadth b_w for shear design per EC2 §6.2.
+    Calculate section breadth b_w for shear design using a selectable policy.
 
-    EC2 defines b_w as "the minimum width between tension and compression chords".
-    This function finds the minimum horizontal width of the section by slicing
-    at multiple heights.
+    EC2 §6.2 defines b_w as the minimum width between tension and compression
+    chords. The default ``policy="minimum"`` reproduces this behaviour.
 
-    For rectangular sections, this returns the section width.
-    For T-beams or I-beams, this returns the web width (narrowest part).
+    For flexibility in non-prismatic sections (e.g., I-beams), this function
+    also supports an ``"average"`` policy, where the width is averaged over a
+    window centred at the section mid-depth (relative to ``shear_direction``).
 
     Args:
         section: RCSection object
-        n_slices: Number of horizontal slices for sampling (default 50)
+        n_slices: Number of sampled slices across the selected depth window.
+            Slices are evaluated away from exact boundaries to avoid tangency
+            artefacts.
+        policy: Breadth policy.
+            - ``"minimum"``: minimum sampled width (EC2-style web breadth).
+            - ``"average"``: mean sampled width over the selected depth window.
+        average_height_ratio:
+            Only used for ``policy="average"``. Fraction of total section depth
+            (along ``shear_direction``) used for averaging, centred at mid-depth.
+            Example: ``0.5`` averages over the middle 50% of depth (±25% about
+            mid-depth). Must satisfy ``0 < average_height_ratio <= 1``.
+        shear_direction:
+            Shear direction vector ``(vx, vy)`` in section coordinates. Slices
+            are taken perpendicular to this direction.
+            - ``(0, 1)``: vertical shear (default; horizontal slicing).
+            - ``(1, 0)``: horizontal shear (vertical slicing).
 
     Returns:
-        Minimum web breadth b_w in mm
-    """
-    from shapely.geometry import LineString
+        Breadth value in mm according to the selected policy.
 
+    Raises:
+        ValueError: If ``policy`` is unsupported, ``average_height_ratio`` is
+            invalid for ``policy="average"``, or ``shear_direction`` is zero.
+    """
     outline = section.outline
     min_x, min_y, max_x, max_y = outline.bounds
 
-    # Sample the section at multiple heights
-    height = max_y - min_y
-    if height < 1e-6:
-        return max_x - min_x  # Degenerate case
+    # Normalize and validate direction
+    vx, vy = float(shear_direction[0]), float(shear_direction[1])
+    v_norm = sqrt(vx * vx + vy * vy)
+    if v_norm <= 1e-12:
+        raise ValueError("shear_direction must be a non-zero vector")
+    ux, uy = vx / v_norm, vy / v_norm
 
-    min_width = max_x - min_x  # Start with bounding box width
+    # Vector perpendicular to shear direction (slice direction)
+    nx, ny = -uy, ux
 
+    # Use bounding-box corner projections to define sampling range.
+    corners = [
+        (min_x, min_y),
+        (min_x, max_y),
+        (max_x, min_y),
+        (max_x, max_y),
+    ]
+    proj_u = [x * ux + y * uy for x, y in corners]
+    proj_n = [x * nx + y * ny for x, y in corners]
+
+    depth_along_shear = max(proj_u) - min(proj_u)
+    breadth_bbox = max(proj_n) - min(proj_n)
+
+    if depth_along_shear < 1e-6:
+        # Degenerate section depth along the requested shear direction.
+        return breadth_bbox
+
+    if policy == "average":
+        if not (0.0 < average_height_ratio <= 1.0):
+            raise ValueError(
+                "average_height_ratio must satisfy 0 < average_height_ratio <= 1 "
+                "for policy='average'"
+            )
+        half_window = 0.5 * average_height_ratio * depth_along_shear
+        mid = 0.5 * (min(proj_u) + max(proj_u))
+        sample_min = mid - half_window
+        sample_max = mid + half_window
+    elif policy == "minimum":
+        sample_min = min(proj_u)
+        sample_max = max(proj_u)
+    else:
+        raise ValueError("policy must be one of {'minimum', 'average'}")
+
+    # Ensure the slicing segment spans the full section across the normal axis.
+    line_half_length = max(abs(p) for p in proj_n) + 1.0
+
+    widths: list[float] = []
     for i in range(1, n_slices):
-        # Slice at this height (avoid exact boundaries)
-        y = min_y + (i / n_slices) * height
+        t = sample_min + (i / n_slices) * (sample_max - sample_min)
 
-        # Create horizontal line across section
-        line = LineString([(min_x - 1, y), (max_x + 1, y)])
+        # Line equation: dot(x, u) = t, represented by a long segment along n.
+        cx, cy = t * ux, t * uy
+        line = LineString([
+            (cx - line_half_length * nx, cy - line_half_length * ny),
+            (cx + line_half_length * nx, cy + line_half_length * ny),
+        ])
 
-        # Find intersection with section outline
         intersection = outline.intersection(line)
-
         if intersection.is_empty:
             continue
 
-        # Calculate width at this height
         if isinstance(intersection, LineString):
-            # Single intersection line
-            coords = list(intersection.coords)
-            if len(coords) >= 2:
-                width = abs(coords[-1][0] - coords[0][0])
-                min_width = min(min_width, width)
+            width = float(intersection.length)
         elif isinstance(intersection, MultiLineString):
-            # Multiple intersection segments (e.g., hollow section)
-            # Sum the widths of all segments
-            total_width = 0.0
-            for geom in intersection.geoms:
-                coords = list(geom.coords)
-                if len(coords) >= 2:
-                    total_width += abs(coords[-1][0] - coords[0][0])
-            if total_width > 0:
-                min_width = min(min_width, total_width)
+            width = float(sum(geom.length for geom in intersection.geoms))
         elif isinstance(intersection, Point):
-            # Tangent point - skip
+            # Tangent point only; no finite width contribution.
             continue
+        elif isinstance(intersection, GeometryCollection):
+            # GeometryCollection fallback: sum line-like components only.
+            width = 0.0
+            for geom in intersection.geoms:
+                if isinstance(geom, LineString):
+                    width += float(geom.length)
+                elif isinstance(geom, MultiLineString):
+                    width += float(sum(g.length for g in geom.geoms))
+            if width <= 0.0:
+                continue
+        else:
+            # Conservative fallback for uncommon geometry types.
+            length = float(getattr(intersection, "length", 0.0))
+            if not isfinite(length) or length <= 0.0:
+                continue
+            width = length
 
-    return min_width
+        if width > 0.0:
+            widths.append(width)
+
+    if not widths:
+        return breadth_bbox
+    if policy == "average":
+        return sum(widths) / len(widths)
+    return min(widths)
 
 
 def find_rho_l_from_strains(

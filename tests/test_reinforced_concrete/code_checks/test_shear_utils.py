@@ -12,6 +12,7 @@ from shapely.geometry import Point, Polygon
 
 from materials.reinforced_concrete.code_checks.ec2_2004 import shear_utils
 from materials.reinforced_concrete.geometry import (
+    create_i_beam_section,
     create_linear_rebar_layer,
     create_rectangular_section,
 )
@@ -205,6 +206,71 @@ class TestSectionBreadthAndRhoL:
         section = SimpleNamespace(outline=_Outline())
         out = shear_utils.calculate_section_breadth(section=section, n_slices=2)
         assert out == pytest.approx(10.0, rel=1e-12)
+
+    def test_calculate_section_breadth_average_policy_for_i_beam(self):
+        """Average policy can target the web region around mid-depth."""
+        section = create_i_beam_section(
+            b_f_top=500.0,
+            h_f_top=100.0,
+            b_f_bot=500.0,
+            h_f_bot=100.0,
+            b_w=200.0,
+            h_w=400.0,
+        )
+
+        b_min = shear_utils.calculate_section_breadth(
+            section=section,
+            n_slices=401,
+            policy="minimum",
+        )
+        b_avg_mid = shear_utils.calculate_section_breadth(
+            section=section,
+            n_slices=401,
+            policy="average",
+            average_height_ratio=0.5,
+        )
+        b_avg_full = shear_utils.calculate_section_breadth(
+            section=section,
+            n_slices=401,
+            policy="average",
+            average_height_ratio=1.0,
+        )
+
+        assert b_min == pytest.approx(200.0, rel=1e-12)
+        assert b_avg_mid == pytest.approx(200.0, abs=1.0)
+        assert b_avg_full == pytest.approx(300.0, abs=3.0)
+        assert b_avg_full > b_avg_mid
+
+    def test_calculate_section_breadth_supports_non_vertical_shear_direction(self):
+        """Horizontal shear direction slices vertically and returns section height."""
+        section = create_rectangular_section(width=300.0, height=500.0)
+        b_w = shear_utils.calculate_section_breadth(
+            section=section,
+            n_slices=40,
+            policy="minimum",
+            shear_direction=(1.0, 0.0),
+        )
+        assert b_w == pytest.approx(500.0, rel=1e-12)
+
+    def test_calculate_section_breadth_policy_input_validation(self):
+        """Invalid breadth policy inputs raise clear errors."""
+        section = create_rectangular_section(width=300.0, height=500.0)
+
+        with pytest.raises(ValueError, match="policy must be one of"):
+            shear_utils.calculate_section_breadth(section=section, policy="median")  # type: ignore[arg-type]
+
+        with pytest.raises(ValueError, match="average_height_ratio"):
+            shear_utils.calculate_section_breadth(
+                section=section,
+                policy="average",
+                average_height_ratio=0.0,
+            )
+
+        with pytest.raises(ValueError, match="non-zero vector"):
+            shear_utils.calculate_section_breadth(
+                section=section,
+                shear_direction=(0.0, 0.0),
+            )
 
     def test_find_rho_l_invalid_geometry_returns_zero(self):
         """Test find rho l invalid geometry returns zero."""

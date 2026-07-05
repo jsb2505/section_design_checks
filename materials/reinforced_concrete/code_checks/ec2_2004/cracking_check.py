@@ -2075,12 +2075,16 @@ class CrackingCheck(BaseCodeCheck):
             governing_face_result: Literal["top", "bottom"] = "bottom"
 
             for face_candidate in faces_to_check:
+                crack_width_kwargs: dict[str, Any] = dict(
+                    suppress_warnings=suppress_warnings,
+                    actual_bar_diameter=actual_bar_diameter,
+                )
+                if cover_override is not None:
+                    crack_width_kwargs["cover_override"] = cover_override
                 cr_candidate = self._calculate_face_crack_width(
                     eps_top, eps_bottom, face=face_candidate,
                     x=x, is_net_tension=True,
-                    suppress_warnings=suppress_warnings,
-                    actual_bar_diameter=actual_bar_diameter,
-                    cover_override=cover_override,
+                    **crack_width_kwargs,
                 )
                 if best_cr is None or cr_candidate.w_k > best_cr.w_k:
                     best_cr = cr_candidate
@@ -2092,12 +2096,16 @@ class CrackingCheck(BaseCodeCheck):
         else:
             # Bending: one compression face, one tension face
             tension_face: Literal["top", "bottom"] = "bottom" if comp_face == "top" else "top"
+            crack_width_kwargs: dict[str, Any] = dict(
+                suppress_warnings=suppress_warnings,
+                actual_bar_diameter=actual_bar_diameter,
+            )
+            if cover_override is not None:
+                crack_width_kwargs["cover_override"] = cover_override
             cr = self._calculate_face_crack_width(
                 eps_top, eps_bottom, face=tension_face,
                 x=x, is_net_tension=False,
-                suppress_warnings=suppress_warnings,
-                actual_bar_diameter=actual_bar_diameter,
-                cover_override=cover_override,
+                **crack_width_kwargs,
             )
             cr.governing_face = tension_face
 
@@ -2313,12 +2321,16 @@ class CrackingCheck(BaseCodeCheck):
             governing_face_result: Literal["top", "bottom"] = "bottom"
 
             for face_candidate in faces_to_check:
+                crack_width_kwargs: dict[str, Any] = dict(
+                    suppress_warnings=suppress_warnings,
+                    actual_bar_diameter=actual_bar_diameter,
+                )
+                if cover_override is not None:
+                    crack_width_kwargs["cover_override"] = cover_override
                 result_candidate = self._calculate_face_crack_width(
                     eps_top, eps_bottom, face=face_candidate,
                     x=x, is_net_tension=True,
-                    suppress_warnings=suppress_warnings,
-                    actual_bar_diameter=actual_bar_diameter,
-                    cover_override=cover_override,
+                    **crack_width_kwargs,
                 )
                 if best_result is None or result_candidate.w_k > best_result.w_k:
                     best_result = result_candidate
@@ -2330,12 +2342,16 @@ class CrackingCheck(BaseCodeCheck):
         else:
             # Bending: one compression face, one tension face
             tension_face: Literal["top", "bottom"] = "bottom" if comp_face == "top" else "top"
+            crack_width_kwargs: dict[str, Any] = dict(
+                suppress_warnings=suppress_warnings,
+                actual_bar_diameter=actual_bar_diameter,
+            )
+            if cover_override is not None:
+                crack_width_kwargs["cover_override"] = cover_override
             result = self._calculate_face_crack_width(
                 eps_top, eps_bottom, face=tension_face,
                 x=x, is_net_tension=False,
-                suppress_warnings=suppress_warnings,
-                actual_bar_diameter=actual_bar_diameter,
-                cover_override=cover_override,
+                **crack_width_kwargs,
             )
             result.governing_face = tension_face
 

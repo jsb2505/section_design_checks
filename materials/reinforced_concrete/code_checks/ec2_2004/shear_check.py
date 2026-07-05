@@ -8,7 +8,7 @@ N_Ed, M_Ed, and V_Ed are now parameters to perform_check(),not fields.
 This enables checking multiple load cases against the same section efficiently.
 """
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from math import atan, degrees, radians, sin, sqrt
 import warnings
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
@@ -75,8 +75,8 @@ class ShearCheck(BaseCodeCheck):
       accurate neutral axis, compression face detection, and lever arm computation from
       force resultant centroids. Most accurate. Initialization: ~100ms.
     - **Approximate mode** (use_rigorous=False): Uses M-N solver only for compression
-      face detection (when M_Ed or N_Ed provided), but always uses z=0.9d for lever arm.
-      Faster check time but less accurate lever arm for eccentric loading.
+      face detection (when M_Ed or N_Ed provided), but always uses z=z_d_ratio*d for
+      lever arm (default 0.9d, configurable). Faster but less accurate for eccentric loading.
 
     N_Ed, M_Ed, V_Ed are  parameters to perform_check(), not fields.
     This allows efficiently checking many load cases against the same section.
@@ -102,8 +102,22 @@ class ShearCheck(BaseCodeCheck):
             If False, σ_cp is limited to a minimum of 0.0 MPa
         use_transformed_area_for_sigma_cp: 
             Use transformed area (concrete + n·steel) for σ_cp calculation (default: True)
-        cap_lever_arm:
-            Cap lever arm to 0.9d per EC2 (default: True, rigorous mode only)
+        z_d_ratio:
+            Lever arm ratio z/d for approximate mode (default: 0.9, circular ~0.77)
+        z_d_ratio_upper:
+            Upper bound for z/d in rigorous mode (default: 0.95)
+        z_d_ratio_lower:
+            Lower bound for z/d in rigorous mode (default: 0.65)
+        breadth_policy:
+            Section breadth policy for automatic b_w calculation when
+            ``breadth_override`` is not set:
+            ``"minimum"`` (EC2-style minimum width) or ``"average"``.
+        breadth_average_height_ratio:
+            Relative depth window used for ``breadth_policy="average"``,
+            centred at mid-depth along ``breadth_shear_direction``.
+        breadth_shear_direction:
+            Shear direction vector ``(vx, vy)`` used for directional breadth
+            slicing (default vertical shear: ``(0, 1)``).
         concrete_model_type: Concrete stress-strain model (for rigorous mode)
         steel_model_type: Steel stress-strain branch (for rigorous mode)
 
@@ -173,7 +187,7 @@ class ShearCheck(BaseCodeCheck):
     )
 
     use_rigorous: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Use rigorous mode: compute lever arm from force centroids. "
             "If False (approximate mode): always use z=0.9d for lever arm. "
@@ -205,14 +219,35 @@ class ShearCheck(BaseCodeCheck):
         ),
     )
 
-    cap_lever_arm: bool = Field(
-        default=True,
+    z_d_ratio: float = Field(
+        default=0.9,
         description=(
-            "Cap computed lever arm to 0.9d per EC2 codified simplification (default: True). "
-            "When True, lever arm z is limited to z <= 0.9d to match EC2 truss model assumptions. "
-            "The uncapped mechanical lever arm z_mech is still stored in details for reference. "
-            "Only affects rigorous mode - approximate mode always uses z=0.9d."
+            "Lever arm ratio z/d for approximate mode (use_rigorous=False). "
+            "Default 0.9 per EC2 §6.2.3(1). For circular sections use ~0.77."
         ),
+        gt=0.0,
+        le=1.0,
+    )
+
+    z_d_ratio_upper: float = Field(
+        default=0.95,
+        description=(
+            "Upper bound for lever arm ratio z/d in rigorous mode. "
+            "z_mech is clamped to z <= z_d_ratio_upper * d."
+        ),
+        gt=0.0,
+        le=1.0,
+    )
+
+    z_d_ratio_lower: float = Field(
+        default=0.60,
+        description=(
+            "Lower bound for lever arm ratio z/d in rigorous mode. "
+            "z_mech is clamped to z >= z_d_ratio_lower * d. "
+            "Prevents fallback to a single default value for extreme axial states."
+        ),
+        gt=0.0,
+        le=1.0,
     )
 
     breadth_override: Optional[float] = Field(
@@ -223,6 +258,35 @@ class ShearCheck(BaseCodeCheck):
             "sections or when the automatic slicing does not capture the intended width."
         ),
         gt=0,
+    )
+
+    breadth_policy: Literal["minimum", "average"] = Field(
+        default="minimum",
+        description=(
+            "Automatic b_w policy when breadth_override is not provided. "
+            "'minimum' matches EC2 minimum-width intent; 'average' returns the "
+            "mean width over a central depth window."
+        ),
+    )
+
+    breadth_average_height_ratio: float = Field(
+        default=1.0,
+        description=(
+            "Depth ratio used for breadth_policy='average', measured along "
+            "breadth_shear_direction and centered at section mid-depth. "
+            "Example: 0.5 uses the middle 50% depth window."
+        ),
+        gt=0.0,
+        le=1.0,
+    )
+
+    breadth_shear_direction: tuple[float, float] = Field(
+        default=(0.0, 1.0),
+        description=(
+            "Shear direction vector (vx, vy) used by automatic breadth slicing. "
+            "(0, 1) gives horizontal slices for major-axis shear; (1, 0) gives "
+            "vertical slices for minor-axis shear."
+        ),
     )
 
     use_increased_nu_1: bool = Field(
@@ -299,6 +363,48 @@ class ShearCheck(BaseCodeCheck):
     _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
     _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
     _diagram_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
+    _breadth_cache: Optional[float] = PrivateAttr(default=None)
+    _breadth_snapshot: Optional[dict[str, Any]] = PrivateAttr(default=None)
+
+    def _take_section_snapshot(self) -> dict[str, Any]:
+        """
+        Capture current section state for cache invalidation.
+
+        Uses ``model_dump`` when available so in-place section mutations
+        can be detected without requiring field reassignment on ``ShearCheck``.
+        """
+        section = self.section
+        if hasattr(section, "model_dump"):
+            return section.model_dump()  # type: ignore[no-any-return]
+        return {"section_obj_id": id(section)}
+
+    def _take_breadth_snapshot(self) -> dict[str, Any]:
+        """Capture current breadth inputs for cache invalidation."""
+        try:
+            policy = self.breadth_policy
+            average_height_ratio = self.breadth_average_height_ratio
+            shear_direction = self.breadth_shear_direction
+        except AttributeError:
+            # Compatibility for tests that instantiate via object.__new__
+            policy = "minimum"
+            average_height_ratio = 1.0
+            shear_direction = (0.0, 1.0)
+
+        return {
+            "section": self._take_section_snapshot(),
+            "policy": policy,
+            "average_height_ratio": float(average_height_ratio),
+            "shear_direction": (float(shear_direction[0]), float(shear_direction[1])),
+        }
+
+    @model_validator(mode="after")
+    def _validate_z_d_ratios(self) -> "ShearCheck":
+        if self.z_d_ratio_lower >= self.z_d_ratio_upper:
+            raise ValueError(
+                f"z_d_ratio_lower ({self.z_d_ratio_lower}) must be < "
+                f"z_d_ratio_upper ({self.z_d_ratio_upper})"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_concrete_model_type(self) -> "ShearCheck":
@@ -309,6 +415,13 @@ class ShearCheck(BaseCodeCheck):
                 "LINEAR_ELASTIC concrete model is only valid for SLS checks "
                 "(e.g. CrackingCheck), not for ULS shear checks."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_breadth_direction(self) -> "ShearCheck":
+        vx, vy = self.breadth_shear_direction
+        if abs(float(vx)) <= 1e-12 and abs(float(vy)) <= 1e-12:
+            raise ValueError("breadth_shear_direction must be a non-zero vector")
         return self
 
     def _take_snapshot(self) -> dict:
@@ -382,15 +495,56 @@ class ShearCheck(BaseCodeCheck):
     @property
     def breadth(self) -> float:
         """
-        Minimum web breadth b_w for shear design (mm).
+        Section breadth b_w for shear design (mm).
 
         If ``breadth_override`` is set, that value is used directly.
-        Otherwise, computed automatically per EC2 §6.2 as the minimum width
-        between tension and compression chords.
+        Otherwise, computed automatically from section geometry using
+        ``breadth_policy``, ``breadth_average_height_ratio``, and
+        ``breadth_shear_direction``.
+
+        The computed breadth is cached and automatically recomputed if the
+        section or breadth-policy snapshot changes.
         """
         if self.breadth_override is not None:
             return self.breadth_override
-        return calculate_section_breadth(self.section)
+
+        breadth_snapshot_now = self._take_breadth_snapshot()
+        try:
+            policy = self.breadth_policy
+            average_height_ratio = self.breadth_average_height_ratio
+            shear_direction = self.breadth_shear_direction
+        except AttributeError:
+            # Compatibility for tests that instantiate via object.__new__
+            policy = "minimum"
+            average_height_ratio = 1.0
+            shear_direction = (0.0, 1.0)
+
+        breadth_cache: Optional[float]
+        breadth_snapshot: Optional[dict[str, Any]]
+        try:
+            breadth_cache = self._breadth_cache
+            breadth_snapshot = self._breadth_snapshot
+        except AttributeError:
+            # Compatibility for tests that instantiate via object.__new__
+            breadth_cache = None
+            breadth_snapshot = None
+
+        if breadth_cache is None or breadth_snapshot != breadth_snapshot_now:
+            breadth_cache = calculate_section_breadth(
+                self.section,
+                policy=policy,
+                average_height_ratio=average_height_ratio,
+                shear_direction=shear_direction,
+            )
+            try:
+                self._breadth_cache = breadth_cache
+                self._breadth_snapshot = breadth_snapshot_now
+            except AttributeError:
+                # Compatibility for tests that instantiate via object.__new__
+                object.__setattr__(self, "_breadth_cache", breadth_cache)
+                object.__setattr__(self, "_breadth_snapshot", breadth_snapshot_now)
+        assert breadth_cache is not None
+        return breadth_cache
 
     @property
     def f_cd_design(self) -> float:
@@ -477,21 +631,18 @@ class ShearCheck(BaseCodeCheck):
         Lever arm for this load case.
 
         Behaviour:
-            If use_rigorous=True: computes from force resultant centroids (with sensible fallback)
-            If use_rigorous=False: uses 0.9d approximation
+            If use_rigorous=True: computes from force resultant centroids, clamped
+                to [z_d_ratio_lower * d, z_d_ratio_upper * d]
+            If use_rigorous=False: uses z_d_ratio * d approximation
 
         Returns:
-            (z_ec2, z_mech)
+            (z_design, z_mech)
         """
-        # No diagram available (or user opted out) => always use EC2 approx
+        # No diagram available (or user opted out) => always use configured ratio
         if not self.use_rigorous:
-            return (0.9 * d, None)
+            return (self.z_d_ratio * d, None)
 
-        # Delegate to MNInteractionDiagram; it should:
-        # - compute z_mech if possible else None
-        # - fallback to 0.9d when z_mech is None / suspicious
-        # - optionally cap to 0.9d
-        # - emit warnings when fallback/cap occurs
+        # Delegate to MNInteractionDiagram with configured bounds
         return self._get_diagram(ignore_compression_steel).get_lever_arm(
             M_Ed=M_Ed,
             N_Ed=N_Ed,
@@ -499,7 +650,9 @@ class ShearCheck(BaseCodeCheck):
             eps_top=eps_top,
             eps_bottom=eps_bottom,
             prefer_rigorous=True,
-            cap_to_09d=self.cap_lever_arm,
+            z_d_upper=self.z_d_ratio_upper,
+            z_d_lower=self.z_d_ratio_lower,
+            z_d_approx=self.z_d_ratio,
         )
 
 
@@ -1409,7 +1562,9 @@ class ShearCheck(BaseCodeCheck):
             # ShearCheck-specific
             "rho_l": rho_l,
             "z_mode": "rigorous" if self.use_rigorous else "approximate",
-            "cap_lever_arm": self.cap_lever_arm,
+            "z_d_ratio": self.z_d_ratio,
+            "z_d_ratio_upper": self.z_d_ratio_upper,
+            "z_d_ratio_lower": self.z_d_ratio_lower,
         }
 
         return self._create_result(
@@ -1435,10 +1590,27 @@ class ShearCheck(BaseCodeCheck):
         **kwargs,
     ) -> Any:
         """
-        Plot cot(theta) sweep for shear capacities.
+        Plot shear-capacity components over a cot(theta) sweep.
 
-        Convenience wrapper around ``ShearViewer.plot_cot_theta_study``.
-        See that method for full argument documentation.
+        This is a convenience wrapper around
+        ``materials.reinforced_concrete.analysis.shear_viewer.ShearViewer``.
+
+        Args:
+            load_case: Design load case (``V_Ed``, ``M_Ed``, ``N_Ed``) used for
+                the sweep.
+            **kwargs: Additional plotting parameters forwarded to
+                ``ShearViewer.plot_cot_theta_study`` (for example:
+                ``n_points``, ``cot_theta_min``, ``cot_theta_max``,
+                ``use_uncracked_V_Rd_c``, ``use_note_2``, ``save_path``,
+                ``show``, ``title``, ``width``, ``height``).
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly figure generated by the viewer.
+
+        Raises:
+            ValueError: If required shear reinforcement is missing.
+            ImportError: If Plotly is not installed.
+            TypeError: Propagated from the viewer for invalid inputs.
         """
         from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
         return ShearViewer(self).plot_cot_theta_study(load_case=load_case, **kwargs)
@@ -1450,10 +1622,27 @@ class ShearCheck(BaseCodeCheck):
         **kwargs,
     ) -> Any:
         """
-        Plot cot(theta) sweep for utilization and tension-shift moment add-on.
+        Plot utilization and tension-shift add-on versus cot(theta).
 
-        Convenience wrapper around ``ShearViewer.plot_cot_theta_moment_shift_study``.
-        See that method for full argument documentation.
+        This is a convenience wrapper around
+        ``materials.reinforced_concrete.analysis.shear_viewer.ShearViewer``.
+
+        Args:
+            load_case: Design load case (``V_Ed``, ``M_Ed``, ``N_Ed``) used for
+                the sweep.
+            **kwargs: Additional plotting parameters forwarded to
+                ``ShearViewer.plot_cot_theta_moment_shift_study`` (for example:
+                ``n_points``, ``cot_theta_min``, ``cot_theta_max``,
+                ``use_uncracked_V_Rd_c``, ``use_note_2``, ``save_path``,
+                ``show``, ``title``, ``width``, ``height``).
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly figure generated by the viewer.
+
+        Raises:
+            ValueError: If required shear reinforcement is missing.
+            ImportError: If Plotly is not installed.
+            TypeError: Propagated from the viewer for invalid inputs.
         """
         from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
         return ShearViewer(self).plot_cot_theta_moment_shift_study(load_case=load_case, **kwargs)
@@ -1465,10 +1654,27 @@ class ShearCheck(BaseCodeCheck):
         **kwargs,
     ) -> Any:
         """
-        Plot link-angle sweep for shear capacities.
+        Plot shear-capacity components over a link-angle sweep.
 
-        Convenience wrapper around ``ShearViewer.plot_link_angle_study``.
-        See that method for full argument documentation.
+        This is a convenience wrapper around
+        ``materials.reinforced_concrete.analysis.shear_viewer.ShearViewer``.
+
+        Args:
+            load_case: Design load case (``V_Ed``, ``M_Ed``, ``N_Ed``) used for
+                the sweep.
+            **kwargs: Additional plotting parameters forwarded to
+                ``ShearViewer.plot_link_angle_study`` (for example:
+                ``cot_theta``, ``angle_min``, ``angle_max``, ``n_points``,
+                ``use_uncracked_V_Rd_c``, ``use_note_2``, ``save_path``,
+                ``show``, ``title``, ``width``, ``height``).
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly figure generated by the viewer.
+
+        Raises:
+            ValueError: If required shear reinforcement is missing.
+            ImportError: If Plotly is not installed.
+            TypeError: Propagated from the viewer for invalid inputs.
         """
         from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
         return ShearViewer(self).plot_link_angle_study(load_case=load_case, **kwargs)
@@ -1480,10 +1686,27 @@ class ShearCheck(BaseCodeCheck):
         **kwargs,
     ) -> Any:
         """
-        Plot link-angle sweep for utilization and tension-shift moment add-on.
+        Plot utilization and tension-shift add-on versus link angle.
 
-        Convenience wrapper around ``ShearViewer.plot_link_angle_moment_shift_study``.
-        See that method for full argument documentation.
+        This is a convenience wrapper around
+        ``materials.reinforced_concrete.analysis.shear_viewer.ShearViewer``.
+
+        Args:
+            load_case: Design load case (``V_Ed``, ``M_Ed``, ``N_Ed``) used for
+                the sweep.
+            **kwargs: Additional plotting parameters forwarded to
+                ``ShearViewer.plot_link_angle_moment_shift_study`` (for example:
+                ``cot_theta``, ``angle_min``, ``angle_max``, ``n_points``,
+                ``use_uncracked_V_Rd_c``, ``use_note_2``, ``save_path``,
+                ``show``, ``title``, ``width``, ``height``).
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly figure generated by the viewer.
+
+        Raises:
+            ValueError: If required shear reinforcement is missing.
+            ImportError: If Plotly is not installed.
+            TypeError: Propagated from the viewer for invalid inputs.
         """
         from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
         return ShearViewer(self).plot_link_angle_moment_shift_study(load_case=load_case, **kwargs)
@@ -1495,10 +1718,31 @@ class ShearCheck(BaseCodeCheck):
         **kwargs,
     ) -> Any:
         """
-        Plot cot(theta)-link-angle heatmap for utilization or capacities.
+        Plot a cot(theta)-vs-link-angle heatmap for shear metrics.
 
-        Convenience wrapper around ``ShearViewer.plot_cot_theta_link_angle_heatmap``.
-        See that method for full argument documentation.
+        This is a convenience wrapper around
+        ``materials.reinforced_concrete.analysis.shear_viewer.ShearViewer``.
+
+        metric: Response quantity on the color axis. Supported values are:
+                ``"utilization"``, ``"capacity"``, ``"v_rd_s"``, and ``"v_rd_max"``.
+
+        Args:
+            load_case: Design load case (``V_Ed``, ``M_Ed``, ``N_Ed``) used for
+                the heatmap.
+            **kwargs: Additional plotting parameters forwarded to
+                ``ShearViewer.plot_cot_theta_link_angle_heatmap`` (for example:
+                ``cot_theta_min``, ``cot_theta_max``, ``angle_min``, ``angle_max``,
+                ``n_cot``, ``n_angles``, ``metric``, ``use_uncracked_V_Rd_c``,
+                ``use_note_2``, ``save_path``, ``show``, ``title``, ``width``,
+                ``height``).
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly heatmap generated by the viewer.
+
+        Raises:
+            ValueError: If required shear reinforcement is missing, or metric is invalid.
+            ImportError: If Plotly is not installed.
+            TypeError: Propagated from the viewer for invalid inputs.
         """
         from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
         return ShearViewer(self).plot_cot_theta_link_angle_heatmap(load_case=load_case, **kwargs)
@@ -1510,10 +1754,31 @@ class ShearCheck(BaseCodeCheck):
         **kwargs,
     ) -> Any:
         """
-        Plot axial-force vs cot(theta) heatmap for utilization or capacities.
+        Plot an axial-force-vs-cot(theta) heatmap for shear metrics.
 
-        Convenience wrapper around ``ShearViewer.plot_axial_cot_theta_contour``.
-        See that method for full argument documentation.
+        This is a convenience wrapper around
+        ``materials.reinforced_concrete.analysis.shear_viewer.ShearViewer``.
+
+        metric: Response quantity on the color axis. Supported values are:
+                ``"utilization"``, ``"capacity"``, ``"v_rd_s"``, and ``"v_rd_max"``.
+
+        Args:
+            load_case: Base load case used for ``V_Ed`` and ``M_Ed`` while axial
+                force is swept in the viewer.
+            **kwargs: Additional plotting parameters forwarded to
+                ``ShearViewer.plot_axial_cot_theta_contour`` (for example:
+                ``N_min``, ``N_max``, ``n_axial``, ``cot_theta_min``,
+                ``cot_theta_max``, ``n_cot``, ``metric``,
+                ``use_uncracked_V_Rd_c``, ``use_note_2``, ``save_path``, ``show``,
+                ``title``, ``width``, ``height``).
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly heatmap generated by the viewer.
+
+        Raises:
+            ValueError: If required shear reinforcement is missing, or metric is invalid.
+            ImportError: If Plotly is not installed.
+            TypeError: Propagated from the viewer for invalid inputs.
         """
         from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
         return ShearViewer(self).plot_axial_cot_theta_contour(load_case=load_case, **kwargs)

@@ -753,7 +753,8 @@ def test_get_lever_arm_fallback_and_cap_branches(
     diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Test get lever arm fallback and cap branches."""
-    with pytest.warns(UserWarning, match="fallback to 0.9d"):
+    # M_Ed=0, N_Ed=0 → fallback to z_d_approx * d = 0.9 * 500 = 450
+    with pytest.warns(UserWarning, match="fallback to"):
         z0, z_mech0 = diagram.get_lever_arm(
             M_Ed=0.0,
             N_Ed=0.0,
@@ -764,6 +765,7 @@ def test_get_lever_arm_fallback_and_cap_branches(
     assert z0 == pytest.approx(450.0)
     assert z_mech0 is None
 
+    # z_mech=None with mixed strains → fallback to z_d_approx * d = 450
     monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: None)
     with pytest.warns(UserWarning, match="unable to compute"):
         z1, z_mech1 = diagram.get_lever_arm(
@@ -778,8 +780,9 @@ def test_get_lever_arm_fallback_and_cap_branches(
     assert z1 == pytest.approx(450.0)
     assert z_mech1 is None
 
+    # z_mech=20 < z_d_lower * d = 0.65 * 500 = 325 → clamped to lower bound
     monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: 20.0)
-    with pytest.warns(UserWarning, match="likely axial-dominated"):
+    with pytest.warns(UserWarning, match="clamped to lower bound"):
         z2, z_mech2 = diagram.get_lever_arm(
             M_Ed=10.0,
             N_Ed=0.0,
@@ -787,14 +790,14 @@ def test_get_lever_arm_fallback_and_cap_branches(
             eps_top=0.001,
             eps_bottom=-0.001,
             prefer_rigorous=True,
-            min_z_ratio=0.10,
             warn_on_fallback=True,
         )
-    assert z2 == pytest.approx(450.0)
+    assert z2 == pytest.approx(325.0)
     assert z_mech2 == pytest.approx(20.0)
 
+    # z_mech=600 > z_d_upper * d = 0.95 * 500 = 475 → clamped to upper bound
     monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: 600.0)
-    with pytest.warns(UserWarning, match="Lever arm capped"):
+    with pytest.warns(UserWarning, match="clamped to upper bound"):
         z3, z_mech3 = diagram.get_lever_arm(
             M_Ed=10.0,
             N_Ed=0.0,
@@ -802,22 +805,90 @@ def test_get_lever_arm_fallback_and_cap_branches(
             eps_top=0.001,
             eps_bottom=-0.001,
             prefer_rigorous=True,
-            cap_to_09d=True,
         )
-    assert z3 == pytest.approx(450.0)
+    assert z3 == pytest.approx(475.0)
     assert z_mech3 == pytest.approx(600.0)
+
+
+def test_get_lever_arm_fallback_full_compression_uses_lower_bound(
+    diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Full compression fallback should use lower z/d bound."""
+    monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: None)
+    with pytest.warns(UserWarning, match="unable to compute"):
+        z, z_mech = diagram.get_lever_arm(
+            M_Ed=10.0,
+            N_Ed=500.0,
+            d=500.0,
+            eps_top=0.001,
+            eps_bottom=0.0005,
+            prefer_rigorous=True,
+            warn_on_fallback=True,
+        )
+    assert z == pytest.approx(325.0)  # z_d_lower * d
+    assert z_mech is None
+
+
+def test_get_lever_arm_fallback_mixed_strain_but_no_tension_uses_lower_bound(
+    diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If there is no tension resultant, fallback should be lower bound."""
+    monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: None)
+    monkeypatch.setattr(
+        diagram,
+        "get_fibre_forces_from_end_strains",
+        lambda *_: (np.array([5.0, 10.0]), np.array([0.0, 100.0]), np.array([1.0, 1.0])),
+    )
+    with pytest.warns(UserWarning, match="unable to compute"):
+        z, z_mech = diagram.get_lever_arm(
+            M_Ed=10.0,
+            N_Ed=500.0,
+            d=500.0,
+            eps_top=0.001,
+            eps_bottom=-0.001,  # mixed signs, but no tension resultant in forces
+            prefer_rigorous=True,
+            warn_on_fallback=True,
+        )
+    assert z == pytest.approx(325.0)  # z_d_lower * d
+    assert z_mech is None
+
+
+def test_get_lever_arm_fallback_near_pure_tension_uses_upper_bound(
+    diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tiny compression resultant should still be treated as near pure tension."""
+    monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: None)
+    monkeypatch.setattr(
+        diagram,
+        "get_fibre_forces_from_end_strains",
+        lambda *_: (np.array([-1000.0, 1.0]), np.array([0.0, 100.0]), np.array([1.0, 1.0])),
+    )
+    with pytest.warns(UserWarning, match="unable to compute"):
+        z, z_mech = diagram.get_lever_arm(
+            M_Ed=10.0,
+            N_Ed=-500.0,
+            d=500.0,
+            eps_top=-0.001,
+            eps_bottom=0.001,
+            prefer_rigorous=True,
+            warn_on_fallback=True,
+        )
+    assert z == pytest.approx(475.0)  # z_d_upper * d
+    assert z_mech is None
 
 
 def test_get_lever_arm_valid_rigorous_value(diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test get lever arm valid rigorous value."""
     monkeypatch.setattr(diagram, "find_strains_for_MN", lambda **_kwargs: (0.002, -0.001))
     monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: 300.0)
+    # z_mech=300 is within default bounds [0.65*500=325, 0.95*500=475]... but 300 < 325!
+    # Use a low lower bound to keep z_mech=300 unclamped
     z, z_mech = diagram.get_lever_arm(
         M_Ed=50.0,
         N_Ed=10.0,
         d=500.0,
         prefer_rigorous=True,
-        cap_to_09d=False,
+        z_d_lower=0.10,
     )
     assert z == pytest.approx(300.0)
     assert z_mech == pytest.approx(300.0)
@@ -868,6 +939,18 @@ def test_compute_lever_arm_from_centroids_zero_total_branch(
         return real_sum(values, *args, **kwargs)
 
     monkeypatch.setattr(interaction_diagram.np, "sum", _fake_sum)
+    assert diagram._compute_lever_arm_from_centroids(0.001, -0.001) is None
+
+
+def test_compute_lever_arm_from_centroids_unbalanced_resultants_returns_none(
+    diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Near one-sided resultants should be treated as ill-conditioned."""
+    monkeypatch.setattr(
+        diagram,
+        "get_fibre_forces_from_end_strains",
+        lambda *_: (np.array([-1.0, 1000.0]), np.array([0.0, 100.0]), np.array([1.0, 1.0])),
+    )
     assert diagram._compute_lever_arm_from_centroids(0.001, -0.001) is None
 
 

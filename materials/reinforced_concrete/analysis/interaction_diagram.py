@@ -1611,18 +1611,24 @@ class MNInteractionDiagram:
         eps_bottom: Optional[float] = None,
         *,
         prefer_rigorous: bool = True,
-        cap_to_09d: bool = True,
-        min_z_ratio: float = 0.10,
+        z_d_upper: float = 0.95,
+        z_d_lower: float = 0.65,
+        z_d_approx: float = 0.9,
         warn_on_fallback: bool = True,
     ) -> tuple[float, Optional[float]]:
         """
-        Returns (z_ec2, z_mech).
+        Returns (z_design, z_mech).
 
-        z_ec2 is ALWAYS usable for design (finite, positive, conservative):
-        - defaults to 0.9d if rigorous calc is not requested or not meaningful
-        - optionally capped to 0.9d
+        z_design is ALWAYS usable for design (finite, positive):
+        - If not prefer_rigorous: returns z_d_approx * d
+        - If prefer_rigorous: computes z_mech from force centroids, then clamps
+          to [z_d_lower * d, z_d_upper * d]
+        - Fallback for ill-posed states:
+          no tension resultant / net compression → z_d_lower * d,
+          no compression resultant / net tension → z_d_upper * d,
+          otherwise → z_d_approx * d
 
-        z_mech is the uncapped centroid-based lever arm if computed, else None.
+        z_mech is the unclamped centroid-based lever arm if computed, else None.
         """
         # Effective depth
         if d is None:
@@ -1632,21 +1638,30 @@ class MNInteractionDiagram:
         if d <= 0:
             raise ValueError(f"Effective depth d must be > 0, got {d}")
 
-        limit_09d = 0.9 * d
+        z_upper = z_d_upper * d
+        z_lower = z_d_lower * d
+        z_approx = z_d_approx * d
 
-        # Cheap codified lever arm
+        # Codified lever arm (non-rigorous)
         if not prefer_rigorous:
-            return (limit_09d, None)
+            return (z_approx, None)
 
         # Near-zero moment: centroid lever arm is ill-posed / numerically unstable
         if abs(M_Ed) < 1e-6:
+            # Fallback depends on axial state
+            if N_Ed > 0:
+                z_fb = z_lower
+            elif N_Ed < 0:
+                z_fb = z_upper
+            else:
+                z_fb = z_approx
             if warn_on_fallback:
                 warnings.warn(
-                    "Lever arm fallback to 0.9d: |M_Ed| is ~0 so centroid-based lever arm "
-                    "is ill-posed (pure axial/shear state).",
+                    f"Lever arm fallback to {z_fb:.1f} mm ({z_fb/d:.2f}d): |M_Ed| is ~0 "
+                    "so centroid-based lever arm is ill-posed (pure axial/shear state).",
                     stacklevel=2,
                 )
-            return (limit_09d, None)
+            return (z_fb, None)
 
         # Need strains to compute centroid lever arm
         if eps_top is None or eps_bottom is None:
@@ -1655,36 +1670,68 @@ class MNInteractionDiagram:
         # Try rigorous centroid-based lever arm
         z_mech = self._compute_lever_arm_from_centroids(eps_top, eps_bottom)
 
-        # If not meaningful / suspicious, fall back
+        # If not meaningful / suspicious, fall back based on resultant state first
         if z_mech is None or (not np.isfinite(z_mech)):
+            # Determine fallback from actual force resultants.
+            # This robustly handles cases where strain signs are mixed but there is
+            # effectively no tension resultant (e.g., cracked concrete in tension).
+            forces, _, _ = self.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
+            T_total = float(np.sum(-forces[forces < 0.0]))
+            C_total = float(np.sum(forces[forces > 0.0]))
+
+            # Treat highly unbalanced resultants as effectively one-sided.
+            # This avoids unstable lever-arm switching in near-axial states where
+            # one resultant is numerically tiny.
+            resultant_ratio_tol = 0.02
+            has_meaningful_tension = T_total > 0.0 and (
+                C_total <= 0.0 or (T_total / max(C_total, 1e-12)) >= resultant_ratio_tol
+            )
+            has_meaningful_compression = C_total > 0.0 and (
+                T_total <= 0.0 or (C_total / max(T_total, 1e-12)) >= resultant_ratio_tol
+            )
+
+            if has_meaningful_compression and not has_meaningful_tension:
+                z_fb = z_lower
+            elif has_meaningful_tension and not has_meaningful_compression:
+                z_fb = z_upper
+            else:
+                # Secondary fallback from strain signs (compression positive).
+                both_compressive = (eps_top >= 0 and eps_bottom >= 0)
+                both_tensile = (eps_top <= 0 and eps_bottom <= 0)
+                if both_compressive:
+                    z_fb = z_lower
+                elif both_tensile:
+                    z_fb = z_upper
+                else:
+                    z_fb = z_approx
             if warn_on_fallback:
                 warnings.warn(
-                    "Lever arm fallback to 0.9d: unable to compute a meaningful tension/compression "
-                    "centroid lever arm for this strain state.",
+                    f"Lever arm fallback to {z_fb:.1f} mm ({z_fb/d:.2f}d): unable to compute "
+                    "a meaningful tension/compression centroid lever arm for this strain state.",
                     stacklevel=2,
                 )
-            return (limit_09d, None)
+            return (z_fb, None)
 
         z_mech = float(z_mech)
 
-        # sanity: too small relative to d is almost always numerical / axial-dominated
-        if z_mech < min_z_ratio * d:
+        # Clamp to bounds
+        if z_mech < z_lower:
             if warn_on_fallback:
                 warnings.warn(
-                    f"Lever arm fallback to 0.9d: computed z_mech={z_mech:.1f} mm is < "
-                    f"{min_z_ratio:.2f}d={min_z_ratio*d:.1f} mm (likely axial-dominated / numerical).",
+                    f"Lever arm clamped to lower bound: z_mech={z_mech:.1f} mm < "
+                    f"{z_d_lower:.2f}d={z_lower:.1f} mm (likely axial-dominated).",
                     stacklevel=2,
                 )
-            return (limit_09d, z_mech)
+            return (z_lower, z_mech)
 
-        # Apply EC2 cap
-        if cap_to_09d and z_mech > limit_09d:
-            warnings.warn(
-                f"Lever arm capped: z_mech={z_mech:.1f}mm > 0.9d={limit_09d:.1f}mm. "
-                "Using z=0.9d for EC2 truss model.",
-                stacklevel=2,
-            )
-            return (limit_09d, z_mech)
+        if z_mech > z_upper:
+            if warn_on_fallback:
+                warnings.warn(
+                    f"Lever arm clamped to upper bound: z_mech={z_mech:.1f} mm > "
+                    f"{z_d_upper:.2f}d={z_upper:.1f} mm.",
+                    stacklevel=2,
+                )
+            return (z_upper, z_mech)
 
         return (z_mech, z_mech)
 
@@ -1711,6 +1758,11 @@ class MNInteractionDiagram:
 
         # Guard against pathological near-zero totals
         if T_total <= 0 or C_total <= 0:
+            return None
+
+        # Near one-sided resultant states give ill-conditioned centroid lever arms.
+        resultant_ratio = min(T_total, C_total) / max(T_total, C_total)
+        if resultant_ratio < 0.02:
             return None
 
         y_T = np.sum((-forces[tension_mask]) * y_coords[tension_mask]) / T_total
@@ -2304,7 +2356,9 @@ class MNInteractionDiagram:
         M_Ed: float,
         N_Ed: float,
         prefer_rigorous: bool = False,
-        cap_to_09d: bool = True,
+        z_d_upper: float = 0.95,
+        z_d_lower: float = 0.65,
+        z_d_approx: float = 0.9,
         warn_on_fallback: bool = False,
     ) -> tuple[float, float]:
         """
@@ -2315,15 +2369,16 @@ class MNInteractionDiagram:
             N_Ed: Axial force (kN, positive = compression)
             prefer_rigorous: If True, attempt to compute the rigorous centroid-based
                 lever arm from strain analysis. If False (default), use the simplified
-                0.9d approach per EC2 §6.2.3(1).
-            cap_to_09d: If True (default), cap the lever arm to 0.9d per EC2.
-                Only relevant when prefer_rigorous=True.
+                z_d_approx * d approach per EC2 §6.2.3(1).
+            z_d_upper: Upper bound for z/d in rigorous mode (default 0.95).
+            z_d_lower: Lower bound for z/d in rigorous mode (default 0.65).
+            z_d_approx: Approximate z/d ratio for non-rigorous mode (default 0.9).
             warn_on_fallback: If True, emit a warning when the rigorous lever arm
-                calculation falls back to 0.9d (e.g., near-zero moment, numerical
-                issues). Default False to avoid noise in batch calculations.
+                calculation falls back (e.g., near-zero moment, numerical issues).
+                Default False to avoid noise in batch calculations.
 
         Returns:
-            (z, d) in mm, where z may be capped to 0.9d depending on settings
+            (z, d) in mm, where z is clamped to [z_d_lower*d, z_d_upper*d]
         """
         eps_top, eps_bottom = None, None
         if abs(M_Ed) > 1e-6:
@@ -2342,7 +2397,9 @@ class MNInteractionDiagram:
             eps_top=eps_top,
             eps_bottom=eps_bottom,
             prefer_rigorous=prefer_rigorous,
-            cap_to_09d=cap_to_09d,
+            z_d_upper=z_d_upper,
+            z_d_lower=z_d_lower,
+            z_d_approx=z_d_approx,
             warn_on_fallback=warn_on_fallback,
         )
         return z, d
@@ -2360,7 +2417,9 @@ class MNInteractionDiagram:
         cot_max_override: Optional[float] = None,
         iterate_z: bool = False,
         prefer_rigorous: bool = False,
-        cap_to_09d: bool = True,
+        z_d_upper: float = 0.95,
+        z_d_lower: float = 0.65,
+        z_d_approx: float = 0.9,
         warn_on_fallback: bool = False,
     ) -> "TensionShiftResult":
         """
@@ -2391,15 +2450,17 @@ class MNInteractionDiagram:
                       convergence (0.5% tolerance, max 5 iterations). Only has an
                       effect when BOTH shear_reinforcement is provided (so a_l depends
                       on z) AND prefer_rigorous=True (so z depends on M). With
-                      prefer_rigorous=False, z=0.9d always so iteration is skipped.
+                      prefer_rigorous=False, z is always z_d_approx*d so iteration
+                      is skipped.
             prefer_rigorous: If True, attempt to compute the rigorous centroid-based
                 lever arm from strain analysis. If False (default), use the simplified
-                0.9d approach per EC2 §6.2.3(1).
-            cap_to_09d: If True (default), cap the lever arm to 0.9d per EC2.
-                Only relevant when prefer_rigorous=True.
+                z_d_approx * d approach per EC2 §6.2.3(1).
+            z_d_upper: Upper bound for z/d in rigorous mode (default 0.95).
+            z_d_lower: Lower bound for z/d in rigorous mode (default 0.65).
+            z_d_approx: Approximate z/d ratio for non-rigorous mode (default 0.9).
             warn_on_fallback: If True, emit a warning when the rigorous lever arm
-                calculation falls back to 0.9d (e.g., near-zero moment, numerical
-                issues). Default False to avoid noise in batch calculations.
+                calculation falls back (e.g., near-zero moment, numerical issues).
+                Default False to avoid noise in batch calculations.
 
         Returns:
             TensionShiftResult with shifted moment and calculation details.
@@ -2424,7 +2485,9 @@ class MNInteractionDiagram:
             M_Ed=M_Ed_original,
             N_Ed=N_Ed,
             prefer_rigorous=prefer_rigorous,
-            cap_to_09d=cap_to_09d,
+            z_d_upper=z_d_upper,
+            z_d_lower=z_d_lower,
+            z_d_approx=z_d_approx,
             warn_on_fallback=warn_on_fallback,
         )
 
@@ -2476,7 +2539,9 @@ class MNInteractionDiagram:
                     M_Ed=shift_result.M_design,
                     N_Ed=N_Ed,
                     prefer_rigorous=prefer_rigorous,
-                    cap_to_09d=cap_to_09d,
+                    z_d_upper=z_d_upper,
+                    z_d_lower=z_d_lower,
+                    z_d_approx=z_d_approx,
                     warn_on_fallback=warn_on_fallback,
                 )
 

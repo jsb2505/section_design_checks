@@ -553,7 +553,9 @@ def apply_tension_shift_to_beam(
     cot_theta_override: "float | None" = None,
     iterate_z: bool = False,
     prefer_rigorous: bool = False,
-    cap_to_09d: bool = True,
+    z_d_upper: float = 0.95,
+    z_d_lower: float = 0.65,
+    z_d_approx: float = 0.9,
     warn_on_fallback: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -573,11 +575,12 @@ def apply_tension_shift_to_beam(
         iterate_z: If True, iterate to find z at each section (more accurate but slower)
         prefer_rigorous: If True, attempt to compute the rigorous centroid-based
             lever arm from strain analysis. If False (default), use the simplified
-            0.9d approach per EC2 §6.2.3(1).
-        cap_to_09d: If True (default), cap the lever arm to 0.9d per EC2.
-            Only relevant when prefer_rigorous=True.
+            z_d_approx * d approach per EC2 §6.2.3(1).
+        z_d_upper: Upper bound for z/d in rigorous mode (default 0.95).
+        z_d_lower: Lower bound for z/d in rigorous mode (default 0.65).
+        z_d_approx: Approximate z/d ratio for non-rigorous mode (default 0.9).
         warn_on_fallback: If True, emit a warning when the rigorous lever arm
-            calculation falls back to 0.9d. Default False to avoid noise.
+            calculation falls back. Default False to avoid noise.
 
     Returns:
         Tuple of (shifted_moments, shift_distances, cot_theta_values) arrays
@@ -610,7 +613,9 @@ def apply_tension_shift_to_beam(
             cot_theta_override=cot_theta_override,
             iterate_z=iterate_z,
             prefer_rigorous=prefer_rigorous,
-            cap_to_09d=cap_to_09d,
+            z_d_upper=z_d_upper,
+            z_d_lower=z_d_lower,
+            z_d_approx=z_d_approx,
             warn_on_fallback=warn_on_fallback,
         )
 

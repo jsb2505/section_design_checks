@@ -296,10 +296,7 @@ class ShearViewer:
                 use_note_2=use_note_2,
             )
 
-            if context.V_Ed > context.V_Rd_c:
-                V_Rd = min(V_Rd_s, V_Rd_max_design)
-            else:
-                V_Rd = min(context.V_Rd_c, V_Rd_max_design)
+            V_Rd = min(V_Rd_s, V_Rd_max_design)
             util = context.V_Ed / V_Rd if V_Rd > 0.0 else float("inf")
 
             shift = calculate_tension_shift(
@@ -350,14 +347,38 @@ class ShearViewer:
         height: int = 560,
     ) -> Any:
         """
-        Plot cot(theta) sweep for shear capacities only.
+        Plot shear-capacity components over a cot(theta) sweep.
 
-        Includes:
-        - V_Ed and V_Rd,c reference lines
-        - V_Rd,s(cot(theta)) and V_Rd,max(cot(theta))
-        - V_Rd,max design line at cot(theta)=cot_min
-        - V_Rd,s design line at cot(theta)=cot_max
-        - Vertical crossover marker where V_Rd,s and V_Rd,max intersect
+        The figure contains demand and capacity references (`V_Ed`, `V_Rd,c`),
+        variable capacities (`V_Rd,s`, `V_Rd,max`) and fixed design reference lines
+        at the governing code limits for cot(theta).
+
+        Args:
+            load_case: Shear demand definition as either ``ShearLoadCase`` or a
+                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
+            n_points: Number of cot(theta) samples in the sweep.
+            cot_theta_min: Optional lower bound for cot(theta). If ``None``,
+                the EC2-based minimum from the current check context is used.
+            cot_theta_max: Optional upper bound for cot(theta). If ``None``,
+                the EC2-based maximum from the current check context is used.
+            use_uncracked_V_Rd_c: If ``True``, use uncracked concrete shear capacity
+                ``V_Rd,c,uncracked`` as the concrete reference.
+            use_note_2: If ``True``, apply EC2 6.2.3(3) Note 2 variants for
+                ``nu_1`` and reinforcement yield stress assumptions.
+            save_path: Optional file path for ``fig.write_html(...)`` output.
+            show: If ``True``, call ``fig.show()`` before returning.
+            title: Optional custom plot title.
+            width: Figure width in pixels.
+            height: Figure height in pixels.
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly figure instance for further
+            customization or export.
+
+        Raises:
+            ValueError: If the ``ShearCheck`` has no shear reinforcement.
+            TypeError: If ``load_case`` is not a ``ShearLoadCase`` or compatible dict.
+            ImportError: If Plotly is not installed.
         """
         self._require_shear_reinforcement()
 
@@ -385,7 +406,7 @@ class ShearViewer:
                 y=[context.V_Ed] * len(cot_vals),
                 mode="lines",
                 name="V_Ed",
-                line=dict(color="black", dash="dash"),
+                line=dict(color="black", dash="dot"),
                 hovertemplate="cot(theta): %{x:.3f}<br>V_Ed: %{y:.1f} kN<extra></extra>",
             ),
         )
@@ -395,7 +416,7 @@ class ShearViewer:
                 y=[context.V_Rd_c] * len(cot_vals),
                 mode="lines",
                 name="V_Rd,c",
-                line=dict(color="#8c564b", dash="dot"),
+                line=dict(color="#8c564b", dash="dash"),
                 hovertemplate="cot(theta): %{x:.3f}<br>V_Rd,c: %{y:.1f} kN<extra></extra>",
             ),
         )
@@ -441,30 +462,25 @@ class ShearViewer:
         )
 
         if series.cot_intersection is not None:
-            y_min = min(
-                min(series.V_Rd_s_vals),
-                min(series.V_Rd_max_theta_vals),
-                context.V_Ed,
-                context.V_Rd_c,
-                series.V_Rd_max_design,
-                series.V_Rd_s_design,
-            )
-            y_max = max(
-                max(series.V_Rd_s_vals),
-                max(series.V_Rd_max_theta_vals),
-                context.V_Ed,
-                context.V_Rd_c,
-                series.V_Rd_max_design,
-                series.V_Rd_s_design,
+            y_intersection = float(
+                np.interp(series.cot_intersection, cot_vals, np.asarray(series.V_Rd_s_vals, dtype=float)),
             )
             fig.add_trace(
                 go.Scatter(
-                    x=[series.cot_intersection, series.cot_intersection],
-                    y=[y_min, y_max],
+                    x=[series.cot_intersection, series.cot_intersection, float(cot_vals[0])],
+                    y=[0.0, y_intersection, y_intersection],
                     mode="lines",
                     name="V_Rd,s = V_Rd,max",
-                    line=dict(color="#2ca02c", dash="dash"),
-                    hovertemplate="cot(theta): %{x:.3f}<br>Crossover<extra></extra>",
+                    line=dict(color="#ff0000", dash="dash"),
+                    customdata=[
+                        [series.cot_intersection, y_intersection],
+                        [series.cot_intersection, y_intersection],
+                        [series.cot_intersection, y_intersection],
+                    ],
+                    hovertemplate=(
+                        "cot(theta): %{customdata[0]:.3f}<br>"
+                        "V_Ed,max: %{customdata[1]:.1f} kN<extra></extra>"
+                    ),
                 ),
             )
 
@@ -504,7 +520,39 @@ class ShearViewer:
         height: int = 560,
     ) -> Any:
         """
-        Plot cot(theta) sweep for utilization and tension-shift moment add-on.
+        Plot utilization and tension-shift add-on versus cot(theta).
+
+        This plot isolates serviceability/design effect indicators rather than
+        capacity components:
+        - utilization ratio ``V_Ed / V_Rd``
+        - additional moment from tension shift ``M_add``
+
+        Args:
+            load_case: Shear demand definition as either ``ShearLoadCase`` or a
+                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
+            n_points: Number of cot(theta) samples in the sweep.
+            cot_theta_min: Optional lower bound for cot(theta). If ``None``,
+                the EC2-based minimum from the current check context is used.
+            cot_theta_max: Optional upper bound for cot(theta). If ``None``,
+                the EC2-based maximum from the current check context is used.
+            use_uncracked_V_Rd_c: If ``True``, use uncracked concrete shear capacity
+                ``V_Rd,c,uncracked`` when forming utilization.
+            use_note_2: If ``True``, apply EC2 6.2.3(3) Note 2 variants for
+                ``nu_1`` and reinforcement yield stress assumptions.
+            save_path: Optional file path for ``fig.write_html(...)`` output.
+            show: If ``True``, call ``fig.show()`` before returning.
+            title: Optional custom plot title.
+            width: Figure width in pixels.
+            height: Figure height in pixels.
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly figure instance for further
+            customization or export.
+
+        Raises:
+            ValueError: If the ``ShearCheck`` has no shear reinforcement.
+            TypeError: If ``load_case`` is not a ``ShearLoadCase`` or compatible dict.
+            ImportError: If Plotly is not installed.
         """
         self._require_shear_reinforcement()
 
@@ -627,10 +675,7 @@ class ShearViewer:
                 use_note_2=use_note_2,
             )
 
-            if context.V_Ed > context.V_Rd_c:
-                V_Rd = min(V_Rd_s, V_Rd_max)
-            else:
-                V_Rd = min(context.V_Rd_c, V_Rd_max)
+            V_Rd = min(V_Rd_s, V_Rd_max)
             util = context.V_Ed / V_Rd if V_Rd > 0.0 else float("inf")
 
             angle_rebar = reinforcement.model_copy(update={"angle": angle_f})
@@ -675,7 +720,39 @@ class ShearViewer:
         height: int = 560,
     ) -> Any:
         """
-        Plot link-angle sweep for shear capacities only.
+        Plot shear-capacity components over a link-angle sweep.
+
+        The sweep is run at a fixed cot(theta). If ``cot_theta`` is not provided,
+        it is back-calculated from the load case using the same internal logic as
+        the shear check.
+
+        Args:
+            load_case: Shear demand definition as either ``ShearLoadCase`` or a
+                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
+            cot_theta: Fixed cot(theta) used for the angle sweep. If ``None``,
+                it is derived from ``V_Ed`` and section context.
+            angle_min: Minimum link angle (degrees).
+            angle_max: Maximum link angle (degrees).
+            n_points: Number of sampled link angles between ``angle_min`` and
+                ``angle_max``.
+            use_uncracked_V_Rd_c: If ``True``, use uncracked concrete shear capacity
+                ``V_Rd,c,uncracked`` as the concrete reference.
+            use_note_2: If ``True``, apply EC2 6.2.3(3) Note 2 variants for
+                ``nu_1`` and reinforcement yield stress assumptions.
+            save_path: Optional file path for ``fig.write_html(...)`` output.
+            show: If ``True``, call ``fig.show()`` before returning.
+            title: Optional custom plot title.
+            width: Figure width in pixels.
+            height: Figure height in pixels.
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly figure instance for further
+            customization or export.
+
+        Raises:
+            ValueError: If the ``ShearCheck`` has no shear reinforcement.
+            TypeError: If ``load_case`` is not a ``ShearLoadCase`` or compatible dict.
+            ImportError: If Plotly is not installed.
         """
         self._require_shear_reinforcement()
 
@@ -774,7 +851,39 @@ class ShearViewer:
         height: int = 560,
     ) -> Any:
         """
-        Plot link-angle sweep for utilization and tension-shift moment add-on.
+        Plot utilization and tension-shift add-on versus link angle.
+
+        The sweep is run at a fixed cot(theta). If ``cot_theta`` is not provided,
+        it is back-calculated from the load case using the same internal logic as
+        the shear check.
+
+        Args:
+            load_case: Shear demand definition as either ``ShearLoadCase`` or a
+                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
+            cot_theta: Fixed cot(theta) used for the angle sweep. If ``None``,
+                it is derived from ``V_Ed`` and section context.
+            angle_min: Minimum link angle (degrees).
+            angle_max: Maximum link angle (degrees).
+            n_points: Number of sampled link angles between ``angle_min`` and
+                ``angle_max``.
+            use_uncracked_V_Rd_c: If ``True``, use uncracked concrete shear capacity
+                ``V_Rd,c,uncracked`` when forming utilization.
+            use_note_2: If ``True``, apply EC2 6.2.3(3) Note 2 variants for
+                ``nu_1`` and reinforcement yield stress assumptions.
+            save_path: Optional file path for ``fig.write_html(...)`` output.
+            show: If ``True``, call ``fig.show()`` before returning.
+            title: Optional custom plot title.
+            width: Figure width in pixels.
+            height: Figure height in pixels.
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly figure instance for further
+            customization or export.
+
+        Raises:
+            ValueError: If the ``ShearCheck`` has no shear reinforcement.
+            TypeError: If ``load_case`` is not a ``ShearLoadCase`` or compatible dict.
+            ImportError: If Plotly is not installed.
         """
         self._require_shear_reinforcement()
 
@@ -870,11 +979,38 @@ class ShearViewer:
         height: int = 760,
     ) -> Any:
         """
-        Heatmap study for cot(theta) and link angle interactions.
+        Plot a cot(theta)-vs-link-angle heatmap for shear response metrics.
 
         Args:
-            metric: ``"utilization"`` (default), ``"capacity"``, ``"V_Rd_s"``,
-                or ``"V_Rd_max"``.
+            load_case: Shear demand definition as either ``ShearLoadCase`` or a
+                ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
+            cot_theta_min: Optional lower bound for cot(theta). If ``None``,
+                the EC2-based minimum from the current check context is used.
+            cot_theta_max: Optional upper bound for cot(theta). If ``None``,
+                the EC2-based maximum from the current check context is used.
+            angle_min: Minimum link angle (degrees).
+            angle_max: Maximum link angle (degrees).
+            n_cot: Number of cot(theta) samples.
+            n_angles: Number of link-angle samples.
+            metric: Response quantity on the color axis. Supported values are:
+                ``"utilization"``, ``"capacity"``, ``"v_rd_s"``, and ``"v_rd_max"``.
+            use_uncracked_V_Rd_c: If ``True``, use uncracked concrete shear capacity
+                ``V_Rd,c,uncracked`` when forming governing capacity/utilization.
+            use_note_2: If ``True``, apply EC2 6.2.3(3) Note 2 variants for
+                ``nu_1`` and reinforcement yield stress assumptions.
+            save_path: Optional file path for ``fig.write_html(...)`` output.
+            show: If ``True``, call ``fig.show()`` before returning.
+            title: Optional custom plot title.
+            width: Figure width in pixels.
+            height: Figure height in pixels.
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly heatmap figure.
+
+        Raises:
+            ValueError: If no shear reinforcement is defined, or if ``metric`` is invalid.
+            TypeError: If ``load_case`` is not a ``ShearLoadCase`` or compatible dict.
+            ImportError: If Plotly is not installed.
         """
         self._require_shear_reinforcement()
 
@@ -911,10 +1047,8 @@ class ShearViewer:
                     context=context,
                     use_note_2=use_note_2,
                 )
-                if context.V_Ed > context.V_Rd_c:
-                    V_Rd = min(V_Rd_s, V_Rd_max)
-                else:
-                    V_Rd = min(context.V_Rd_c, V_Rd_max)
+
+                V_Rd = min(V_Rd_s, V_Rd_max)
 
                 if metric_key == "utilization":
                     value = context.V_Ed / V_Rd if V_Rd > 0.0 else float("inf")
@@ -1002,7 +1136,42 @@ class ShearViewer:
         height: int = 760,
     ) -> Any:
         """
-        Heatmap of axial force vs cot(theta) for the current shear reinforcement setup.
+        Plot an axial-force-vs-cot(theta) heatmap for shear response metrics.
+
+        For each axial force level, this method recomputes the section context
+        and evaluates the selected metric over the cot(theta) sweep.
+
+        Args:
+            load_case: Base shear load case (``V_Ed`` and ``M_Ed`` are kept fixed).
+                Can be ``ShearLoadCase`` or a ``dict`` with keys ``V_Ed`` and
+                optional ``M_Ed``/``N_Ed``.
+            N_min: Minimum axial force in kN.
+            N_max: Maximum axial force in kN.
+            n_axial: Number of axial-force samples.
+            cot_theta_min: Optional lower bound for cot(theta). If ``None``,
+                the EC2-based minimum from the current check context is used.
+            cot_theta_max: Optional upper bound for cot(theta). If ``None``,
+                the EC2-based maximum from the current check context is used.
+            n_cot: Number of cot(theta) samples.
+            metric: Response quantity on the color axis. Supported values are:
+                ``"utilization"``, ``"capacity"``, ``"v_rd_s"``, and ``"v_rd_max"``.
+            use_uncracked_V_Rd_c: If ``True``, use uncracked concrete shear capacity
+                ``V_Rd,c,uncracked`` when forming governing capacity/utilization.
+            use_note_2: If ``True``, apply EC2 6.2.3(3) Note 2 variants for
+                ``nu_1`` and reinforcement yield stress assumptions.
+            save_path: Optional file path for ``fig.write_html(...)`` output.
+            show: If ``True``, call ``fig.show()`` before returning.
+            title: Optional custom plot title.
+            width: Figure width in pixels.
+            height: Figure height in pixels.
+
+        Returns:
+            plotly.graph_objects.Figure: Plotly heatmap figure.
+
+        Raises:
+            ValueError: If no shear reinforcement is defined, or if ``metric`` is invalid.
+            TypeError: If ``load_case`` is not a ``ShearLoadCase`` or compatible dict.
+            ImportError: If Plotly is not installed.
         """
         self._require_shear_reinforcement()
 
@@ -1038,10 +1207,7 @@ class ShearViewer:
                 V_Rd_s = self.check.find_V_Rd_s(cot_f, context.z, use_note_2=use_note_2)
                 V_Rd_max = self.check.find_V_Rd_max(cot_f, context.z, context.sigma_cp, use_note_2=use_note_2)
 
-                if context.V_Ed > context.V_Rd_c:
-                    V_Rd = min(V_Rd_s, V_Rd_max)
-                else:
-                    V_Rd = min(context.V_Rd_c, V_Rd_max)
+                V_Rd = min(V_Rd_s, V_Rd_max)
 
                 if metric_key == "utilization":
                     value = context.V_Ed / V_Rd if V_Rd > 0.0 else float("inf")

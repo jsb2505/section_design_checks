@@ -1,7 +1,7 @@
 """
-Test to verify lever arm capping warning functionality.
+Test to verify lever arm clamping warning functionality.
 
-This creates a test case designed to trigger the z > 0.9d condition
+This creates a test case designed to trigger the z > z_d_ratio_upper * d condition
 by using a section with extreme loading conditions.
 """
 
@@ -13,15 +13,15 @@ from materials.core.geometry import Point2D
 from materials.reinforced_concrete.geometry import RebarGroup
 
 
-def test_lever_arm_capping_warning():
-    """Test that warning is issued when lever arm exceeds 0.9d."""
+def test_lever_arm_clamping_warning():
+    """Test that warning is issued when lever arm exceeds upper bound."""
 
     print("\n" + "="*80)
-    print("TESTING LEVER ARM CAPPING WARNING")
+    print("TESTING LEVER ARM CLAMPING WARNING")
     print("="*80)
     print()
 
-    # Create a section designed to potentially exceed 0.9d
+    # Create a section designed to potentially exceed upper bound
     # Tall section with reinforcement concentrated at extremes
     section = create_rectangular_section(width=300, height=800)
 
@@ -42,16 +42,15 @@ def test_lever_arm_capping_warning():
     concrete = ConcreteMaterial(grade='C30/37')
     shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade='B500B')
 
-    # Test case 1: With capping enabled (should warn if z > 0.9d)
-    print("Test 1: cap_lever_arm=True (default)")
+    # Test case 1: With default bounds (should warn if z > z_d_ratio_upper * d)
+    print("Test 1: z_d_ratio_upper=0.95 (default)")
     print("-" * 80)
 
-    check_capped = ShearCheck(
+    check = ShearCheck(
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
         use_rigorous=True,
-        cap_lever_arm=True
     )
 
     # Try low moments to maximize lever arm
@@ -68,28 +67,28 @@ def test_lever_arm_capping_warning():
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
 
-            result = check_capped.perform_check(load_case=load_case)
+            result = check.perform_check(load_case=load_case)
 
             d = result.details['d']
-            z_ec2 = result.details['z']
-            z_mech = result.details.get('z_mech')  # May be None in approximate mode
-            limit_09d = 0.9 * d
+            z_design = result.details['z']
+            z_mech = result.details.get('z_mech')
+            z_upper = check.z_d_ratio_upper * d
 
             print(f"  d = {d:.1f} mm")
-            print(f"  0.9d limit = {limit_09d:.1f} mm")
+            print(f"  {check.z_d_ratio_upper:.2f}d upper limit = {z_upper:.1f} mm")
             z_mech_str = f"{z_mech:.1f}" if z_mech is not None else "N/A"
             print(f"  z_mech = {z_mech_str} mm")
-            print(f"  z_ec2 (used) = {z_ec2:.1f} mm")
+            print(f"  z_design (used) = {z_design:.1f} mm")
 
-            if z_mech is not None and z_mech > limit_09d:
-                print(f"  [!] CAPPING APPLIED (z_mech > 0.9d by {z_mech - limit_09d:.1f}mm)")
+            if z_mech is not None and z_mech > z_upper:
+                print(f"  [!] CLAMPED to upper bound (z_mech > {check.z_d_ratio_upper:.2f}d by {z_mech - z_upper:.1f}mm)")
 
                 if len(w) > 0:
                     print(f"  [OK] Warning issued: '{w[0].message}'")
                 else:
-                    print(f"  [FAIL] WARNING: Capping applied but no warning issued!")
+                    print(f"  [FAIL] WARNING: Clamping applied but no warning issued!")
             else:
-                print(f"  [OK] No capping needed (z_mech <= 0.9d)")
+                print(f"  [OK] No clamping needed (z_mech <= {check.z_d_ratio_upper:.2f}d)")
 
                 if len(w) > 0:
                     print(f"  [FAIL] WARNING: Unexpected warning: '{w[0].message}'")
@@ -97,16 +96,17 @@ def test_lever_arm_capping_warning():
     print()
     print("=" * 80)
 
-    # Test case 2: With capping disabled (should never warn)
-    print("\nTest 2: cap_lever_arm=False (no capping, no warnings expected)")
+    # Test case 2: With tight bounds (wide range, should rarely clamp)
+    print("\nTest 2: z_d_ratio_upper=1.0 (no effective upper clamp)")
     print("-" * 80)
 
-    check_uncapped = ShearCheck(
+    check_wide = ShearCheck(
         section=section,
         concrete=concrete,
         shear_reinforcement=shear_rebar,
         use_rigorous=True,
-        cap_lever_arm=False
+        z_d_ratio_upper=1.0,
+        z_d_ratio_lower=0.10,
     )
 
     for i, load_case in enumerate(load_cases, 1):
@@ -115,20 +115,21 @@ def test_lever_arm_capping_warning():
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
 
-            result = check_uncapped.perform_check(load_case=load_case)
+            result = check_wide.perform_check(load_case=load_case)
 
-            z_ec2 = result.details['z']
-            z_mech = result.details.get('z_mech')  # May be None in approximate mode
+            z_design = result.details['z']
+            z_mech = result.details.get('z_mech')
 
             if z_mech is not None:
-                print(f"  z_mech = z_ec2 = {z_mech:.1f} mm (uncapped)")
+                print(f"  z_mech = z_design = {z_mech:.1f} mm (wide bounds)")
             else:
-                print(f"  z_ec2 = {z_ec2:.1f} mm (z_mech not available)")
+                print(f"  z_design = {z_design:.1f} mm (z_mech not available)")
 
-            if len(w) > 0:
-                print(f"  [FAIL] WARNING: Unexpected warning with cap_lever_arm=False: '{w[0].message}'")
+            clamping_warnings = [x for x in w if "clamped" in str(x.message).lower()]
+            if len(clamping_warnings) > 0:
+                print(f"  [FAIL] WARNING: Unexpected clamping warning with wide bounds: '{clamping_warnings[0].message}'")
             else:
-                print(f"  [OK] No warning (as expected)")
+                print(f"  [OK] No clamping warning (as expected)")
 
     print()
     print("=" * 80)
@@ -138,5 +139,4 @@ def test_lever_arm_capping_warning():
 
 
 if __name__ == "__main__":
-    test_lever_arm_capping_warning()
-
+    test_lever_arm_clamping_warning()

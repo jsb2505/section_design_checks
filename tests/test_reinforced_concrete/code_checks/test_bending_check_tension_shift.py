@@ -52,7 +52,9 @@ class DummyDiagram:
         eps_top,
         eps_bottom,
         prefer_rigorous,
-        cap_to_09d,
+        z_d_upper,
+        z_d_lower,
+        z_d_approx,
         warn_on_fallback,
     ):
         # Return (z_ec2, z_mech). We only care about z_ec2.

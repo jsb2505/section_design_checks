@@ -414,7 +414,9 @@ class CircularSectionCheck(BaseModel):
             shear_reinforcement=self.shear_reinforcement,
             use_accidental=self.use_accidental,
             use_rigorous=True,
-            cap_lever_arm=True,  # z ≤ 0.9d safety cap. Circular z_mech is typically ~0.77d so rarely activates.
+            z_d_ratio=0.77,           # Circular z_mech ≈ 0.77d (Orr 2012)
+            z_d_ratio_upper=0.95,
+            z_d_ratio_lower=0.65,
             use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
             concrete_model_type=self.concrete_model_type,
             steel_model_type=self.steel_model_type,

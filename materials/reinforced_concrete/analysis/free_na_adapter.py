@@ -599,7 +599,9 @@ class FreeNADiagramAdapter:
         M_Ed: float,
         N_Ed: float = 0.0,
         prefer_rigorous: bool = False,
-        cap_to_09d: bool = True,
+        z_d_upper: float = 0.95,
+        z_d_lower: float = 0.65,
+        z_d_approx: float = 0.9,
         warn_on_fallback: bool = False,
     ) -> Tuple[float, float]:
         """Compute lever arm z and effective depth d."""
@@ -612,7 +614,9 @@ class FreeNADiagramAdapter:
             M_Ed=M_Ed, N_Ed=N_Ed, d=d,
             eps_top=eps_top, eps_bottom=eps_bottom,
             prefer_rigorous=prefer_rigorous,
-            cap_to_09d=cap_to_09d,
+            z_d_upper=z_d_upper,
+            z_d_lower=z_d_lower,
+            z_d_approx=z_d_approx,
             warn_on_fallback=warn_on_fallback,
         )
         return z, d
@@ -658,17 +662,21 @@ class FreeNADiagramAdapter:
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
         prefer_rigorous: bool = False,
-        cap_to_09d: bool = True,
+        z_d_upper: float = 0.95,
+        z_d_lower: float = 0.65,
+        z_d_approx: float = 0.9,
         warn_on_fallback: bool = False,
     ) -> Tuple[float, Optional[float]]:
         """Lever arm z and rigorous lever arm (if computed)."""
         if d is None:
             d = self.get_effective_depth(M_Ed=M_Ed, N_Ed=N_Ed, eps_top=eps_top, eps_bottom=eps_bottom)
 
-        z_simple = 0.9 * d
+        z_approx = z_d_approx * d
+        z_upper = z_d_upper * d
+        z_lower = z_d_lower * d
 
         if not prefer_rigorous:
-            return (z_simple, None)
+            return (z_approx, None)
 
         # Rigorous: compute from fibre forces
         if eps_top is not None and eps_bottom is not None:
@@ -681,16 +689,16 @@ class FreeNADiagramAdapter:
                     y_T = float(np.sum(-forces[tension_mask] * y_coords[tension_mask]) / np.sum(-forces[tension_mask]))
                     y_C = float(np.sum(forces[compression_mask] * y_coords[compression_mask]) / np.sum(forces[compression_mask]))
                     z_rigorous = abs(y_C - y_T)
-                    z = min(z_rigorous, z_simple) if cap_to_09d else z_rigorous
+                    z = max(z_lower, min(z_rigorous, z_upper))
                     return (z, z_rigorous)
             except Exception:
                 if warn_on_fallback:
                     warnings.warn(
-                        "FreeNADiagramAdapter: Rigorous lever arm failed, falling back to 0.9d",
+                        f"FreeNADiagramAdapter: Rigorous lever arm failed, falling back to {z_d_approx:.2f}d",
                         stacklevel=3,
                     )
 
-        return (z_simple, None)
+        return (z_approx, None)
 
     def apply_tension_shift(
         self,
@@ -705,7 +713,9 @@ class FreeNADiagramAdapter:
         cot_max_override: Optional[float] = None,
         iterate_z: bool = False,
         prefer_rigorous: bool = False,
-        cap_to_09d: bool = True,
+        z_d_upper: float = 0.95,
+        z_d_lower: float = 0.65,
+        z_d_approx: float = 0.9,
         warn_on_fallback: bool = False,
     ) -> "TensionShiftResult":
         """Apply EC2 tension shift — delegates to shear_utils with adapter's z, d."""
@@ -717,7 +727,9 @@ class FreeNADiagramAdapter:
         z, d = self._compute_z_d_for_moment(
             M_Ed=M_Ed, N_Ed=N_Ed,
             prefer_rigorous=prefer_rigorous,
-            cap_to_09d=cap_to_09d,
+            z_d_upper=z_d_upper,
+            z_d_lower=z_d_lower,
+            z_d_approx=z_d_approx,
             warn_on_fallback=warn_on_fallback,
         )
 

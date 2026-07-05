@@ -99,9 +99,22 @@ class BeamCheck(BaseModel):
         description="Include sigma_cp in alpha_cw for ShearCheck V_Rd,max",
     )
 
-    cap_lever_arm: bool = Field(
-        default=True,
-        description="Apply z <= 0.9d cap in ShearCheck",
+    z_d_ratio: float = Field(
+        default=0.9,
+        description="Lever arm ratio z/d for approximate mode in ShearCheck",
+        gt=0.0, le=1.0,
+    )
+
+    z_d_ratio_upper: float = Field(
+        default=0.95,
+        description="Upper bound lever arm ratio z/d for rigorous mode in ShearCheck",
+        gt=0.0, le=1.0,
+    )
+
+    z_d_ratio_lower: float = Field(
+        default=0.65,
+        description="Lower bound lever arm ratio z/d for rigorous mode in ShearCheck",
+        gt=0.0, le=1.0,
     )
 
     breadth_override: Optional[float] = Field(
@@ -256,7 +269,9 @@ class BeamCheck(BaseModel):
             allow_negative_sigma_cp=self.allow_negative_sigma_cp,
             use_transformed_area_for_sigma_cp=self.use_transformed_area_for_sigma_cp,
             use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
-            cap_lever_arm=self.cap_lever_arm,
+            z_d_ratio=self.z_d_ratio,
+            z_d_ratio_upper=self.z_d_ratio_upper,
+            z_d_ratio_lower=self.z_d_ratio_lower,
             breadth_override=self.breadth_override,
             use_increased_nu_1=self.use_increased_nu_1,
             apply_tension_cot_theta_limit=self.apply_tension_cot_theta_limit,
