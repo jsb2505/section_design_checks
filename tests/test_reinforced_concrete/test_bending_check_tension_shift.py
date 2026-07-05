@@ -196,7 +196,7 @@ def patch_shear_utils(monkeypatch):
     # Default cot(theta)=2.0, can override per-test by monkeypatching again
     monkeypatch.setattr(
         shear_utils,
-        "find_cot_theta_for_V_Ed_fromV_Rd_max",
+        "find_cot_theta_for_V_Ed_from_V_Rd_max",
         lambda *, V_Ed, K, link_angle_degrees: 2.0,
     )
 

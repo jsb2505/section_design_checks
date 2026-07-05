@@ -177,7 +177,7 @@ def calculate_tension_shift(
                 nu = find_nu_factor(f_ck=f_ck)
                 K = alpha_cw * b_w * z * nu * f_cd  # in N
 
-                cot_theta = find_cot_theta_for_V_Ed_fromV_Rd_max(
+                cot_theta = find_cot_theta_for_V_Ed_from_V_Rd_max(
                     V_Ed=V_Ed,
                     K=K,
                     link_angle_degrees=shear_reinforcement.angle,
@@ -373,7 +373,7 @@ def find_max_allowable_leg_spacing(
     return float(s_t_max)
 
 
-def find_cot_theta_for_V_Ed_fromV_Rd_max(
+def find_cot_theta_for_V_Ed_from_V_Rd_max(
     V_Ed: float,
     K: float,  # product of: alpha_cw * b_w * z * nu_1 * f_cd
     link_angle_degrees: float = 90.0,

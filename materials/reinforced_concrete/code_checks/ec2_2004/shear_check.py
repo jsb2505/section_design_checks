@@ -28,7 +28,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     calculate_section_breadth,
     find_max_allowable_link_spacing,
     find_max_allowable_leg_spacing,
-    find_cot_theta_for_V_Ed_fromV_Rd_max,
+    find_cot_theta_for_V_Ed_from_V_Rd_max,
     find_cot_theta_for_V_Ed_from_V_Rd_s,
     find_alpha_cw,
     find_V_Rd_c_cracked,
@@ -746,7 +746,7 @@ class ShearCheck(BaseCodeCheck):
 
         K = α_cw · b_w · z · ν₁ · f_cd
 
-        This value is used in find_cot_theta_for_V_Ed_fromV_Rd_max.
+        This value is used in find_cot_theta_for_V_Ed_from_V_Rd_max.
         When using Note 2 iteration,
         K must be recalculated because ν₁ changes.
 
@@ -858,7 +858,7 @@ class ShearCheck(BaseCodeCheck):
             )
 
         K = self._calculate_K(z, sigma_cp, use_note_2=use_note_2)
-        return find_cot_theta_for_V_Ed_fromV_Rd_max(
+        return find_cot_theta_for_V_Ed_from_V_Rd_max(
             V_Ed=V_Ed,
             K=K,
             link_angle_degrees=self.shear_reinforcement.angle,

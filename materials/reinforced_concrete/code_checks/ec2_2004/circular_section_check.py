@@ -37,7 +37,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     find_max_allowable_link_spacing,
     find_max_allowable_leg_spacing,
-    find_cot_theta_for_V_Ed_fromV_Rd_max,
+    find_cot_theta_for_V_Ed_from_V_Rd_max,
     find_cot_theta_for_V_Ed_from_V_Rd_s,
     find_alpha_cw,
     find_nu_1_factor,
@@ -898,7 +898,7 @@ class CircularSectionCheck(BaseModel):
                     link_angle_degrees=90.0,
                 )
             else:
-                cot_theta = find_cot_theta_for_V_Ed_fromV_Rd_max(
+                cot_theta = find_cot_theta_for_V_Ed_from_V_Rd_max(
                     V_Ed=V_Ed,  # already in kN; function converts internally
                     K=K,
                     link_angle_degrees=90.0,
@@ -1043,7 +1043,7 @@ class CircularSectionCheck(BaseModel):
                 link_angle_degrees=90.0,
             )
         else:
-            cot_theta_n1 = find_cot_theta_for_V_Ed_fromV_Rd_max(
+            cot_theta_n1 = find_cot_theta_for_V_Ed_from_V_Rd_max(
                 V_Ed=V_Ed, K=K_n1, link_angle_degrees=90.0,
             )
         tan_theta_n1 = 1 / cot_theta_n1
@@ -1075,7 +1075,7 @@ class CircularSectionCheck(BaseModel):
                 link_angle_degrees=90.0,
             )
         else:
-            cot_theta_n2 = find_cot_theta_for_V_Ed_fromV_Rd_max(
+            cot_theta_n2 = find_cot_theta_for_V_Ed_from_V_Rd_max(
                 V_Ed=V_Ed, K=K_n2, link_angle_degrees=90.0,
             )
         tan_theta_n2 = 1 / cot_theta_n2
@@ -1146,7 +1146,7 @@ class CircularSectionCheck(BaseModel):
                 link_angle_degrees=90.0,
             )
 
-        return find_cot_theta_for_V_Ed_fromV_Rd_max(
+        return find_cot_theta_for_V_Ed_from_V_Rd_max(
             V_Ed=abs(V_Ed),  # already in kN; function converts internally
             K=K,
             link_angle_degrees=90.0,
