@@ -24,16 +24,12 @@ jobs:
       - name: ruff (line-length, advisory)
         run: ruff check materials tests
         continue-on-error: true
-      # mypy: the core foundation (materials/core) is fully type-clean and BLOCKS
-      # — it is the most-depended-on layer, so it must not regress. The rest of
-      # the package still has a type-annotation backlog and stays advisory; as
-      # modules are cleaned they get promoted into this blocking gate.
-      # --ignore-missing-imports silences third-party stub noise (scipy/shapely/plotly).
-      - name: mypy (blocking, core)
-        run: mypy materials/core --ignore-missing-imports
-      - name: mypy (advisory, full)
+      # mypy: the whole package is now type-clean and BLOCKS (the backlog was
+      # cleared). --ignore-missing-imports silences third-party stub noise
+      # (scipy/shapely/plotly); the pydantic plugin + py3.11 target live in
+      # pyproject [tool.mypy].
+      - name: mypy (blocking)
         run: mypy materials --ignore-missing-imports
-        continue-on-error: true
 
   test:
     runs-on: ubuntu-latest

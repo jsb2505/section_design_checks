@@ -778,7 +778,7 @@ class CircularSectionCheck(BaseModel):
         suppress_warnings: bool = False,
         ignore_compression_steel: bool = False,
         iterate_z: bool = True,
-        **kwargs,
+        **kwargs: Any,
     ) -> CheckResult:
         """
         Bending check for circular section.
@@ -870,7 +870,7 @@ class CircularSectionCheck(BaseModel):
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
-        **kwargs,
+        **kwargs: Any,
     ) -> CheckResult:
         """
         Cracking check for circular section (wrapper — no circular modifications).
@@ -922,7 +922,7 @@ class CircularSectionCheck(BaseModel):
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         suppress_warnings: bool = False,
-        **kwargs,
+        **kwargs: Any,
     ) -> CheckResult:
         """
         Stress limitation check for circular section (wrapper - no circular modifications).

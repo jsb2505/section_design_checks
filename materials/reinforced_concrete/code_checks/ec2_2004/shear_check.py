@@ -1299,7 +1299,7 @@ class ShearCheck(BaseCodeCheck):
     # Main check method
     # ===========================
 
-    def perform_check(
+    def perform_check(  # type: ignore[override]  # abstract base uses **kwargs; concrete checks take explicit params
         self,
         *,
         load_case: LoadCase,
@@ -1309,7 +1309,7 @@ class ShearCheck(BaseCodeCheck):
         warning_threshold: float = 0.95,
         suppress_warnings: bool = False,
         ignore_compression_steel: bool = False,
-        **kwargs,
+        **kwargs: Any,
     ) -> CheckResult:
         """
         Perform shear check per EC2 §6.2 for a single load case.
@@ -1512,15 +1512,15 @@ class ShearCheck(BaseCodeCheck):
                     d_2 = 0.0
                 else:
                     # Determine compression face from strains
+                    compression_face: Literal["top", "bottom"]
                     if eps_top is not None and eps_bottom is not None:
                         compression_face = "top" if eps_top >= eps_bottom else "bottom"
                     else:
                         # Conservative: assume top compression (typical for sagging)
                         compression_face = "top"
 
-                    d_2 = self.section.get_compression_rebar_depth(compression_face)
-                    if d_2 is None:
-                        d_2 = 0.0  # Safe fallback: z_cap = max(d, d - 30) = d
+                    d_2_opt = self.section.get_compression_rebar_depth(compression_face)
+                    d_2 = 0.0 if d_2_opt is None else d_2_opt  # fallback: z_cap = max(d, d - 30) = d
 
                 z_cap = z_cap_ndp(d, d_2)
                 if z_ec2 > z_cap:
@@ -1840,7 +1840,7 @@ class ShearCheck(BaseCodeCheck):
         self,
         *,
         load_case: LoadCase,
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         Plot utilization and tension-shift add-on versus cot(theta).
@@ -1872,7 +1872,7 @@ class ShearCheck(BaseCodeCheck):
         self,
         *,
         load_case: LoadCase,
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         Plot shear-capacity components over a link-angle sweep.
@@ -1905,7 +1905,7 @@ class ShearCheck(BaseCodeCheck):
         self,
         *,
         load_case: LoadCase,
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         Plot utilization and tension-shift add-on versus link angle.
@@ -1938,7 +1938,7 @@ class ShearCheck(BaseCodeCheck):
         self,
         *,
         load_case: LoadCase,
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         Plot a cot(theta)-vs-link-angle heatmap for shear metrics.
@@ -1974,7 +1974,7 @@ class ShearCheck(BaseCodeCheck):
         self,
         *,
         load_case: LoadCase,
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         Plot a cot(theta)-vs-force heatmap with a slider for the other force.

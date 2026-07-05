@@ -446,6 +446,7 @@ class StressLimitsCheck(BaseCodeCheck):
 
         use_biaxial = strain_state is not None and strain_state.is_biaxial
         if use_biaxial:
+            assert strain_state is not None  # implied by use_biaxial
             forces, _x, _y, areas = diag.get_fibre_forces_from_strain_state(strain_state)
         else:
             forces, _y, areas = diag.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
@@ -493,6 +494,7 @@ class StressLimitsCheck(BaseCodeCheck):
 
             for pos in group.positions:
                 if use_biaxial:
+                    assert strain_state is not None  # implied by use_biaxial
                     strain = strain_state.strain_at(pos.x - cx, pos.y - cy)
                 else:
                     y_rel = (pos.y - y_min) / h
@@ -654,7 +656,7 @@ class StressLimitsCheck(BaseCodeCheck):
         ignore_compression_steel: bool = False,
         warning_threshold: float = 0.95,
         suppress_warnings: bool = False,
-        **kwargs,
+        **kwargs: Any,
     ) -> CheckResult:
         """
         Perform EC2 §7.2 stress limitation checks.

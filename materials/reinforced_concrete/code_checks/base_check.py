@@ -112,7 +112,7 @@ class BaseCodeCheck(BaseModel, ABC):
     )
 
     @abstractmethod
-    def perform_check(self, **kwargs) -> CheckResult:
+    def perform_check(self, **kwargs: Any) -> CheckResult:
         """
         Perform the design check.
 

@@ -126,7 +126,7 @@ class StressStrainViewer:
         width: int = 1100,
         height: int = 1000,
         section_render: Literal["points", "filled"] = "points",
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         Visualize stress and strain distribution for a given load case.

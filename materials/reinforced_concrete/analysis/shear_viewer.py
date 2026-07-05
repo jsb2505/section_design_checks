@@ -2134,7 +2134,7 @@ class ShearViewer:
         z_volume = np.full((len(slider_vals), len(y_vals), len(cot_vals)), np.nan, dtype=float)
 
         for i_slider, row in enumerate(context_grid):
-            for i_y, context in enumerate(row):
+            for i_y, context in enumerate(row):  # type: ignore[assignment]  # grid holds Optional; None-guarded below
                 if context is None:
                     continue
                 for i_cot, cot_theta in enumerate(cot_vals):
@@ -2512,7 +2512,7 @@ class ShearViewer:
         )
 
         for i_n, row in enumerate(context_grid):
-            for i_m, context in enumerate(row):
+            for i_m, context in enumerate(row):  # type: ignore[assignment]  # grid holds Optional; None-guarded below
                 if context is None:
                     continue
                 for i_cot, cot_theta in enumerate(cot_vals):
