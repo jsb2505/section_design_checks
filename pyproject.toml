@@ -27,6 +27,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "numpy>=1.24.0",
     "shapely>=2.0.0",
+    "scipy>=1.10.0",
 ]
 
 [project.optional-dependencies]
