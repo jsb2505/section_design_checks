@@ -1027,21 +1027,20 @@ class BiaxialMNInteractionSurface:
         My_grid = np.hstack([My_raw, My_raw[:, :1]])
         Mz_grid = np.hstack([Mz_raw, Mz_raw[:, :1]])
 
-        # Add pole points
+        # Add apex points at pure compression and pure tension.
+        # At these limits all fibres are at the same strain, so M=0 by
+        # symmetry.  Using identical coordinates for every column in the
+        # row makes Plotly collapse the row to a single point (apex).
         n_cols = n_angles + 1
-        angles = np.linspace(0, 360, n_angles, endpoint=False)
-        max_dim = max(self.section_width, self.section_height)
+        N_min, N_max = self.calculate_axial_limits()
 
-        tension_poles = [self.calculate_point_pivot(-max_dim * 2, ang) for ang in angles]
-        compression_poles = [self.calculate_point_pivot(max_dim * 10, ang) for ang in angles]
+        bot_pole_N = np.full((1, n_cols), N_min)
+        bot_pole_My = np.zeros((1, n_cols))
+        bot_pole_Mz = np.zeros((1, n_cols))
 
-        bot_pole_N = np.array([p.N for p in tension_poles] + [tension_poles[0].N]).reshape(1, n_cols)
-        bot_pole_My = np.array([p.My for p in tension_poles] + [tension_poles[0].My]).reshape(1, n_cols)
-        bot_pole_Mz = np.array([p.Mz for p in tension_poles] + [tension_poles[0].Mz]).reshape(1, n_cols)
-
-        top_pole_N = np.array([p.N for p in compression_poles] + [compression_poles[0].N]).reshape(1, n_cols)
-        top_pole_My = np.array([p.My for p in compression_poles] + [compression_poles[0].My]).reshape(1, n_cols)
-        top_pole_Mz = np.array([p.Mz for p in compression_poles] + [compression_poles[0].Mz]).reshape(1, n_cols)
+        top_pole_N = np.full((1, n_cols), N_max)
+        top_pole_My = np.zeros((1, n_cols))
+        top_pole_Mz = np.zeros((1, n_cols))
 
         N_final = np.vstack([bot_pole_N, N_grid, top_pole_N])
         My_final = np.vstack([bot_pole_My, My_grid, top_pole_My])

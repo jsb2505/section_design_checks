@@ -470,6 +470,7 @@ class TestSurfaceGenerationAndPlotting:
         surface3 = _make_surface_stub()
         surface3.section_width = 300.0
         surface3.section_height = 500.0
+        surface3.calculate_axial_limits = lambda: (-10.0, 10.0)
         surface3.calculate_point_pivot = lambda na_depth, ang: _pt(
             N=na_depth,
             My=na_depth + ang,
