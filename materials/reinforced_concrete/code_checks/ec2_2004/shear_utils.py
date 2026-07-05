@@ -6,7 +6,7 @@ Utility functions for shear design checks according to Eurocode 2 (EC2).
 '''
 from dataclasses import dataclass
 from math import sqrt, isfinite, radians, copysign, tan
-from typing import Optional
+from typing import Optional, cast
 
 from shapely.geometry import MultiLineString, Point
 
@@ -280,7 +280,7 @@ def calculate_section_breadth(
 
 def find_cot_theta_for_V_Ed(
     V_Ed: float,
-    K: float,  # product of: alpha_cw * b_w * z * nu * f_cd
+    K: float,  # product of: alpha_cw * b_w * z * nu_1 * f_cd
     link_angle_degrees: float = 90.0,
     cot_min: float = 1.0,
     cot_max: float = 2.5,
@@ -291,19 +291,19 @@ def find_cot_theta_for_V_Ed(
     This is useful for determining the actual strut angle in the section based on
     the applied shear force, which is then used for the tension shift rule.
 
-    Solves: V = [α_cw · b_w · z · ν · f_cd * (cot(θ) + cot(α)] / [1 + cot²(θ)]
+    Solves: V = [α_cw · b_w · z · ν₁ · f_cd * (cot(θ) + cot(α)] / [1 + cot²(θ)]
 
     Let:
         x = cot(θ),
         C = cot(α)
-        K = α_cw · b_w · z · ν · f_cd
+        K = α_cw · b_w · z · ν₁ · f_cd
     
     Then:
         Vx² - Kx + (V - KC) = 0
 
     Args:
         V_Ed: Design shear force in kN
-        K: product of: (alpha_cw * b_w * z * nu * f_cd) in N
+        K: product of: (α_cw · b_w · z · ν₁ · f_cd) in N
         link_angle_degrees: angle of the shear links in degrees (default = 90.0)
         cot_min: lower bound cotangent of angle of strut (default = 1.0)
         cot_max: upper bound cotangent of angle of strut (default = 2.5)
@@ -374,9 +374,9 @@ def clamp_cot_theta(
         Clamped cot theta within bounds
     """
     if cot_min is None:
-        cot_min = get_ndp("cot_theta_lower_lim")
+        cot_min = cast(float, get_ndp("cot_theta_lower_lim"))
     if cot_max is None:
-        cot_max = get_ndp("cot_theta_upper_lim")
+        cot_max = cast(float, get_ndp("cot_theta_upper_lim"))
     return max(cot_min, min(cot_max, cot_theta))
 
 
@@ -386,27 +386,30 @@ def find_alpha_cw(f_cd: float, sigma_cp: float) -> float:
 
     This coefficient accounts for the state of stress in the compression chord.
 
+    NDP: National Annex dependent:
+    - Base EC2 & UK NA: Piecewise formula based on σ_cp/f_cd ratio
+    - German NA: α_cw = 1.0 (constant)
+
     Args:
+        f_cd: Design compressive strength of concrete in MPa
         sigma_cp: Compressive stress from axial force in MPa
 
     Returns:
         Coefficient α_cw (dimensionless)
     """
-    if sigma_cp == 0:
-        return 1.0
-    elif sigma_cp <= 0.25 * f_cd:
-        return 1.0 + sigma_cp / f_cd
-    elif sigma_cp <= 0.5 * f_cd:
-        return 1.25
-    else:
-        return 2.5 * (1 - sigma_cp / f_cd)
+    from materials.reinforced_concrete.ndp import get_ndp_callable
+
+    alpha_cw_fn = get_ndp_callable("alpha_cw")
+    return alpha_cw_fn(f_cd, sigma_cp)
 
 
 def find_nu_factor(f_ck: float) -> float:
     """
     Strength reduction factor for concrete cracked in shear (§6.2.2(6), Eq. 6.6N).
 
-    ν = 0.6·(1 - f_ck/250)
+    NDP: Can be either:
+    - Formula: ν = 0.6·(1 - f_ck/250) (Eurocode, UK National Annex)
+    - Constant: ν = 0.675 (German National Annex for shear)
 
     Args:
         f_ck: Characteristic cylinder strength of concrete in MPa
@@ -414,7 +417,74 @@ def find_nu_factor(f_ck: float) -> float:
     Returns:
         ν factor (dimensionless)
     """
-    return 0.6 * (1 - f_ck / 250)
+    from materials.reinforced_concrete.ndp import get_ndp_callable
+
+    nu_fn = get_ndp_callable("nu_shear")
+    return nu_fn(f_ck)
+
+
+def find_nu_1_factor(f_ck: float, angle_deg: float) -> float:
+    """
+    Strength reduction factor ν₁ for V_Rd,max (§6.2.3(3), Eq. 6.14).
+
+    NDP: National Annex dependent:
+    - Base EC2: ν₁ = ν = 0.6·(1 - f_ck/250)
+    - UK NA: ν₁ = ν·(1 - 0.5·cos(α)) where α is shear reinforcement angle
+    - German NA: ν₁ = 0.75·ν₂ where ν₂ = max(1.1 - f_ck/500, 1.0)
+
+    Args:
+        f_ck: Characteristic cylinder strength of concrete in MPa
+        angle_deg: Shear reinforcement angle to longitudinal axis in degrees
+
+    Returns:
+        ν₁ factor (dimensionless)
+    """
+    from materials.reinforced_concrete.ndp import get_ndp_callable
+
+    nu_1_fn = get_ndp_callable("nu_1")
+    return nu_1_fn(f_ck, angle_deg)
+
+
+def find_nu_1_factor_note_2(f_ck: float, angle_deg: float) -> float:
+    """
+    Increased strength reduction factor ν₁ for V_Rd,max when σ_s < 0.8·f_yk (§6.2.3(3) Note 2).
+
+    NDP: National Annex dependent:
+    - Base EC2: ν₁ = 0.6 for f_ck ≤ 60, ν₁ = max(0.9 - f_ck/200, 0.5) for f_ck > 60
+    - UK NA: ν₁ = 0.54·(1 - 0.5·cos(α)) for f_ck ≤ 60, ν₁ = max((0.84 - f_ck/200)·(1 - 0.5·cos(α)), 0.5) for f_ck > 60
+    - German NA: Same as base EC2
+
+    Args:
+        f_ck: Characteristic cylinder strength of concrete in MPa
+        angle_deg: Shear reinforcement angle to longitudinal axis in degrees
+
+    Returns:
+        ν₁ factor (dimensionless) - increased value for low-stress reinforcement
+    """
+    from materials.reinforced_concrete.ndp import get_ndp_callable
+
+    nu_1_fn = get_ndp_callable("nu_1_note_2")
+    return nu_1_fn(f_ck, angle_deg)
+
+
+def find_nu_factor_torsion(f_ck: float) -> float:
+    """
+    Strength reduction factor for torsion (§6.3.2(4), Eq. 6.30N).
+
+    NDP: Can be either:
+    - Formula: ν = 0.6·(1 - f_ck/250) (Eurocode, UK National Annex)
+    - Constant: ν = 0.525 (German National Annex for torsion)
+
+    Args:
+        f_ck: Characteristic cylinder strength of concrete in MPa
+
+    Returns:
+        ν factor for torsion (dimensionless)
+    """
+    from materials.reinforced_concrete.ndp import get_ndp_callable
+
+    nu_fn = get_ndp_callable("nu_torsion")
+    return nu_fn(f_ck)
 
 
 def find_k_factor(d: float) -> float:
@@ -433,7 +503,7 @@ def find_k_factor(d: float) -> float:
         raise ValueError(f"Effective depth must be > 0, got {d} mm")
     return min(2.0, 1.0 + sqrt(200 / d))
 
-
+# TODO this is an ndp
 def find_v_min(f_ck: float, k_factor: float) -> float:
     """
     Minimum shear strength coefficient (§6.2.2(1), Eq. 6.3N).

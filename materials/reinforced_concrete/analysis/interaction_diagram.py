@@ -413,7 +413,7 @@ class MNInteractionDiagram:
                 sigma_t = np.where(
                     eps_t <= eps_cr,
                     -E_cm * eps_t,
-                    -f_ctm * np.maximum(0.0, 1.0 - beta * (eps_t - eps_cr) / (eps_cr * 5.0)),
+                    -f_ctm * np.maximum(0.0, 1.0 - beta * np.subtract(eps_t, eps_cr) / (eps_cr * 5.0)),
                 )
                 concrete_stresses[ten_mask] = sigma_t
 
@@ -667,7 +667,7 @@ class MNInteractionDiagram:
         if n <= 1:
             return np.array([0.0])
         t = np.linspace(0.0, 1.0, n)
-        return 0.5 * (1.0 - np.cos(np.pi * t))
+        return 0.5 * np.subtract(1.0, np.cos(np.pi * t))
 
 
     @staticmethod
@@ -1066,7 +1066,7 @@ class MNInteractionDiagram:
 
         # Interpolation weights
         alpha = (y_coords - y_bot) / h      # ∂strain/∂eps_top
-        beta = 1.0 - alpha                   # ∂strain/∂eps_bottom
+        beta = np.subtract(1.0, alpha)       # ∂strain/∂eps_bottom
 
         # Derivative of force contributions: ∂F/∂eps = E_t * A * (∂strain/∂eps)
         dF_deps_top = E_t * areas * alpha

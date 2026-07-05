@@ -5,7 +5,7 @@ Implements characteristic and design strengths for reinforcing bar grades.
 """
 
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, cast
 from pydantic import Field, ConfigDict
 from materials.core.base_material import BaseMaterial
 from materials.reinforced_concrete.ndp import get_ndp
@@ -79,13 +79,13 @@ class ReinforcingSteel(BaseMaterial):
     )
 
     gamma_s: float = Field(
-        default_factory=lambda: get_ndp("gamma_s"),
+        default_factory=lambda: cast(float, get_ndp("gamma_s")),
         description="Partial factor for steel - ULS (§2.4.2.4, NDP)",
         gt=0,
     )
 
     gamma_s_accidental: float = Field(
-        default_factory=lambda: get_ndp("gamma_s_accidental"),
+        default_factory=lambda: cast(float, get_ndp("gamma_s_accidental")),
         description="Partial factor for steel - accidental (§2.4.2.4, NDP)",
         gt=0,
     )
@@ -163,7 +163,7 @@ class ReinforcingSteel(BaseMaterial):
     @property
     def epsilon_ud(self) -> float:
         """Design ultimate strain (§3.2.7): ε_ud = k_strain · ε_uk (NDP)."""
-        return get_ndp("k_strain") * self.epsilon_uk
+        return cast(float, get_ndp("k_strain")) * self.epsilon_uk
 
     @property
     def k_ratio(self) -> float:

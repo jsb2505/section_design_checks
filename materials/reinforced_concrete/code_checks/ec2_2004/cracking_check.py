@@ -8,7 +8,7 @@ elastic/cracked section analysis to calculate crack widths.
 from math import exp
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, cast
 import warnings
 
 from pydantic import Field, PrivateAttr, computed_field
@@ -78,6 +78,7 @@ class CrackingResult:
     sigma_c_peak: float = 0.0  # Peak concrete compressive stress (MPa)
     nonlinear_creep_applied: bool = False  # Whether non-linear creep adjustment was applied
     creep_coefficient_used: float = 0.0  # Actual creep coefficient used (may be φ_NL)
+    steel_yielded: bool = False  # Whether σ_s > f_yk (EC2 §7.2(4)P inelastic strain)
 
 
 class CrackingCheck(BaseCodeCheck):
@@ -99,7 +100,9 @@ class CrackingCheck(BaseCodeCheck):
         concrete: Concrete material (characteristic properties for SLS)
         w_k_limit: Allowable crack width (default 0.3mm for XC2/XC3)
         load_duration: SHORT_TERM (k_t=0.6) or LONG_TERM (k_t=0.4)
-        creep_coefficient: Linear creep coefficient φ (default 1.5)
+        creep_coefficient:
+            Linear creep coefficient φ. Modifies E_cm to Ec,eff.
+            Set to 0.0 to use E_cm. (default 1.5)
         sls_combination: SLS load combination type (affects stress checks)
         apply_nonlinear_creep: Auto-adjust E_cm,eff when σ_c > k_2·f_ck
 
@@ -171,7 +174,8 @@ class CrackingCheck(BaseCodeCheck):
     creep_coefficient: float = Field(
         default=1.5,
         description="Linear creep coefficient φ for long-term SLS. "
-                    "E_cm,eff = E_cm / (1 + φ). Default 1.5 for typical long-term loading.",
+                    "E_cm,eff = E_cm / (1 + φ). Default 1.5 for typical long-term loading."
+                    "Set to 0.0 to use short-term E_cm.",
         ge=0.0,
     )
 
@@ -188,36 +192,6 @@ class CrackingCheck(BaseCodeCheck):
     iterate_nonlinear_creep: bool = Field(
         default=False,
         description="If True, iterate non-linear creep adjustment until convergence (max 5 iterations).",
-    )
-
-    # National Annex stress limitation coefficients (EC2 §7.2)
-    k_1_stress: float = Field(
-        default_factory=lambda: get_ndp("k_1_stress"),
-        description="Characteristic stress limit factor k_1 (EC2 §7.2(2), NDP). "
-                    "Longitudinal cracking risk if σ_c > k_1·f_ck under characteristic loads.",
-    )
-
-    k_2_stress: float = Field(
-        default_factory=lambda: get_ndp("k_2_stress"),
-        description="Quasi-permanent stress limit factor k_2 (EC2 §7.2(3), NDP). "
-                    "Non-linear creep if σ_c > k_2·f_ck under quasi-permanent loads.",
-    )
-
-    k_3_stress: float = Field(
-        default_factory=lambda: get_ndp("k_3_stress"),
-        description="Reinforcement stress limit factor k_3 (EC2 §7.2(5), NDP). "
-                    "Yield risk if σ_s > k_3·f_yk.",
-    )
-
-    # National Annex coefficients for crack spacing (EC2 §7.3.4(3))
-    k_3: float = Field(
-        default_factory=lambda: get_ndp("k_3_crack"),
-        description="National Annex coefficient k_3 for crack spacing (NDP)",
-    )
-
-    k_4: float = Field(
-        default_factory=lambda: get_ndp("k_4_crack"),
-        description="National Annex coefficient k_4 for crack spacing (NDP)",
     )
 
     # ===========================
@@ -301,6 +275,43 @@ class CrackingCheck(BaseCodeCheck):
     def k_1(self) -> float:
         """Bond coefficient (EC2 §7.3.4(3)): 0.8 for high bond, 1.6 for plain."""
         return 0.8 if self.is_high_bond_bar else 1.6
+
+    @property
+    def k_3(self) -> float:
+        """NDP coefficient k_3 for crack spacing (EC2 §7.3.4(3))."""
+        return cast(float, get_ndp("k_3_crack"))
+
+    @property
+    def k_4(self) -> float:
+        """NDP coefficient k_4 for crack spacing (EC2 §7.3.4(3))."""
+        return cast(float, get_ndp("k_4_crack"))
+
+    @property
+    def k_1_stress(self) -> float:
+        """
+        NDP characteristic stress limit factor k_1 (EC2 §7.2(2)).
+
+        Longitudinal cracking risk if σ_c > k_1·f_ck under characteristic loads.
+        """
+        return cast(float, get_ndp("k_1_stress"))
+
+    @property
+    def k_2_stress(self) -> float:
+        """
+        NDP quasi-permanent stress limit factor k_2 (EC2 §7.2(3)).
+
+        Non-linear creep threshold if σ_c > k_2·f_ck under quasi-permanent loads.
+        """
+        return cast(float, get_ndp("k_2_stress"))
+
+    @property
+    def k_3_stress(self) -> float:
+        """
+        NDP reinforcement stress limit factor k_3 (EC2 §7.2(5)).
+
+        Yield risk if σ_s > k_3·f_yk.
+        """
+        return cast(float, get_ndp("k_3_stress"))
 
     @property
     def effective_modulus_ratio(self) -> float:
@@ -1192,7 +1203,7 @@ class CrackingCheck(BaseCodeCheck):
         # Step 8: Get steel stress (returned as absolute value, always positive)
         sigma_s = self._get_steel_stress(eps_top, eps_bottom)
 
-        # EC2 §7.2(5): Reinforcement stress limit
+        # EC2 §7.2(5): Reinforcement stress limit (serviceability stress limit)
         # TODO  this check is only valid if the limit state is SLSCombination.CHARACTERISTIC
         f_yk = self._get_f_yk_max()
         limit_steel = self.k_3_stress * f_yk
@@ -1201,6 +1212,17 @@ class CrackingCheck(BaseCodeCheck):
                 f"EC2 §7.2(5): σ_s = {sigma_s:.1f} MPa > "
                 f"{self.k_3_stress}·f_yk = {limit_steel:.1f} MPa. "
                 f"Reinforcement stress limit exceeded.",
+                stacklevel=3,
+            )
+
+        # EC2 §7.2(4)P: Check for inelastic strain (yielding)
+        # "Tensile stresses in the reinforcement shall be limited in order to
+        # avoid inelastic strain, unacceptable cracking or deformation."
+        if sigma_s > f_yk:
+            warnings.warn(
+                f"EC2 §7.2(4)P: σ_s = {sigma_s:.1f} MPa > f_yk = {f_yk:.1f} MPa. "
+                f"Reinforcement has yielded - inelastic strain occurring. "
+                f"SLS crack width calculation may be unreliable.",
                 stacklevel=3,
             )
 
@@ -1265,7 +1287,9 @@ class CrackingCheck(BaseCodeCheck):
             "sigma_c_peak": float(sigma_c_peak),
             "k_1_stress_limit": float(self.k_1_stress * self.concrete.f_ck),
             "k_2_stress_limit": float(self.k_2_stress * self.concrete.f_ck),
-            # TODO Add k_3_stress_limit ?
+            "k_3_stress_limit": float(self.k_3_stress * f_yk),
+            "f_yk": float(f_yk),
+            "steel_yielded": sigma_s > f_yk,
             "nonlinear_creep_applied": nonlinear_creep_applied,
             "creep_coefficient_used": float(creep_coefficient_used),
         }
@@ -1391,6 +1415,10 @@ class CrackingCheck(BaseCodeCheck):
 
         w_k = self.calculate_crack_width(s_r_max, eps_diff)
 
+        # Check for steel yielding (EC2 §7.2(4)P)
+        f_yk = self._get_f_yk_max()
+        steel_yielded = sigma_s > f_yk
+
         return CrackingResult(
             w_k=w_k,
             w_k_limit=self.w_k_limit,
@@ -1406,4 +1434,5 @@ class CrackingCheck(BaseCodeCheck):
             sigma_c_peak=sigma_c_peak,
             nonlinear_creep_applied=nonlinear_creep_applied,
             creep_coefficient_used=creep_coefficient_used,
+            steel_yielded=steel_yielded,
         )

@@ -7,6 +7,7 @@ and stress-strain parameters for concrete grades C12/15 to C90/105.
 
 from enum import StrEnum
 from math import log
+from typing import cast
 from pydantic import Field, ConfigDict
 
 from materials.core.base_material import BaseMaterial
@@ -121,26 +122,26 @@ class ConcreteMaterial(BaseMaterial):
     grade: ConcreteGrade = Field(..., description="Concrete grade per EC2 Table 3.1")
 
     gamma_c: float = Field(
-        default_factory=lambda: get_ndp("gamma_c"),
+        default_factory=lambda: cast(float, get_ndp("gamma_c")),
         description="Partial factor for concrete for ULS persistent/transient (§2.4.2.4, NDP)",
         gt=0,
     )
 
     gamma_c_accidental: float = Field(
-        default_factory=lambda: get_ndp("gamma_c_accidental"),
+        default_factory=lambda: cast(float, get_ndp("gamma_c_accidental")),
         description="Partial factor for concrete for ULS accidental (§2.4.2.4, NDP)",
         gt=0,
     )
 
     alpha_cc: float = Field(
-        default_factory=lambda: get_ndp("alpha_cc"),
+        default_factory=lambda: cast(float, get_ndp("alpha_cc")),
         description="Coefficient for long-term effects on strength (§3.1.6(1)P, NDP)",
         gt=0,
         le=1.0,
     )
 
     alpha_ct: float = Field(
-        default_factory=lambda: get_ndp("alpha_ct"),
+        default_factory=lambda: cast(float, get_ndp("alpha_ct")),
         description="Coefficient for long-term effects on tensile strength (NDP)",
         gt=0,
         le=1.0,

@@ -4,7 +4,7 @@ Eurocode 2 code checks.
 
 from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
-from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import CrackingCheck, LoadDuration
+from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import CrackingCheck, LoadDuration, SLSCombination
 
 __all__ = [
     "BendingCheck",
@@ -12,4 +12,5 @@ __all__ = [
     "ShearLoadCase",
     "CrackingCheck",
     "LoadDuration",
+    "SLSCombination",
 ]
