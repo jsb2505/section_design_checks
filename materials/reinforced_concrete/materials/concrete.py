@@ -35,7 +35,13 @@ class ConcreteMaterial(BaseMaterial):
 
     gamma_c: float = Field(
         default=1.5,
-        description="Partial factor for concrete (§2.4.2.4)",
+        description="Partial factor for concrete for ULS persistent/transient (§2.4.2.4)",
+        gt=0,
+    )
+
+    gamma_c_accidental: float = Field(
+        default=1.2,
+        description="Partial factor for concrete for ULS accidental (§2.4.2.4, National Annex)",
         gt=0,
     )
 
@@ -119,7 +125,7 @@ class ConcreteMaterial(BaseMaterial):
     @property
     def f_cd(self) -> float:
         """
-        Design compressive strength (§3.1.6).
+        Design compressive strength for ULS persistent/transient (§3.1.6).
 
         f_cd = α_cc · f_ck / γ_c
 
@@ -127,6 +133,21 @@ class ConcreteMaterial(BaseMaterial):
             f_cd in MPa
         """
         return self.alpha_cc * self.f_ck / self.gamma_c
+
+    @computed_field
+    @property
+    def f_cd_accidental(self) -> float:
+        """
+        Design compressive strength for ULS accidental (§3.1.6).
+
+        f_cd,acc = α_cc · f_ck / γ_c,acc
+
+        Typically used for seismic design, impact, fire scenarios.
+
+        Returns:
+            f_cd,acc in MPa
+        """
+        return self.alpha_cc * self.f_ck / self.gamma_c_accidental
 
     @computed_field
     @property
