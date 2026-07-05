@@ -315,7 +315,10 @@ class CircularShearViewer:
             V_Rd_s = self._find_V_Rd_s(cot_theta_f, context)
             V_Rd_max_theta = self._find_V_Rd_max(cot_theta_f, context)
 
-            V_Rd = min(V_Rd_s, V_Rd_max_design)
+            # Govern by the per-cot strut capacity, not the constant peak value at
+            # cot_min: V_Rd,max(theta) genuinely falls as cot grows, so utilization
+            # must use min(V_Rd_s(theta), V_Rd_max(theta)) at each cot sample.
+            V_Rd = min(V_Rd_s, V_Rd_max_theta)
             util = context.V_Ed / V_Rd if V_Rd > 0.0 else float("inf")
 
             shift = calculate_tension_shift(

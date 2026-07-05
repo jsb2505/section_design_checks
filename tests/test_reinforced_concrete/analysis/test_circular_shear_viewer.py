@@ -353,6 +353,27 @@ class TestCircularShearViewer:
                 show=False,
             )
 
+    def test_cot_theta_study_util_uses_per_cot_vrdmax(self, monkeypatch):
+        """Utilization in the cot(theta) study must use the per-cot V_Rd,max(theta),
+        not the constant design value at cot_min (which is the curve's peak)."""
+        _apply_all_patches(monkeypatch)
+        viewer = CircularShearViewer(_FakeCircularCheck())
+        series = viewer._compute_cot_theta_study_series(
+            load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            n_points=8,
+            cot_theta_min=None,
+            cot_theta_max=None,
+            use_uncracked_V_Rd_c=False,
+        )
+        V_Ed = series.context.V_Ed
+        for v_s, v_max, util in zip(series.V_Rd_s_vals, series.V_Rd_max_theta_vals, series.util_vals):
+            governing = min(v_s, v_max)
+            expected = V_Ed / governing if governing > 0.0 else float("inf")
+            assert util == pytest.approx(expected, rel=1e-9)
+        # The scenario must include cots where per-cot V_Rd,max < the design value,
+        # else the bug (using the design constant) would be indistinguishable.
+        assert any(vmax < series.V_Rd_max_design - 1e-9 for vmax in series.V_Rd_max_theta_vals)
+
     def test_plot_cot_theta_study_adds_cot_theta_max_intercept_trace(self, monkeypatch):
         _apply_all_patches(monkeypatch)
         viewer = CircularShearViewer(_FakeCircularCheck())
