@@ -244,3 +244,17 @@ class TestFindStrainStateAnalyticalPath:
         assert ss.eps_bottom < ss.eps_top, (
             f"eps_bottom ({ss.eps_bottom:.6f}) should be < eps_top ({ss.eps_top:.6f}) for sagging"
         )
+
+
+class TestSingleSolveConsistency:
+    """The double-solve elimination relies on StrainState.eps_top/eps_bottom being
+    exactly the projection that find_strains_for_MN returns. If that ever drifts,
+    callers that now derive end strains from the state would silently diverge."""
+
+    def test_state_eps_match_strains_solver(self, asymmetric_section, concrete_c30):
+        adapter = _make_adapter(asymmetric_section, concrete_c30, 25000.0)
+        kw = dict(My_target=15.0, N_target=200.0, Mz_target=8.0, strict=True)
+        eps_top, eps_bottom = adapter.find_strains_for_MN(**kw)
+        ss = adapter.find_strain_state_for_MN(**kw)
+        assert ss.eps_top == pytest.approx(eps_top, rel=1e-6, abs=1e-9)
+        assert ss.eps_bottom == pytest.approx(eps_bottom, rel=1e-6, abs=1e-9)

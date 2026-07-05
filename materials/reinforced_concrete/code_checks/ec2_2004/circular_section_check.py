@@ -1049,6 +1049,7 @@ class CircularSectionCheck(BaseModel):
             )
         else:
             eps_top, eps_bottom = None, None
+            strain_state_local = None
 
         d = self._shear_check.find_effective_depth(
             My_Ed,

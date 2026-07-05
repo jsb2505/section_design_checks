@@ -2427,8 +2427,10 @@ class CrackingCheck(BaseCodeCheck):
                 },
             )
 
+        # strict=True so this reuses the strict find_strains_for_MN result above
+        # (the strain cache keys on `strict`) instead of triggering a re-solve.
         strain_state_local = diagram_for_check.find_strain_state_for_MN(
-            My_target=M_Ed, N_target=N_Ed, **_mz_kw,
+            My_target=M_Ed, N_target=N_Ed, strict=True, **_mz_kw,
         )
 
         # Step 2.5: Stress limitation checks (EC2 §7.2) and non-linear creep
