@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jsb2505/section_design_checks/actions/workflows/ci.yml/badge.svg)](https://github.com/jsb2505/section_design_checks/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![Licence: MIT](https://img.shields.io/badge/licence-MIT-green.svg)](LICENSE)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-green.svg)](https://github.com/jsb2505/section_design_checks/blob/main/LICENSE)
 
 A Python library for reinforced concrete section analysis and design checks to
 Eurocode 2 (EN 1992-1-1:2004). It combines a fibre-based strain-compatibility
@@ -14,15 +14,15 @@ batch.
 
 | | |
 |---|---|
-| ![M-N interaction diagram](examples/plots/mn_interaction_diagram.png) | ![Biaxial M-M-N interaction surface](examples/plots/biaxial_mn_surface.png) |
+| ![M-N interaction diagram](https://raw.githubusercontent.com/jsb2505/section_design_checks/main/examples/plots/mn_interaction_diagram.png) | ![Biaxial M-M-N interaction surface](https://raw.githubusercontent.com/jsb2505/section_design_checks/main/examples/plots/biaxial_mn_surface.png) |
 | *Uniaxial M-N interaction diagram with load cases and capacity vectors* | *Biaxial M-M-N interaction surface (EC2 pivot method)* |
-| ![Strain compatibility solution](examples/plots/stress_strain_state.png) | ![Crack width contours](examples/plots/crack_width_contours.png) |
+| ![Strain compatibility solution](https://raw.githubusercontent.com/jsb2505/section_design_checks/main/examples/plots/stress_strain_state.png) | ![Crack width contours](https://raw.githubusercontent.com/jsb2505/section_design_checks/main/examples/plots/crack_width_contours.png) |
 | *Strain-compatibility solution for an applied (M, N) pair* | *SLS crack width contour map over the M-N domain* |
-| ![Shear cot theta study](examples/plots/shear_cot_theta_study.png) | ![Section geometry](examples/plots/section_geometry.png) |
+| ![Shear cot theta study](https://raw.githubusercontent.com/jsb2505/section_design_checks/main/examples/plots/shear_cot_theta_study.png) | ![Section geometry](https://raw.githubusercontent.com/jsb2505/section_design_checks/main/examples/plots/section_geometry.png) |
 | *Variable strut inclination study for the shear check* | *Section viewer with rebar hover data* |
 
 All plots are interactive Plotly figures; the PNGs above are regenerated with
-[examples/generate_release_plots.py](examples/generate_release_plots.py).
+[examples/generate_release_plots.py](https://github.com/jsb2505/section_design_checks/blob/main/examples/generate_release_plots.py).
 
 ## Features
 
@@ -192,18 +192,18 @@ set_ndp_context(country=CountryCode.EU)      # EC2 recommended values (default)
 
 ## Examples
 
-The [examples/](examples/) directory contains runnable scripts and Jupyter
+The [examples/](https://github.com/jsb2505/section_design_checks/tree/main/examples/) directory contains runnable scripts and Jupyter
 notebooks, including:
 
 | Notebook | Topic |
 |---|---|
-| [m_n_interaction_diagram_tutorial.ipynb](examples/m_n_interaction_diagram_tutorial.ipynb) | Uniaxial M-N diagrams end to end |
-| [biaxial_mn_interaction_tutorial.ipynb](examples/biaxial_mn_interaction_tutorial.ipynb) | Biaxial M-M-N surfaces and the pivot method |
-| [ec2_code_checks_demonstration.ipynb](examples/ec2_code_checks_demonstration.ipynb) | Bending, shear, cracking and stress-limit checks |
-| [shear_viewer_demonstration.ipynb](examples/shear_viewer_demonstration.ipynb) | Shear design study plots |
-| [crack_width_viewer_demonstration.ipynb](examples/crack_width_viewer_demonstration.ipynb) | Crack width visualisation |
-| [circular_section_check_demonstration.ipynb](examples/circular_section_check_demonstration.ipynb) | Circular pile/column checks (Orr 2012) |
-| [ndp_demonstration.ipynb](examples/ndp_demonstration.ipynb) | Nationally Determined Parameters |
+| [m_n_interaction_diagram_tutorial.ipynb](https://github.com/jsb2505/section_design_checks/blob/main/examples/m_n_interaction_diagram_tutorial.ipynb) | Uniaxial M-N diagrams end to end |
+| [biaxial_mn_interaction_tutorial.ipynb](https://github.com/jsb2505/section_design_checks/blob/main/examples/biaxial_mn_interaction_tutorial.ipynb) | Biaxial M-M-N surfaces and the pivot method |
+| [ec2_code_checks_demonstration.ipynb](https://github.com/jsb2505/section_design_checks/blob/main/examples/ec2_code_checks_demonstration.ipynb) | Bending, shear, cracking and stress-limit checks |
+| [shear_viewer_demonstration.ipynb](https://github.com/jsb2505/section_design_checks/blob/main/examples/shear_viewer_demonstration.ipynb) | Shear design study plots |
+| [crack_width_viewer_demonstration.ipynb](https://github.com/jsb2505/section_design_checks/blob/main/examples/crack_width_viewer_demonstration.ipynb) | Crack width visualisation |
+| [circular_section_check_demonstration.ipynb](https://github.com/jsb2505/section_design_checks/blob/main/examples/circular_section_check_demonstration.ipynb) | Circular pile/column checks (Orr 2012) |
+| [ndp_demonstration.ipynb](https://github.com/jsb2505/section_design_checks/blob/main/examples/ndp_demonstration.ipynb) | Nationally Determined Parameters |
 
 ## Testing and code quality
 
@@ -240,7 +240,7 @@ section_design_checks/
 This library is provided for research and engineering workflow automation.
 It is **not** a substitute for professional engineering judgement: all results
 must be independently verified by a qualified engineer before being used in
-design. See the [LICENSE](LICENSE) for the full warranty disclaimer.
+design. See the [LICENSE](https://github.com/jsb2505/section_design_checks/blob/main/LICENSE) for the full warranty disclaimer.
 
 ## Contributing
 
@@ -262,4 +262,4 @@ pytest
 
 ## Licence
 
-[MIT](LICENSE)
+[MIT](https://github.com/jsb2505/section_design_checks/blob/main/LICENSE)
