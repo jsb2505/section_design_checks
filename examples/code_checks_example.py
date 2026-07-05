@@ -15,8 +15,8 @@ from materials.reinforced_concrete.materials import (
     Rebar,
     ShearRebar,
 )
-from materials.reinforced_concrete.code_checks.ec2.bending_check import BendingCheck
-from materials.reinforced_concrete.code_checks.ec2.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
 
 
 def main():

@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, NamedTuple, Sequence, Literal
-
+import warnings
 import csv
 import json
 import numpy as np
@@ -1214,7 +1214,6 @@ class MNInteractionDiagram:
 
         z_mech is the uncapped centroid-based lever arm if computed, else None.
         """
-        import warnings
         # Effective depth
         if d is None:
             d = self.get_effective_depth(M_Ed, N_Ed, eps_top, eps_bottom)

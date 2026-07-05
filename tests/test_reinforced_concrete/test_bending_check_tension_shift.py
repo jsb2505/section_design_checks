@@ -15,7 +15,7 @@ import math
 from types import SimpleNamespace
 import pytest
 
-from materials.reinforced_concrete.code_checks.ec2.bending_check import BendingCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
 
 
 # -------------------------
@@ -121,7 +121,7 @@ def patch_shear_utils(monkeypatch):
     """
     Patch shear_utils functions so the tests don't depend on real implementation or RCSection geometry.
     """
-    import materials.reinforced_concrete.code_checks.ec2.shear_utils as shear_utils
+    import materials.reinforced_concrete.code_checks.ec2_2004.shear_utils as shear_utils
 
     monkeypatch.setattr(shear_utils, "sigma_cp_from_N_and_area", lambda *, N_Ed, A_mm2: 1.0)
     monkeypatch.setattr(shear_utils, "cap_sigma_cp_upper", lambda *, sigma_cp, f_cd: sigma_cp)

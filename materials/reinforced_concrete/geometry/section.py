@@ -149,7 +149,7 @@ class RebarGroup(BaseModel):
     )
 
     layer_name: Optional[str] = Field(
-        None,
+        default=None,
         description="Optional layer identifier (e.g., 'bottom', 'top', 'side')"
     )
 

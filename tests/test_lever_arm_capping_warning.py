@@ -8,7 +8,7 @@ by using a section with extreme loading conditions.
 import warnings
 from materials.reinforced_concrete.geometry import create_rectangular_section
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
-from materials.reinforced_concrete.code_checks.ec2.shear_check import ShearCheck, ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.geometry import RebarGroup
 

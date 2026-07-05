@@ -11,7 +11,7 @@ from materials.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
 )
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
-from materials.reinforced_concrete.code_checks.ec2.bending_check import BendingCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
 from materials.reinforced_concrete.code_checks.base_check import CheckStatus
 
 

@@ -21,7 +21,7 @@ from materials.reinforced_concrete.code_checks.base_check import (
 from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
-from materials.reinforced_concrete.code_checks.ec2.shear_utils import (
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     calculate_section_breadth,
     find_cot_theta_for_V_Ed,
     find_alpha_cw,
