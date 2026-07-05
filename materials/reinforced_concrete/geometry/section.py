@@ -370,6 +370,14 @@ class RCSection(BaseGeometry):
         if self.rebar_groups:
             self._auto_reconcile_reinforcement()
 
+        # Check for cross-group bar clashes
+        if len(self.rebar_groups) > 1:
+            from .reinforcement_reconcile import find_clashing_rebars
+            details, clashes = find_clashing_rebars(self)
+            if clashes:
+                msg = "Rebar bars clash across groups:\n- " + "\n- ".join(details)
+                raise ValueError(msg)
+
         return self
 
 
@@ -727,6 +735,7 @@ class RCSection(BaseGeometry):
 
         Raises:
             ValueError: If any rebar disc is not fully within the outline
+                        or clashes with existing bars in other groups.
         """
         r = float(group.rebar.diameter) / 2.0
         for pos in group.positions:
@@ -736,7 +745,106 @@ class RCSection(BaseGeometry):
                     f"Rebar (ϕ{group.rebar.diameter:g}) at ({pos.x:.1f}, {pos.y:.1f}) "
                     "is not fully within the section outline (may cross boundary or enter a void)."
                 )
+
+        # Check for clashes with existing groups
+        r_new = float(group.rebar.diameter) / 2.0
+        for gi, existing in enumerate(self.rebar_groups):
+            r_ex = float(existing.rebar.diameter) / 2.0
+            min_dist = (r_new + r_ex) - _GEOM_TOL_MM
+            min_dist_sq = min_dist * min_dist
+            for p_new in group.positions:
+                for bi, p_ex in enumerate(existing.positions):
+                    dx = p_new.x - p_ex.x
+                    dy = p_new.y - p_ex.y
+                    if (dx * dx + dy * dy) < min_dist_sq:
+                        raise ValueError(
+                            f"New bar (ϕ{group.rebar.diameter:g}) at "
+                            f"({p_new.x:.1f}, {p_new.y:.1f}) clashes with "
+                            f"group[{gi}] bar[{bi}] "
+                            f"(ϕ{existing.rebar.diameter:g}) at "
+                            f"({p_ex.x:.1f}, {p_ex.y:.1f}). "
+                            "Bars may touch but must not overlap."
+                        )
+
         self.rebar_groups.append(group)
+
+
+    def remove_bars(
+        self,
+        *,
+        group_index: int | None = None,
+        layer_name: str | None = None,
+        positions: Sequence[Point2D | tuple[float, float]] | None = None,
+        bar_indices: Sequence[int] | None = None,
+    ) -> int:
+        """
+        Remove bars matching the given criteria.
+
+        Filtering:
+            ``group_index`` and/or ``layer_name`` select which group(s) to
+            target.  Within those groups, ``positions`` (matched by coordinate
+            within tolerance) or ``bar_indices`` select individual bars.  If
+            neither is given the entire matching group(s) are removed.
+
+        Returns:
+            Number of bars removed.
+        """
+        # Normalise position targets to (x, y) floats
+        pos_targets: list[tuple[float, float]] | None = None
+        if positions is not None:
+            pos_targets = []
+            for p in positions:
+                if isinstance(p, Point2D):
+                    pos_targets.append((p.x, p.y))
+                else:
+                    pos_targets.append((float(p[0]), float(p[1])))
+
+        removed = 0
+        new_groups: list[RebarGroup] = []
+
+        for gi, group in enumerate(self.rebar_groups):
+            # Check if this group is targeted
+            match_gi = group_index is None or gi == group_index
+            match_ln = layer_name is None or group.layer_name == layer_name
+            targeted = match_gi and match_ln
+
+            if not targeted:
+                new_groups.append(group)
+                continue
+
+            # If no per-bar filter, remove entire group
+            if pos_targets is None and bar_indices is None:
+                removed += len(group.positions)
+                continue
+
+            # Build set of bar indices to remove
+            remove_set: set[int] = set()
+            if bar_indices is not None:
+                remove_set.update(bar_indices)
+            if pos_targets is not None:
+                tol_sq = _GEOM_TOL_MM * _GEOM_TOL_MM
+                for bi, bp in enumerate(group.positions):
+                    for tx, ty in pos_targets:
+                        dx = bp.x - tx
+                        dy = bp.y - ty
+                        if (dx * dx + dy * dy) <= tol_sq:
+                            remove_set.add(bi)
+                            break
+
+            kept = tuple(p for i, p in enumerate(group.positions) if i not in remove_set)
+            removed += len(group.positions) - len(kept)
+
+            if kept:
+                new_groups.append(
+                    RebarGroup(
+                        rebar=group.rebar,
+                        positions=kept,
+                        layer_name=group.layer_name,
+                    )
+                )
+
+        self.rebar_groups = new_groups
+        return removed
 
 
     def get_concrete_cover(

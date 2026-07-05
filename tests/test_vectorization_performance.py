@@ -14,7 +14,9 @@ from materials.reinforced_concrete.analysis.biaxial_interaction import (
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 import time
 import numpy as np
+import pytest
 
+pytestmark = pytest.mark.slow
 print("=" * 80)
 print("VECTORIZATION PERFORMANCE TEST")
 print("=" * 80)

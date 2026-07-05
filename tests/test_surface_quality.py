@@ -16,6 +16,9 @@ from materials.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialMNInteractionSurface,
 )
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+import pytest
+
+pytestmark = pytest.mark.slow
 
 print("=" * 80)
 print("SURFACE QUALITY DEMONSTRATION")

@@ -17,6 +17,9 @@ from materials.reinforced_concrete.analysis.biaxial_interaction import (
 )
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 import numpy as np
+import pytest
+
+pytestmark = pytest.mark.slow
 
 def test_pivot_method(n_angles=24, n_axial_levels=12):
     """Test pivot method with specified parameters."""
@@ -48,7 +51,6 @@ def test_pivot_method(n_angles=24, n_axial_levels=12):
     Mz_vals = np.array([p.Mz for p in points])
 
     return points, N_vals, My_vals, Mz_vals
-
 
 print("=" * 80)
 print("VALIDATION TEST: EC2 PIVOT METHOD IMPLEMENTATION")

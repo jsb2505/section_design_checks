@@ -14,7 +14,9 @@ from materials.reinforced_concrete.analysis.biaxial_interaction import (
 )
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 import numpy as np
+import pytest
 
+pytestmark = pytest.mark.slow
 # Create test section
 print("Creating 400x400mm square column with 4H20 corner bars...")
 section = create_rectangular_section(400, 400, section_name="Square Column")

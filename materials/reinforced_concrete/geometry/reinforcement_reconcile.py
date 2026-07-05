@@ -171,6 +171,52 @@ def prune_reinforcement_for_outline(
     )
 
 
+def find_clashing_rebars(
+    section: "RCSection",
+    *,
+    _geom_tol: float = 1e-6,
+) -> tuple[list[str], list[tuple[int, int, int, int]]]:
+    """
+    Find rebar bars that clash (overlap) across *different* groups.
+
+    Two bars clash when the distance between their centres is less than
+    the sum of their radii (they may touch but not overlap).
+
+    Returns:
+        details: human-readable clash descriptions
+        clashes: list of (group_i, bar_i, group_j, bar_j) tuples
+    """
+    details: list[str] = []
+    clashes: list[tuple[int, int, int, int]] = []
+
+    groups = section.rebar_groups
+    n = len(groups)
+
+    for gi in range(n):
+        g1 = groups[gi]
+        r1 = float(g1.rebar.diameter) / 2.0
+        for gj in range(gi + 1, n):
+            g2 = groups[gj]
+            r2 = float(g2.rebar.diameter) / 2.0
+            min_dist = (r1 + r2) - _geom_tol
+            min_dist_sq = min_dist * min_dist
+
+            for bi, p1 in enumerate(g1.positions):
+                for bj, p2 in enumerate(g2.positions):
+                    dx = p1.x - p2.x
+                    dy = p1.y - p2.y
+                    if (dx * dx + dy * dy) < min_dist_sq:
+                        clashes.append((gi, bi, gj, bj))
+                        details.append(
+                            f"group[{gi}] bar[{bi}] "
+                            f"(ϕ{g1.rebar.diameter:g} at {p1.x:.1f},{p1.y:.1f}) "
+                            f"clashes with group[{gj}] bar[{bj}] "
+                            f"(ϕ{g2.rebar.diameter:g} at {p2.x:.1f},{p2.y:.1f})"
+                        )
+
+    return details, clashes
+
+
 def reconcile_after_outline_change(
     section: "RCSection",
     *,

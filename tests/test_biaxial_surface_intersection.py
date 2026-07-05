@@ -14,7 +14,7 @@ from materials.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
 )
 
-
+pytestmark = pytest.mark.slow
 def _create_square_column() -> BiaxialMNInteractionSurface:
     """Square 400x400 mm column with corner bars."""
     section = create_rectangular_section(width=400, height=400, section_name="Test Column")
@@ -39,7 +39,6 @@ def _create_square_column() -> BiaxialMNInteractionSurface:
     concrete = ConcreteMaterial(grade="C30/37", gamma_c=1.5, alpha_cc=0.85)
     return create_biaxial_interaction_surface(section=section, concrete=concrete)
 
-
 def test_surface_symmetry_square_column():
     surface = _create_square_column()
     points = surface.generate_surface_pivot(n_angles=24, n_axial_levels=12)
@@ -54,7 +53,6 @@ def test_surface_symmetry_square_column():
         assert mirrored_magnitudes, "No mirrored point found at matching axial level"
         assert min(mirrored_magnitudes) <= 15.0
 
-
 def test_surface_is_convex():
     surface = _create_square_column()
     points = surface.generate_surface_pivot(n_angles=20, n_axial_levels=12)
@@ -64,7 +62,6 @@ def test_surface_is_convex():
     lhs = hull.equations[:, :3] @ coords.T + hull.equations[:, 3][:, None]
     assert np.all(lhs <= 1e-6)
     assert hull.volume > 0
-
 
 def test_vector_intersection_on_surface():
     surface = _create_square_column()
