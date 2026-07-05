@@ -97,7 +97,7 @@ def calculate_section_height(section: "RCSection") -> float:
         Section height in mm
     """
     bounds = section.outline.bounds  # (minx, miny, maxx, maxy)
-    return bounds[3] - bounds[1]
+    return float(bounds[3] - bounds[1])
 
 
 def calculate_section_breadth(section: "RCSection") -> float:
@@ -111,7 +111,7 @@ def calculate_section_breadth(section: "RCSection") -> float:
         Section breadth in mm
     """
     bounds = section.outline.bounds  # (minx, miny, maxx, maxy)
-    return bounds[2] - bounds[0]
+    return float(bounds[2] - bounds[0])
 
 
 def calculate_modular_ratio(E_s: float, E_cm: float) -> float:
@@ -324,7 +324,7 @@ def _compute_biaxial_effective_depth(
         coords = list(section.outline.exterior.coords)
         projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
         proj_comp_extreme = max(projections)
-        return abs(proj_comp_extreme - proj_T)
+        return float(abs(proj_comp_extreme - proj_T))
 
     # "centroid_normal" policy: find compression zone centroid, draw line
     # through it along compression direction, intersect with section boundary.
@@ -333,7 +333,7 @@ def _compute_biaxial_effective_depth(
         coords = list(section.outline.exterior.coords)
         projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
         proj_comp_extreme = max(projections)
-        return abs(proj_comp_extreme - proj_T)
+        return float(abs(proj_comp_extreme - proj_T))
 
     forces, x_coords, y_coords, _ = diagram.get_fibre_forces_from_strain_state(
         strain_state,
@@ -365,7 +365,7 @@ def _compute_biaxial_effective_depth(
         coords = list(section.outline.exterior.coords)
         projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
         proj_comp_extreme = max(projections)
-        return abs(proj_comp_extreme - proj_T)
+        return float(abs(proj_comp_extreme - proj_T))
 
     # Find the intersection point furthest along compression direction
     from shapely.geometry import GeometryCollection, MultiPoint
@@ -384,12 +384,12 @@ def _compute_biaxial_effective_depth(
         coords = list(section.outline.exterior.coords)
         projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
         proj_comp_extreme = max(projections)
-        return abs(proj_comp_extreme - proj_T)
+        return float(abs(proj_comp_extreme - proj_T))
 
     boundary_projs = [dx * (p.x - cx) + dy * (p.y - cy) for p in pts]
     proj_boundary = max(boundary_projs)
 
-    return abs(proj_boundary - proj_T)
+    return float(abs(proj_boundary - proj_T))
 
 
 def find_effective_depth_for_flexure(

@@ -308,7 +308,7 @@ def calculate_section_breadth(
     proj_n = [x * nx + y * ny for x, y in corners]
 
     depth_along_shear = max(proj_u) - min(proj_u)
-    breadth_bbox = max(proj_n) - min(proj_n)
+    breadth_bbox = float(max(proj_n) - min(proj_n))
 
     if depth_along_shear < 1e-6:
         # Degenerate section depth along the requested shear direction.
@@ -826,7 +826,7 @@ def find_v_min(f_ck: float, k_factor: float, d: float, gamma_c: float) -> float:
     """
     coeff_fn = get_ndp_callable("v_min_coefficient")
     coeff = coeff_fn(d, gamma_c)
-    return coeff * (k_factor ** 1.5) * sqrt(f_ck)
+    return float(coeff * (k_factor ** 1.5) * sqrt(f_ck))
 
 
 def sigma_cp_from_N_and_area(N_Ed: float, area: float) -> float:

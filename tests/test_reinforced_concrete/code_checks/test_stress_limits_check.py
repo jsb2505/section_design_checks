@@ -76,7 +76,7 @@ class _FakeDiagram:
         self._forces = forces if forces is not None else np.array([20.0, 10.0])
         self._areas = areas if areas is not None else np.array([2.0, 2.0])
 
-    def find_strains_for_MN(self, M_Ed: float, N_Ed: float, strict: bool = True):
+    def find_strains_for_MN(self, M_Ed: float, N_Ed: float, strict: bool = True, Mz_target: float = 0.0):
         if self.raise_on_find:
             raise ValueError("outside diagram")
         return self.eps_top, self.eps_bottom

@@ -882,7 +882,7 @@ class CircularShearViewer:
         z_volume = np.full((len(slider_vals), len(y_vals), len(cot_vals)), np.nan, dtype=float)
 
         for i_slider, row in enumerate(context_grid):
-            for i_y, context in enumerate(row):
+            for i_y, context in enumerate(row):  # type: ignore[assignment]  # grid holds Optional; None-guarded below
                 if context is None:
                     continue
                 for i_cot, cot_theta in enumerate(cot_vals):
@@ -909,7 +909,7 @@ class CircularShearViewer:
             zmax = max(1.5, float(np.nanmax(finite_vals))) if finite_vals.size else 1.5
             z_plot_volume = np.array(z_volume, copy=True)
             z_plot_volume[np.isinf(z_plot_volume)] = zmax
-            colorscale = _utilization_colorscale(zmin=zmin, zmax=zmax)
+            colorscale: str | list[list[float | str]] = _utilization_colorscale(zmin=zmin, zmax=zmax)
         else:
             colorbar_title = "kN"
             colorscale = "Viridis"
@@ -1255,7 +1255,7 @@ class CircularShearViewer:
         )
 
         for i_n, row in enumerate(context_grid):
-            for i_m, context in enumerate(row):
+            for i_m, context in enumerate(row):  # type: ignore[assignment]  # grid holds Optional; None-guarded below
                 if context is None:
                     continue
                 for i_cot, cot_theta in enumerate(cot_vals):

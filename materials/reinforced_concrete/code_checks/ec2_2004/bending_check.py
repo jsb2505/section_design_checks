@@ -277,7 +277,7 @@ class BendingCheck(BaseCodeCheck):
         suppress_warnings: bool = False,
         ignore_compression_steel: bool = False,
         iterate_z: bool = False,
-        **kwargs,
+        **kwargs: Any,
     ) -> CheckResult:
         """
         Check section capacity against applied bending moment and axial force.

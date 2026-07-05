@@ -406,6 +406,12 @@ class MNInteractionDiagram:
         """
         if not self.confined_concrete:
             return float(self.concrete_model.get_ultimate_strain())
+        # confined_concrete=True guarantees these are set (enforced by validator).
+        assert (
+            self.confinement_rho_s is not None
+            and self.confinement_f_yh is not None
+            and self.confinement_eps_su is not None
+        )
         f_cc_k, _ = self._confined_strength_and_peak_strain()
         rho_s = float(self.confinement_rho_s)
         f_yh_k = float(self.confinement_f_yh)
@@ -492,7 +498,7 @@ class MNInteractionDiagram:
             ten_mask = strains_real < 0.0
             concrete_stresses[ten_mask] = 0.0
 
-        return concrete_stresses
+        return np.asarray(concrete_stresses, dtype=np.float64)
 
     def _concrete_tangent_modulus_with_options(
         self,
@@ -558,7 +564,7 @@ class MNInteractionDiagram:
         # Note: Confined concrete tangent modulus would go here if implemented
         # For now, confined concrete uses numerical Jacobian (see Jacobian selection logic)
 
-        return E_t
+        return np.asarray(E_t, dtype=np.float64)
 
     def _should_force_cracked_tension_zone(
         self,
@@ -841,7 +847,7 @@ class MNInteractionDiagram:
         if n <= 1:
             return np.array([0.0])
         t = np.linspace(0.0, 1.0, n)
-        return 0.5 * np.subtract(1.0, np.cos(np.pi * t))
+        return np.asarray(0.5 * np.subtract(1.0, np.cos(np.pi * t)), dtype=np.float64)
 
 
     @staticmethod
@@ -1136,6 +1142,7 @@ class MNInteractionDiagram:
         initial_guess: tuple[float, float] | None = None,
         tol: float = 1e-6,
         strict: bool = False,
+        Mz_target: float = 0.0,
     ) -> tuple[float, float]:
         """
         Inverse solver: Find end strains that produce target (M, N).
@@ -1179,6 +1186,12 @@ class MNInteractionDiagram:
             >>> assert abs(point.M - 50.0) < 1e-3
             >>> assert abs(point.N - 100.0) < 1e-3
         """
+        if abs(Mz_target) > 1e-9:
+            raise ValueError(
+                "MNInteractionDiagram solves on a fixed vertical neutral axis and "
+                "cannot satisfy a minor-axis moment (Mz). Use a biaxial / free-NA "
+                "diagram (free_neutral_axis=True) for non-zero Mz_target."
+            )
         _cache_key = (My_target, N_target, strict, self._strain_cache_state_key())
         _cached = self._strain_cache.get(_cache_key)
         if _cached is not None:
@@ -2119,13 +2132,15 @@ class MNInteractionDiagram:
         initial_guess: tuple[float, float] | None = None,
         tol: float = 1e-6,
         strict: bool = False,
+        Mz_target: float = 0.0,
     ) -> StrainState:
         """
         Inverse solver returning a full :class:`StrainState` for target (M, N).
 
         Thin wrapper around :meth:`find_strains_for_MN` that packages the result
         with plane coefficients.  For the 2D solver (horizontal NA), ``plane_a``
-        is always 0 (no horizontal strain gradient).
+        is always 0 (no horizontal strain gradient). A non-zero ``Mz_target`` is
+        rejected here (it requires a biaxial / free-NA diagram).
 
         Returns:
             :class:`StrainState` with ``is_biaxial=False``.
@@ -2138,6 +2153,7 @@ class MNInteractionDiagram:
             initial_guess=initial_guess,
             tol=tol,
             strict=strict,
+            Mz_target=Mz_target,
         )
 
         y_top = float(self.section_top) - float(self._section_cy)

@@ -446,6 +446,7 @@ class StressLimitsCheck(BaseCodeCheck):
 
         use_biaxial = strain_state is not None and strain_state.is_biaxial
         if use_biaxial:
+            assert strain_state is not None  # implied by use_biaxial
             forces, _x, _y, areas = diag.get_fibre_forces_from_strain_state(strain_state)
         else:
             forces, _y, areas = diag.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
@@ -493,6 +494,7 @@ class StressLimitsCheck(BaseCodeCheck):
 
             for pos in group.positions:
                 if use_biaxial:
+                    assert strain_state is not None  # implied by use_biaxial
                     strain = strain_state.strain_at(pos.x - cx, pos.y - cy)
                 else:
                     y_rel = (pos.y - y_min) / h
@@ -546,11 +548,10 @@ class StressLimitsCheck(BaseCodeCheck):
             StressLimitResult with all intermediate values.
         """
         M_Ed = My_Ed
-        _mz_kw = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
         diagram = self._get_diagram(ignore_compression_steel)
-        eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed, strict=True, **_mz_kw)
+        eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed, strict=True, Mz_target=Mz_Ed)
         strain_state_local = diagram.find_strain_state_for_MN(
-            My_target=M_Ed, N_target=N_Ed, **_mz_kw,
+            My_target=M_Ed, N_target=N_Ed, Mz_target=Mz_Ed,
         )
 
         sigma_c = self._get_peak_concrete_stress(
@@ -603,10 +604,10 @@ class StressLimitsCheck(BaseCodeCheck):
                             E_cm_eff_NL, ignore_compression_steel,
                         )
                         eps_top, eps_bottom = diagram_nl.find_strains_for_MN(
-                            M_Ed, N_Ed, strict=True, **_mz_kw
+                            M_Ed, N_Ed, strict=True, Mz_target=Mz_Ed
                         )
                         strain_state_local = diagram_nl.find_strain_state_for_MN(
-                            My_target=M_Ed, N_target=N_Ed, **_mz_kw,
+                            My_target=M_Ed, N_target=N_Ed, Mz_target=Mz_Ed,
                         )
                         sigma_c_nl = self._get_peak_concrete_stress(
                             eps_top, eps_bottom, diagram_nl,
@@ -655,7 +656,7 @@ class StressLimitsCheck(BaseCodeCheck):
         ignore_compression_steel: bool = False,
         warning_threshold: float = 0.95,
         suppress_warnings: bool = False,
-        **kwargs,
+        **kwargs: Any,
     ) -> CheckResult:
         """
         Perform EC2 §7.2 stress limitation checks.

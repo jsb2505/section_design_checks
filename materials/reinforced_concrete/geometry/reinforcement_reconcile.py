@@ -134,7 +134,7 @@ def prune_reinforcement_for_outline(
         # later imports this module at top-level
         from .section import RebarGroup
 
-        new_groups: list[RebarGroup] = []
+        new_groups = []
         for gi, group in enumerate(section.rebar_groups):
             bad = invalid_by_group.get(gi, set())
             if not bad:

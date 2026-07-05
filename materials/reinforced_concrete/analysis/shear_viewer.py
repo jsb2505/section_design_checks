@@ -256,7 +256,7 @@ def _subdivide_axis(values: np.ndarray, factor: int) -> np.ndarray:
 def _axis_centers_from_edges(edges: np.ndarray) -> np.ndarray:
     """Return cell centers from edge coordinates."""
     edge_vals = np.asarray(edges, dtype=float)
-    return 0.5 * (edge_vals[:-1] + edge_vals[1:])
+    return np.asarray(0.5 * (edge_vals[:-1] + edge_vals[1:]), dtype=np.float64)
 
 
 def _build_outside_clip_masks(
@@ -1898,7 +1898,7 @@ class ShearViewer:
             zmax = max(1.5, float(np.nanmax(finite_vals))) if finite_vals.size else 1.5
             Z = np.array(Z, copy=True)
             Z[np.isinf(Z)] = zmax
-            colorscale = _utilization_colorscale(zmin=zmin, zmax=zmax)
+            colorscale: str | list[list[float | str]] = _utilization_colorscale(zmin=zmin, zmax=zmax)
             contour_trace = go.Contour(
                 x=cot_vals,
                 y=angle_vals,
@@ -2134,7 +2134,7 @@ class ShearViewer:
         z_volume = np.full((len(slider_vals), len(y_vals), len(cot_vals)), np.nan, dtype=float)
 
         for i_slider, row in enumerate(context_grid):
-            for i_y, context in enumerate(row):
+            for i_y, context in enumerate(row):  # type: ignore[assignment]  # grid holds Optional; None-guarded below
                 if context is None:
                     continue
                 for i_cot, cot_theta in enumerate(cot_vals):
@@ -2165,7 +2165,7 @@ class ShearViewer:
             zmax = max(1.5, float(np.nanmax(finite_vals))) if finite_vals.size else 1.5
             z_plot_volume = np.array(z_volume, copy=True)
             z_plot_volume[np.isinf(z_plot_volume)] = zmax
-            colorscale = _utilization_colorscale(zmin=zmin, zmax=zmax)
+            colorscale: str | list[list[float | str]] = _utilization_colorscale(zmin=zmin, zmax=zmax)
         else:
             colorbar_title = "kN"
             colorscale = "Viridis"
@@ -2512,7 +2512,7 @@ class ShearViewer:
         )
 
         for i_n, row in enumerate(context_grid):
-            for i_m, context in enumerate(row):
+            for i_m, context in enumerate(row):  # type: ignore[assignment]  # grid holds Optional; None-guarded below
                 if context is None:
                     continue
                 for i_cot, cot_theta in enumerate(cot_vals):

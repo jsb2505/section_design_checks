@@ -304,7 +304,7 @@ class ConcreteMaterial(BaseMaterial):
         f_ctm = 2.12 · ln(1 + f_cm/10) for f_ck > 50 MPa
         """
         if self.f_ck <= 50:
-            return 0.30 * (self.f_ck ** (2.0 / 3.0))
+            return float(0.30 * (self.f_ck ** (2.0 / 3.0)))
         return 2.12 * log(1.0 + self.f_cm / 10.0)
 
     @property
@@ -353,35 +353,35 @@ class ConcreteMaterial(BaseMaterial):
 
         Returns dimensionless (e.g., 0.0022 for 2.2‰)
         """
-        return min(0.7 * (self.f_cm ** 0.31) / 1000.0, 0.0028)
+        return float(min(0.7 * (self.f_cm ** 0.31) / 1000.0, 0.0028))
 
     @property
     def epsilon_cu1(self) -> float:
         """Ultimate strain for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0035
-        return (2.8 + 27.0 * (((98.0 - self.f_cm) / 100.0) ** 4.0)) / 1000.0
+        return float((2.8 + 27.0 * (((98.0 - self.f_cm) / 100.0) ** 4.0)) / 1000.0)
 
     @property
     def epsilon_c2(self) -> float:
         """Strain at reaching f_ck for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0020
-        return (2.0 + 0.085 * ((self.f_ck - 50.0) ** 0.53)) / 1000.0
+        return float((2.0 + 0.085 * ((self.f_ck - 50.0) ** 0.53)) / 1000.0)
 
     @property
     def epsilon_cu2(self) -> float:
         """Ultimate strain for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0035
-        return (2.6 + 35.0 * (((90.0 - self.f_ck) / 100.0) ** 4.0)) / 1000.0
+        return float((2.6 + 35.0 * (((90.0 - self.f_ck) / 100.0) ** 4.0)) / 1000.0)
 
     @property
     def n(self) -> float:
         """Exponent for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 2.0
-        return 1.4 + 23.4 * (((90.0 - self.f_ck) / 100.0) ** 4.0)
+        return float(1.4 + 23.4 * (((90.0 - self.f_ck) / 100.0) ** 4.0))
 
     @property
     def epsilon_c3(self) -> float:
@@ -395,7 +395,7 @@ class ConcreteMaterial(BaseMaterial):
         """Ultimate strain for bilinear (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0035
-        return (2.6 + 35.0 * (((90.0 - self.f_ck) / 100.0) ** 4.0)) / 1000.0
+        return float((2.6 + 35.0 * (((90.0 - self.f_ck) / 100.0) ** 4.0)) / 1000.0)
 
     def find_mean_flexural_tensile_strength(self, section_height: float) -> float:
         '''Calculates the mean flexural tensile strength of concrete (§3.1.8(1)).

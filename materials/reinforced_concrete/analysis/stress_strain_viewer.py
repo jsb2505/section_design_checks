@@ -126,7 +126,7 @@ class StressStrainViewer:
         width: int = 1100,
         height: int = 1000,
         section_render: Literal["points", "filled"] = "points",
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         Visualize stress and strain distribution for a given load case.
@@ -260,12 +260,11 @@ class StressStrainViewer:
         biaxial = abs(Mz_Ed) > 1e-9
 
         # 1) Solve for strain state
-        mz_kw = {"Mz_target": Mz_Ed} if biaxial else {}
         strain_state_obj: StrainState | None = None
         try:
             if biaxial and hasattr(d, "find_strain_state_for_MN"):
                 strain_state_obj = d.find_strain_state_for_MN(
-                    My_target=My_Ed, N_target=N_Ed, **mz_kw,
+                    My_target=My_Ed, N_target=N_Ed, Mz_target=Mz_Ed,
                 )
                 eps_top = strain_state_obj.eps_top
                 eps_bottom = strain_state_obj.eps_bottom
@@ -280,7 +279,9 @@ class StressStrainViewer:
 
         # 2) Fibre-level data
         if strain_state_obj is not None and hasattr(d, "get_fibre_forces_from_strain_state"):
-            forces_N, y_coords, areas = d.get_fibre_forces_from_strain_state(strain_state_obj)
+            # Returns (forces, x_coords, y_coords, areas); x is recomputed below as
+            # x_coords = d._fibre_x, so the x slot is discarded here.
+            forces_N, _, y_coords, areas = d.get_fibre_forces_from_strain_state(strain_state_obj)
             strains = strain_state_obj.strain_field(
                 d._fibre_x - d.section.get_centroid()[0],
                 y_coords - d.section.get_centroid()[1],

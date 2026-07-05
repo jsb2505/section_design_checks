@@ -116,7 +116,7 @@ class ConcreteAge(BaseModel):
         - α = 2/3 for t ≥ 28 days
         """
         alpha = 1.0 if self.age < 28.0 else (2.0 / 3.0)
-        return self.concrete.f_ctm * (self.beta_cc_t ** alpha)
+        return float(self.concrete.f_ctm * (self.beta_cc_t ** alpha))
 
     @property
     def f_ctd_t(self) -> float:
@@ -136,7 +136,7 @@ class ConcreteAge(BaseModel):
 
         E_cm(t) = E_cm · [f_cm(t) / f_cm]^0.3
         """
-        return self.concrete.E_cm * ((self.f_cm_t / self.concrete.f_cm) ** 0.3)
+        return float(self.concrete.E_cm * ((self.f_cm_t / self.concrete.f_cm) ** 0.3))
 
     def find_mean_flexural_tensile_strength(self, section_height: float) -> float:
         """

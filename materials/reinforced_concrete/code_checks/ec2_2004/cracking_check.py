@@ -1085,9 +1085,9 @@ class CrackingCheck(BaseCodeCheck):
         y_min, y_max = bounds[1], bounds[3]
 
         if compression_face == "top":
-            return y_max - cy_tr
+            return float(y_max - cy_tr)
         else:
-            return cy_tr - y_min
+            return float(cy_tr - y_min)
 
 
     # ===============================================
@@ -1746,7 +1746,7 @@ class CrackingCheck(BaseCodeCheck):
         from materials.reinforced_concrete.analysis.free_na_adapter import (
             FreeNADiagramAdapter as _FreeNA,
         )
-        probe_mz_kw = (_mz_kw or {}) if isinstance(probe_diagram, _FreeNA) else {}
+        probe_mz_kw: dict[str, Any] = (_mz_kw or {}) if isinstance(probe_diagram, _FreeNA) else {}
         eps_top, eps_bottom = probe_diagram.find_strains_for_MN(
             My_target=M_Ed,
             N_target=N_Ed,
@@ -1924,7 +1924,7 @@ class CrackingCheck(BaseCodeCheck):
 
         bar_centre = Point(float(pos.x), float(pos.y))
         dist_to_boundary = self.section.outline.exterior.distance(bar_centre)
-        return max(0.0, dist_to_boundary - diameter / 2.0)
+        return max(0.0, float(dist_to_boundary) - diameter / 2.0)
 
     # ===============================================
     # Face-based crack width calculation
@@ -1996,12 +1996,12 @@ class CrackingCheck(BaseCodeCheck):
             d = d_override
         elif is_net_tension:
             # For net tension: d from the face to the bar centroid
-            comp_face_for_d = "bottom" if face == "top" else "top"
+            comp_face_for_d: Literal["top", "bottom"] = "bottom" if face == "top" else "top"
             d = self.section.get_effective_depth(
                 compression_face=comp_face_for_d, zone_fraction=0.5,
             )
         else:
-            comp_face = "top" if face == "bottom" else "bottom"
+            comp_face: Literal["top", "bottom"] = "top" if face == "bottom" else "bottom"
             d = self.section.get_effective_depth(compression_face=comp_face)
 
         # Iterative refinement (max 3 iterations)
@@ -2232,7 +2232,7 @@ class CrackingCheck(BaseCodeCheck):
         suppress_warnings: bool = False,
         actual_bar_diameter: float | None = None,
         cover_override: float | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> CheckResult:
         """
         Perform crack width check for applied serviceability loads.
@@ -2676,7 +2676,7 @@ class CrackingCheck(BaseCodeCheck):
         else:
             # Bending: one compression face, one tension face
             tension_face: Literal["top", "bottom"] = "bottom" if comp_face == "top" else "top"
-            crack_width_kwargs: dict[str, Any] = dict(
+            crack_width_kwargs = dict(
                 suppress_warnings=suppress_warnings,
                 actual_bar_diameter=actual_bar_diameter,
             )
@@ -2820,7 +2820,7 @@ class CrackingCheck(BaseCodeCheck):
         cover_override: float | None = None,
         skip_stress_checks: bool = False,
         Mz_Ed: float = 0.0,
-        **kwargs,
+        **kwargs: Any,
     ) -> CrackingResult:
         """
         Calculate detailed cracking results without creating CheckResult.
@@ -3071,7 +3071,7 @@ class CrackingCheck(BaseCodeCheck):
         else:
             # Bending: one compression face, one tension face
             tension_face: Literal["top", "bottom"] = "bottom" if comp_face == "top" else "top"
-            crack_width_kwargs: dict[str, Any] = dict(
+            crack_width_kwargs = dict(
                 suppress_warnings=suppress_warnings,
                 actual_bar_diameter=actual_bar_diameter,
             )
@@ -3103,7 +3103,7 @@ class CrackingCheck(BaseCodeCheck):
     def plot_load_cases(
         self,
         load_cases: Sequence[dict[str, Any]],
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         3D stem plot of crack widths at discrete M-N load cases.
@@ -3124,7 +3124,7 @@ class CrackingCheck(BaseCodeCheck):
 
     def plot_crack_width_contours(
         self,
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         2D contour map of crack width across the M-N domain.
