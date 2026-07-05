@@ -11,7 +11,7 @@ from typing import cast
 from pydantic import Field, ConfigDict
 
 from materials.core.base_material import BaseMaterial
-from materials.core.units import StressUnit, to_mpa
+from materials.core.units import StressUnit, LengthUnit, to_mpa, from_mm
 from materials.reinforced_concrete.ndp import get_ndp
 
 
@@ -286,17 +286,17 @@ class ConcreteMaterial(BaseMaterial):
             return 0.0035
         return (2.6 + 35.0 * (((90.0 - self.f_ck) / 100.0) ** 4.0)) / 1000.0
     
-    def find_mean_flexural_tensile_strength(self, h_mm: float) -> float:
+    def find_mean_flexural_tensile_strength(self, section_height: float) -> float:
         '''Calculates the mean flexural tensile strength of concrete (§3.1.8(1)).
 
         Args:
-            h_mm: Section height in mm
-        
+            section_height: Geometrical height of section (mm)
+
         Returns:
             f_ctm,fl in MPa
         '''
-        f_ctm_fl = self.f_ctm * max(1.6 - h_mm/1000, 1)
-        return f_ctm_fl
+        h = from_mm(section_height, LengthUnit.M)
+        return self.f_ctm * max(1.6 - h/1000, 1)
 
     def __str__(self) -> str:
         return f"{self.grade} (f_ck={self.f_ck} MPa, f_cd={self.f_cd:.1f} MPa)"

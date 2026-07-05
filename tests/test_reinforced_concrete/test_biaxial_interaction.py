@@ -71,9 +71,9 @@ class TestBiaxialInteractionPoint:
         data = point.to_dict()
 
         assert isinstance(data, dict)
-        assert data["N_kN"] == 500.0
-        assert data["My_kNm"] == 150.0
-        assert data["Mz_kNm"] == 100.0
+        assert data["N"] == 500.0
+        assert data["My"] == 150.0
+        assert data["Mz"] == 100.0
         assert data["neutral_axis_angle_deg"] == 45.0
 
 
@@ -278,8 +278,8 @@ class TestBiaxialMNInteractionSurface:
 
         assert "surface_points" in data
         assert len(data["surface_points"]) > 0
-        assert "My_kNm" in data["surface_points"][0]
-        assert "Mz_kNm" in data["surface_points"][0]
+        assert "My" in data["surface_points"][0]
+        assert "Mz" in data["surface_points"][0]
 
     def test_export_to_csv(self, square_column, concrete_c30, tmp_path):
         """Test exporting surface to CSV."""
@@ -298,8 +298,8 @@ class TestBiaxialMNInteractionSurface:
             rows = list(reader)
 
         assert len(rows) > 0
-        assert 'My_kNm' in rows[0]
-        assert 'Mz_kNm' in rows[0]
+        assert 'My' in rows[0]
+        assert 'Mz' in rows[0]
         assert 'neutral_axis_angle_deg' in rows[0]
 
     def test_no_rebar_raises_error(self, concrete_c30):

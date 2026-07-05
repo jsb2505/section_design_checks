@@ -46,7 +46,7 @@ class RCSectionSerializer:
         Args:
             section: RC Section to serialize
             concrete: Optional concrete material properties
-            applied_loads: Optional dict of applied loads (N_kN, Mx_kNm, My_kNm, V_kN, etc.)
+            applied_loads: Optional dict of applied loads (N, Mx, My, V, etc.) in kN and kN·m
 
         Returns:
             Dictionary ready for JSON serialization

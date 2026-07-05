@@ -83,9 +83,9 @@ class TestInteractionPoint:
         data = point.to_dict()
 
         assert isinstance(data, dict)
-        assert data["N_kN"] == 500.0
-        assert data["M_kNm"] == 150.0
-        assert data["neutral_axis_depth_mm"] == 250.0
+        assert data["N"] == 500.0
+        assert data["M"] == 150.0
+        assert data["neutral_axis_depth"] == 250.0
         assert data["compression_from_bottom"] == False
         assert data["max_concrete_strain"] == 0.0035
         assert data["max_steel_strain"] == 0.010
@@ -590,9 +590,9 @@ class TestExportFunctionality:
 
         # Check point structure
         point = data["diagram_points"][0]
-        assert "N_kN" in point
-        assert "M_kNm" in point
-        assert "neutral_axis_depth_mm" in point
+        assert "N" in point
+        assert "M" in point
+        assert "neutral_axis_depth" in point
         assert "max_concrete_strain" in point
         assert "max_steel_strain" in point
 
@@ -650,16 +650,16 @@ class TestExportFunctionality:
         assert len(rows) > 0
 
         # Check headers
-        assert 'N_kN' in rows[0]
-        assert 'M_kNm' in rows[0]
-        assert 'neutral_axis_depth_mm' in rows[0]
+        assert 'N' in rows[0]
+        assert 'M' in rows[0]
+        assert 'neutral_axis_depth' in rows[0]
         assert 'max_concrete_strain' in rows[0]
         assert 'max_steel_strain' in rows[0]
 
         # Check data is numeric
         for row in rows:
-            assert float(row['N_kN']) is not None
-            assert float(row['M_kNm']) is not None
+            assert float(row['N']) is not None
+            assert float(row['M']) is not None
 
     def test_export_to_csv_without_strains(self, diagram, tmp_path):
         """Test exporting CSV without strain columns."""
@@ -675,9 +675,9 @@ class TestExportFunctionality:
         assert len(rows) > 0
 
         # Should only have N and M columns
-        assert 'N_kN' in rows[0]
-        assert 'M_kNm' in rows[0]
-        assert 'neutral_axis_depth_mm' not in rows[0]
+        assert 'N' in rows[0]
+        assert 'M' in rows[0]
+        assert 'neutral_axis_depth' not in rows[0]
         assert 'max_concrete_strain' not in rows[0]
 
     def test_to_dict(self, diagram):
@@ -697,8 +697,8 @@ class TestExportFunctionality:
 
         # Check point structure
         point = data["points"][0]
-        assert "N_kN" in point
-        assert "M_kNm" in point
+        assert "N" in point
+        assert "M" in point
 
         # Check arrays are lists of floats
         assert isinstance(data["N_array"], list)
@@ -733,8 +733,8 @@ class TestExportFunctionality:
         assert len(reloaded_data["diagram_points"]) == len(dict_data["points"])
 
         # First point should match
-        assert reloaded_data["diagram_points"][0]["N_kN"] == dict_data["points"][0]["N_kN"]
-        assert reloaded_data["diagram_points"][0]["M_kNm"] == dict_data["points"][0]["M_kNm"]
+        assert reloaded_data["diagram_points"][0]["N"] == dict_data["points"][0]["N"]
+        assert reloaded_data["diagram_points"][0]["M"] == dict_data["points"][0]["M"]
 
     def test_export_csv_data_integrity(self, diagram, tmp_path):
         """Test that CSV export maintains data integrity."""
@@ -753,10 +753,10 @@ class TestExportFunctionality:
 
         # Compare
         for i, (point, csv_row) in enumerate(zip(points, csv_rows)):
-            assert point.N == pytest.approx(float(csv_row['N_kN']), rel=1e-6)
-            assert point.M == pytest.approx(float(csv_row['M_kNm']), rel=1e-6)
+            assert point.N == pytest.approx(float(csv_row['N']), rel=1e-6)
+            assert point.M == pytest.approx(float(csv_row['M']), rel=1e-6)
             assert point.neutral_axis_depth == pytest.approx(
-                float(csv_row['neutral_axis_depth_mm']), rel=1e-6
+                float(csv_row['neutral_axis_depth']), rel=1e-6
             )
 
 

@@ -130,9 +130,9 @@ class InteractionPoint(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "N_kN": self.N,
-            "M_kNm": self.M,
-            "neutral_axis_depth_mm": self.neutral_axis_depth,
+            "N": self.N,
+            "M": self.M,
+            "neutral_axis_depth": self.neutral_axis_depth,
             "compression_from_bottom": self.compression_from_bottom,
             "max_concrete_strain": self.max_concrete_strain,
             "max_steel_strain": self.max_steel_strain,
@@ -1731,13 +1731,13 @@ class MNInteractionDiagram:
         file_path = Path(file_path)
         with open(file_path, "w", newline="", encoding="utf-8") as f:
             fieldnames = [
-                "N_kN",
-                "M_kNm",
-                "neutral_axis_depth_mm",
+                "N",
+                "M",
+                "neutral_axis_depth",
                 "compression_from_bottom",
                 "max_concrete_strain",
                 "max_steel_strain",
-            ] if include_strains else ["N_kN", "M_kNm"]
+            ] if include_strains else ["N", "M"]
 
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
@@ -1745,7 +1745,7 @@ class MNInteractionDiagram:
             for p in points:
                 row = p.to_dict()
                 if not include_strains:
-                    row = {"N_kN": row["N_kN"], "M_kNm": row["M_kNm"]}
+                    row = {"N": row["N"], "M": row["M"]}
                 writer.writerow(row)
 
 
@@ -2007,17 +2007,17 @@ class MNInteractionDiagram:
             f_cd = self.concrete.f_cd
             f_ck = self.concrete.f_ck
             A_transformed = self.section.get_transformed_area(self.concrete.E_cm)
-            sigma_cp_uncapped = sigma_cp_from_N_and_area(N_Ed=N_Ed, A_mm2=A_transformed)
+            sigma_cp_uncapped = sigma_cp_from_N_and_area(N_Ed=N_Ed, area=A_transformed)
             sigma_cp = cap_sigma_cp_upper(sigma_cp=sigma_cp_uncapped, f_cd=f_cd)
 
         # Initial calculation
         shift_result = calculate_tension_shift(
             M_Ed=M_Ed_original,
             V_Ed=V_Ed,
-            z_mm=z,
-            d_mm=d,
+            z=z,
+            d=d,
             M_cap=M_cap,
-            b_w_mm=b_w,
+            b_w=b_w,
             f_cd=f_cd,
             f_ck=f_ck,
             sigma_cp=sigma_cp,
@@ -2052,10 +2052,10 @@ class MNInteractionDiagram:
                         shift_result = calculate_tension_shift(
                             M_Ed=M_Ed_original,
                             V_Ed=V_Ed,
-                            z_mm=z,
-                            d_mm=d,
+                            z=z,
+                            d=d,
                             M_cap=M_cap,
-                            b_w_mm=b_w,
+                            b_w=b_w,
                             f_cd=f_cd,
                             f_ck=f_ck,
                             sigma_cp=sigma_cp,
@@ -2070,10 +2070,10 @@ class MNInteractionDiagram:
                 shift_result = calculate_tension_shift(
                     M_Ed=M_Ed_original,
                     V_Ed=V_Ed,
-                    z_mm=z,
-                    d_mm=d,
+                    z=z,
+                    d=d,
                     M_cap=M_cap,
-                    b_w_mm=b_w,
+                    b_w=b_w,
                     f_cd=f_cd,
                     f_ck=f_ck,
                     sigma_cp=sigma_cp,

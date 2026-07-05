@@ -81,10 +81,10 @@ class BiaxialInteractionPoint(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Export biaxial interaction point to dictionary."""
         return {
-            "N_kN": self.N,
-            "My_kNm": self.My,
-            "Mz_kNm": self.Mz,
-            "neutral_axis_depth_mm": self.neutral_axis_depth,
+            "N": self.N,
+            "My": self.My,
+            "Mz": self.Mz,
+            "neutral_axis_depth": self.neutral_axis_depth,
             "neutral_axis_angle_deg": self.neutral_axis_angle,
             "max_concrete_strain": self.max_concrete_strain,
             "max_steel_strain": self.max_steel_strain,
@@ -1133,10 +1133,10 @@ class BiaxialMNInteractionSurface:
         file_path = Path(file_path)
         with open(file_path, 'w', newline='', encoding='utf-8') as f:
             fieldnames = [
-                'N_kN',
-                'My_kNm',
-                'Mz_kNm',
-                'neutral_axis_depth_mm',
+                'N',
+                'My',
+                'Mz',
+                'neutral_axis_depth',
                 'neutral_axis_angle_deg',
                 'max_concrete_strain',
                 'max_steel_strain',

@@ -17,7 +17,7 @@ Reference:
 """
 
 import warnings
-from math import pi, sqrt
+from math import atan, degrees, pi, sqrt
 from typing import Any, Dict, Optional, cast
 
 import numpy as np
@@ -469,6 +469,8 @@ class CircularSectionCheck(BaseModel):
     def calculate_V_Rd_c_uncracked(self, sigma_cp: float) -> float:
         """
         Unreinforced shear capacity for uncracked circular sections (Orr 2012, Eq.17).
+        This is conservative for low axial forces (i.e. a risk of being cracked) since
+        the contribution from the longitudinal steel is disregarded.
 
         Based on principal tensile stress limited to f_ctd:
             V_Rd_c = (3·π·r²/4) · √(f_ctd² + σ_cp · f_ctd)
@@ -646,7 +648,7 @@ class CircularSectionCheck(BaseModel):
 
         # 2. sigma_cp
         A_c = self.section.get_area()  # Gross concrete area (mm²)
-        sigma_cp = sigma_cp_from_N_and_area(N_Ed=N_Ed, A_mm2=A_c)
+        sigma_cp = sigma_cp_from_N_and_area(N_Ed=N_Ed, area=A_c)
         sigma_cp_capped = cap_sigma_cp_upper(sigma_cp=sigma_cp, f_cd=self._f_cd_design)
 
         # 3. Check if section is cracked (unless forced)
@@ -658,6 +660,7 @@ class CircularSectionCheck(BaseModel):
 
         # 4. Uncracked section — use Eq.17
         if not is_cracked:
+            # TODO should V_Rd_c_max only be found if the section is unreinforced? that is how ShearCheck works
             V_Rd_c = self.calculate_V_Rd_c_uncracked(sigma_cp_capped)
             # Eq.6.5 upper bound on unreinforced shear resistance
             b_w_uc, _, _ = self.calculate_equivalent_web_width(d, z)
@@ -672,13 +675,19 @@ class CircularSectionCheck(BaseModel):
                 units="kN",
                 warning_threshold=warning_threshold,
                 details=self._shear_details(
-                    d=d, z=z, sigma_cp=sigma_cp_capped, V_Rd_c=V_Rd_c,
-                    is_cracked=False, M_cr=M_cr,
+                    V_Ed=V_Ed, M_Ed=M_Ed, N_Ed=N_Ed, V_Rd=V_Rd_c,
+                    d=d, z=z, sigma_cp=sigma_cp_capped,
+                    is_cracked=False, M_cr=M_cr, V_Rd_c=V_Rd_c,
+                    V_Rd_c_max=V_Rd_c_max,
+                    governing_mode="uncracked concrete",
+                    section_name=self.section.section_name or "",
                 ),
             )
 
         # 5. Cracked but no reinforcement — Eq.17 as conservative lower bound
         if self.shear_reinforcement is None:
+            # TODO the code in this whole conditional is potentially being needlessly be calculated twice
+            # - need to link with the check above with an OR statement, only details differ.
             V_Rd_c = self.calculate_V_Rd_c_uncracked(sigma_cp_capped)
             # Eq.6.5 upper bound on unreinforced shear resistance
             b_w_cr, _, _ = self.calculate_equivalent_web_width(d, z)
@@ -699,8 +708,12 @@ class CircularSectionCheck(BaseModel):
                     "as conservative lower bound."
                 ),
                 details=self._shear_details(
-                    d=d, z=z, sigma_cp=sigma_cp_capped, V_Rd_c=V_Rd_c,
-                    is_cracked=True, M_cr=M_cr,
+                    V_Ed=V_Ed, M_Ed=M_Ed, N_Ed=N_Ed, V_Rd=V_Rd_c,
+                    d=d, z=z, sigma_cp=sigma_cp_capped,
+                    is_cracked=True, M_cr=M_cr, V_Rd_c=V_Rd_c,
+                    V_Rd_c_max=V_Rd_c_max,
+                    governing_mode="concrete (no shear reinforcement)",
+                    section_name=self.section.section_name or "",
                 ),
             )
 
@@ -770,15 +783,17 @@ class CircularSectionCheck(BaseModel):
             units="kN",
             warning_threshold=warning_threshold,
             details=self._shear_details(
+                V_Ed=V_Ed, M_Ed=M_Ed, N_Ed=N_Ed, V_Rd=V_Rd,
                 d=d, z=z, sigma_cp=sigma_cp_capped,
                 is_cracked=True, M_cr=M_cr,
-                lambda_1=lambda_1, lambda_2=lambda_2,
-                b_w=b_w, b_wc=b_wc, b_wt=b_wt,
-                cot_theta=cot_theta, K=K,
                 V_Rd_s=V_Rd_s, V_Rd_max=V_Rd_max,
-                alpha_cw=alpha_cw, nu_1=nu_1,
-                f_ywd=f_ywd, z_0=z_0,
-                used_note_2=used_note_2,
+                governing_mode=governing,
+                section_name=self.section.section_name or "",
+                cot_theta=cot_theta,
+                b_w=b_w, b_wc=b_wc, b_wt=b_wt,
+                alpha_cw=alpha_cw, nu_1=nu_1, K=K,
+                f_ywd=f_ywd, used_note_2=used_note_2,
+                lambda_1=lambda_1, lambda_2=lambda_2, z_0=z_0,
             ),
         )
 
@@ -897,7 +912,7 @@ class CircularSectionCheck(BaseModel):
         f_cd = self._f_cd_design
         f_ck = self._concrete_uls.f_ck
         A_c = self.section.get_area()
-        sigma_cp = sigma_cp_from_N_and_area(N_Ed=N_Ed, A_mm2=A_c)
+        sigma_cp = sigma_cp_from_N_and_area(N_Ed=N_Ed, area=A_c)
         sigma_cp_capped = cap_sigma_cp_upper(sigma_cp=sigma_cp, f_cd=f_cd)
 
         alpha_cw = find_alpha_cw(f_cd, sigma_cp_capped)
@@ -955,64 +970,76 @@ class CircularSectionCheck(BaseModel):
     @staticmethod
     def _shear_details(
         *,
+        V_Ed: float,
+        M_Ed: float,
+        N_Ed: float,
+        V_Rd: float,
         d: float,
         z: float,
         sigma_cp: float,
         is_cracked: bool,
+        section_name: str = "",
+        governing_mode: str = "",
         M_cr: Optional[float] = None,
         V_Rd_c: Optional[float] = None,
-        lambda_1: Optional[float] = None,
-        lambda_2: Optional[float] = None,
+        V_Rd_c_max: Optional[float] = None,
+        V_Rd_s: Optional[float] = None,
+        V_Rd_max: Optional[float] = None,
+        cot_theta: Optional[float] = None,
         b_w: Optional[float] = None,
         b_wc: Optional[float] = None,
         b_wt: Optional[float] = None,
-        cot_theta: Optional[float] = None,
-        K: Optional[float] = None,
-        V_Rd_s: Optional[float] = None,
-        V_Rd_max: Optional[float] = None,
         alpha_cw: Optional[float] = None,
         nu_1: Optional[float] = None,
+        K: Optional[float] = None,
         f_ywd: Optional[float] = None,
-        z_0: Optional[float] = None,
         used_note_2: Optional[bool] = None,
+        lambda_1: Optional[float] = None,
+        lambda_2: Optional[float] = None,
+        z_0: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Assemble details dict for shear check results."""
+        """Assemble details dict for shear check results.
+
+        Key names match ShearCheck.perform_check details for consistency.
+        Circular-specific keys (lambda_1, lambda_2, b_wc, b_wt, z_0, is_cracked,
+        M_cr) are appended after the common fields.
+        """
+        # Common fields — same names and order as ShearCheck
         details: Dict[str, Any] = {
-            "d_mm": d,
-            "z_mm": z,
-            "sigma_cp_MPa": sigma_cp,
-            "is_cracked": is_cracked,
+            "V_Ed": V_Ed,
+            "M_Ed": M_Ed,
+            "N_Ed": N_Ed,
+            "V_Rd": V_Rd,
+            "V_Rd_c": V_Rd_c,
+            "V_Rd_c_max_unreinforced": V_Rd_c_max,
+            "V_Rd_s": V_Rd_s,
+            "V_Rd_max": V_Rd_max,
+            "governing_mode": governing_mode,
+            "cot_theta": cot_theta,
+            "theta_deg": None if cot_theta is None else degrees(atan(1 / cot_theta)),
+            "section_name": section_name,
+            "d": d,
+            "z": z,
+            "b_w": b_w,
+            "sigma_cp": sigma_cp,
+            "alpha_cw": alpha_cw,
+            "nu_1": nu_1,
+            "K": K,
+            "f_ywd": f_ywd,
+            "used_note_2": used_note_2,
         }
+        # Circular-specific fields
+        details["is_cracked"] = is_cracked
         if M_cr is not None:
-            details["M_cr_kNm"] = M_cr
-        if V_Rd_c is not None:
-            details["V_Rd_c_kN"] = V_Rd_c
+            details["M_cr"] = M_cr
         if lambda_1 is not None:
             details["lambda_1"] = lambda_1
         if lambda_2 is not None:
             details["lambda_2"] = lambda_2
-        if b_w is not None:
-            details["b_w_mm"] = b_w
         if b_wc is not None:
-            details["b_wc_mm"] = b_wc
+            details["b_wc"] = b_wc
         if b_wt is not None:
-            details["b_wt_mm"] = b_wt
-        if cot_theta is not None:
-            details["cot_theta"] = cot_theta
-        if K is not None:
-            details["K_N"] = K
-        if V_Rd_s is not None:
-            details["V_Rd_s_kN"] = V_Rd_s
-        if V_Rd_max is not None:
-            details["V_Rd_max_kN"] = V_Rd_max
-        if alpha_cw is not None:
-            details["alpha_cw"] = alpha_cw
-        if nu_1 is not None:
-            details["nu_1"] = nu_1
-        if f_ywd is not None:
-            details["f_ywd_MPa"] = f_ywd
+            details["b_wt"] = b_wt
         if z_0 is not None:
-            details["z_0_mm"] = z_0
-        if used_note_2 is not None:
-            details["used_note_2"] = used_note_2
+            details["z_0"] = z_0
         return details

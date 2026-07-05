@@ -34,29 +34,29 @@ class TensionShiftResult:
         M_design: The design moment after applying tension shift (kN·m).
                   Sign matches M_Ed.
         M_add: Additional moment magnitude from tension shift (kN·m), always >= 0.
-        shift_distance_a_l_mm: Shift distance a_l (mm).
+        shift_distance_a_l: Shift distance a_l (mm).
         cot_theta: Strut angle cotangent, if shear reinforcement was provided.
         capped_by_M_cap: True if M_design was capped by M_cap.
-        z_mm: Lever arm used in calculation (mm).
-        d_mm: Effective depth used in calculation (mm).
+        z: Lever arm used in calculation (mm).
+        d: Effective depth used in calculation (mm).
     """
     M_design: float
     M_add: float
-    shift_distance_a_l_mm: float
+    shift_distance_a_l: float
     cot_theta: Optional[float]
     capped_by_M_cap: bool
-    z_mm: float
-    d_mm: float
+    z: float
+    d: float
 
 
 def calculate_tension_shift(
     *,
     M_Ed: float,
     V_Ed: float,
-    z_mm: float,
-    d_mm: float,
+    z: float,
+    d: float,
     M_cap: Optional[float] = None,
-    b_w_mm: Optional[float] = None,
+    b_w: Optional[float] = None,
     f_cd: Optional[float] = None,
     f_ck: Optional[float] = None,
     sigma_cp: float = 0.0,
@@ -85,10 +85,10 @@ def calculate_tension_shift(
     Args:
         M_Ed: Design bending moment (kN·m)
         V_Ed: Design shear force (kN)
-        z_mm: Lever arm (mm). Typically 0.9d or from strain analysis.
-        d_mm: Effective depth (mm). Used as a_l when no shear reinforcement.
+        z: Lever arm (mm). Typically 0.9d or from strain analysis.
+        d: Effective depth (mm). Used as a_l when no shear reinforcement.
         M_cap: Optional moment capacity cap (kN·m). Limits |M_design| ≤ |M_cap|.
-        b_w_mm: Web width (mm). Required if shear_reinforcement is provided and
+        b_w: Web width (mm). Required if shear_reinforcement is provided and
                 cot_theta_override is not.
         f_cd: Design concrete strength (MPa). Required if shear_reinforcement is
               provided and cot_theta_override is not.
@@ -107,12 +107,12 @@ def calculate_tension_shift(
         TensionShiftResult with shifted moment and calculation details.
 
     Raises:
-        ValueError: If shear_reinforcement is provided but b_w_mm, f_cd, or f_ck is missing.
+        ValueError: If shear_reinforcement is provided but b_w, f_cd, or f_ck is missing.
 
     Example:
         >>> # Without shear reinforcement (simple case)
         >>> result = calculate_tension_shift(
-        ...     M_Ed=100.0, V_Ed=50.0, z_mm=450.0, d_mm=500.0
+        ...     M_Ed=100.0, V_Ed=50.0, z=450.0, d=500.0
         ... )
         >>> print(f"M_design = {result.M_design:.1f} kN·m")  # M_Ed + V_Ed * d / 1000
 
@@ -120,16 +120,16 @@ def calculate_tension_shift(
         >>> from materials.reinforced_concrete.materials import ShearRebar, Rebar
         >>> links = ShearRebar(rebar=Rebar(diameter=10), spacing=150, n_legs=2)
         >>> result = calculate_tension_shift(
-        ...     M_Ed=100.0, V_Ed=150.0, z_mm=450.0, d_mm=500.0,
-        ...     b_w_mm=300.0, f_cd=20.0, f_ck=30.0,
+        ...     M_Ed=100.0, V_Ed=150.0, z=450.0, d=500.0,
+        ...     b_w=300.0, f_cd=20.0, f_ck=30.0,
         ...     shear_reinforcement=links
         ... )
     """
     # Validate inputs for shear reinforcement case (only needed when computing cot_theta)
     if shear_reinforcement is not None and cot_theta_override is None:
         missing = []
-        if b_w_mm is None:
-            missing.append("b_w_mm")
+        if b_w is None:
+            missing.append("b_w")
         if f_cd is None:
             missing.append("f_cd")
         if f_ck is None:
@@ -142,8 +142,8 @@ def calculate_tension_shift(
 
     abs_M_Ed = abs(float(M_Ed))
     abs_V_Ed = abs(float(V_Ed))
-    z = float(z_mm)
-    d = float(d_mm)
+    z = float(z)
+    d = float(d)
 
     # Calculate shift distance a_l and cot(θ)
     cot_theta: Optional[float] = None
@@ -156,13 +156,13 @@ def calculate_tension_shift(
             # Type narrowing: validation above ensures these are not None
             assert f_cd is not None
             assert f_ck is not None
-            assert b_w_mm is not None
+            assert b_w is not None
 
             # Variable strut angle method (EC2 §6.2.3)
             # K = α_cw · b_w · z · ν · f_cd
             alpha_cw = find_alpha_cw(f_cd=f_cd, sigma_cp=sigma_cp)
             nu = find_nu_factor(f_ck=f_ck)
-            K = alpha_cw * b_w_mm * z * nu * f_cd  # in N
+            K = alpha_cw * b_w * z * nu * f_cd  # in N
 
             cot_theta = find_cot_theta_for_V_Ed(
                 V_Ed=V_Ed,
@@ -200,11 +200,11 @@ def calculate_tension_shift(
     return TensionShiftResult(
         M_design=M_design,
         M_add=M_add,
-        shift_distance_a_l_mm=a_l,
+        shift_distance_a_l=a_l,
         cot_theta=cot_theta,
         capped_by_M_cap=capped,
-        z_mm=z,
-        d_mm=d,
+        z=z,
+        d=d,
     )
 
 
@@ -518,18 +518,18 @@ def find_v_min(f_ck: float, k_factor: float, d: float, gamma_c: float) -> float:
     return coeff * (k_factor ** 1.5) * sqrt(f_ck)
 
 
-def sigma_cp_from_N_and_area(N_Ed: float, A_mm2: float) -> float:
+def sigma_cp_from_N_and_area(N_Ed: float, area: float) -> float:
     """
     Compressive stress in the concrete from axial load or prestressing
 
     Args:
         N_Ed: Design axial force in kN (positive is compression)
-        A_mm2: Cross-sectional area of section in mm²
+        area: Cross-sectional area of section (mm²)
 
     Returns:
         sigma_cp in MPa
     """
-    return from_kn(N_Ed, ForceUnit.N) / A_mm2
+    return from_kn(N_Ed, ForceUnit.N) / area
 
 
 def cap_sigma_cp_upper(sigma_cp: float, f_cd: float) -> float:

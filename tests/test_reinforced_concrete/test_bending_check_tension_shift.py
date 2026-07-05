@@ -26,8 +26,8 @@ class DummyDiagram:
     """Stub for MNInteractionDiagram that returns configurable values."""
 
     def __init__(self, *, d_mm=500.0, z_mm=450.0, eps_top=1.0, eps_bottom=-1.0):
-        self.d_mm = d_mm
-        self.z_mm = z_mm
+        self.d = d_mm
+        self.z = z_mm
         self.eps_top = eps_top
         self.eps_bottom = eps_bottom
         self.find_strains_calls = 0
@@ -41,7 +41,7 @@ class DummyDiagram:
         return (self.eps_top, self.eps_bottom)
 
     def get_effective_depth(self, *, M_Ed, N_Ed, eps_top, eps_bottom):
-        return float(self.d_mm)
+        return float(self.d)
 
     def get_lever_arm(
         self,
@@ -56,7 +56,7 @@ class DummyDiagram:
         warn_on_fallback,
     ):
         # Return (z_ec2, z_mech). We only care about z_ec2.
-        return (float(self.z_mm), float(self.z_mm))
+        return (float(self.z), float(self.z))
 
     def get_capacity_vector(self, *, N_Ed, M_Ed, return_details=False):
         return self.capacity
@@ -72,11 +72,11 @@ class DummyDiagram:
         if shear_reinforcement is not None:
             # a_l = 0.5 * z * cot_theta (assuming cot_theta=2.0 from patched shear_utils)
             cot_theta = 2.0
-            a_l = 0.5 * self.z_mm * cot_theta
+            a_l = 0.5 * self.z * cot_theta
         else:
             # a_l = d
             cot_theta = None
-            a_l = self.d_mm
+            a_l = self.d
 
         M_add = abs(V_Ed) * (a_l / 1000.0)
         abs_M_design = abs(M_Ed) + M_add
@@ -92,11 +92,11 @@ class DummyDiagram:
         return TensionShiftResult(
             M_design=M_design,
             M_add=M_add,
-            shift_distance_a_l_mm=a_l,
+            shift_distance_a_l=a_l,
             cot_theta=cot_theta,
             capped_by_M_cap=capped,
-            z_mm=self.z_mm,
-            d_mm=self.d_mm,
+            z=self.z,
+            d=self.d,
         )
 
 
@@ -230,9 +230,9 @@ class TestTensionShiftDisabled:
         d = res["details"]
         assert d["tension_shift_applied"] is False
         assert d["M_add"] is None
-        assert d["z_lever_arm_mm"] is None
+        assert d["z_lever_arm"] is None
         assert d["cot_theta"] is None
-        assert d["shift_distance_a_l_mm"] is None
+        assert d["shift_distance_a_l"] is None
 
 
 class TestTensionShiftNoShearReinforcement:
@@ -251,7 +251,7 @@ class TestTensionShiftNoShearReinforcement:
             shear_reinforcement=None,
         )
 
-        assert math.isclose(shift.shift_distance_a_l_mm, 500.0, rel_tol=1e-9)
+        assert math.isclose(shift.shift_distance_a_l, 500.0, rel_tol=1e-9)
         assert shift.cot_theta is None
 
     def test_uses_abs_V_Ed(self):
@@ -310,7 +310,7 @@ class TestTensionShiftWithShearReinforcement:
         )
 
         assert math.isclose(shift.cot_theta, 2.0, rel_tol=1e-9)
-        assert math.isclose(shift.shift_distance_a_l_mm, 450.0, rel_tol=1e-9)
+        assert math.isclose(shift.shift_distance_a_l, 450.0, rel_tol=1e-9)
 
     def test_restores_negative_sign(self, patch_shear_utils):
         """Negative moment sign should be restored after applying shift and cap."""
@@ -332,7 +332,7 @@ class TestTensionShiftWithShearReinforcement:
         )
 
         assert math.isclose(shift.cot_theta, 2.0, rel_tol=1e-9)
-        assert math.isclose(shift.shift_distance_a_l_mm, 450.0, rel_tol=1e-9)
+        assert math.isclose(shift.shift_distance_a_l, 450.0, rel_tol=1e-9)
         assert math.isclose(shift.M_add, 45.0, rel_tol=1e-9)
         assert shift.M_design == -125.0
 

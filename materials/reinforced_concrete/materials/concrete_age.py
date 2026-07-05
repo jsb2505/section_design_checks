@@ -8,7 +8,7 @@ from enum import StrEnum
 from math import exp, sqrt
 from pydantic import BaseModel, Field, ConfigDict
 
-from .concrete import ConcreteMaterial
+from materials.reinforced_concrete.materials import ConcreteMaterial
 from materials.core.units import LengthUnit, from_mm
 
 
@@ -135,14 +135,18 @@ class ConcreteAge(BaseModel):
         """
         return self.concrete.E_cm * ((self.f_cm_t / self.concrete.f_cm) ** 0.3)
 
-    def get_flexural_tensile_strength(self, section_height_mm: float) -> float:
+    def find_mean_flexural_tensile_strength(self, section_height: float) -> float:
         """
         Mean flexural tensile strength at age t (§3.1.8(1), Eq. 3.23).
 
-        f_ctm,fl = f_ctm(t) · max(1.6 - h/1000, 1.0)
+        Args:
+            section_height: Geometrical height of section (mm)
+
+        Returns:
+            f_ctm,fl,t in MPa
         """
-        h_m = from_mm(section_height_mm, LengthUnit.M)
-        return self.f_ctm_t * max(1.6 - h_m, 1.0)
+        h = from_mm(section_height, LengthUnit.M)
+        return self.f_ctm_t * max(1.6 - h, 1.0)
 
     def __str__(self) -> str:
         return (

@@ -42,13 +42,13 @@ class BeamNode:
     Represents a node along the beam with position and internal forces.
 
     Attributes:
-        x_m: Position along beam from left support (m)
-        M_kNm: Bending moment at node (kN·m), positive = sagging
-        V_kN: Shear force at node (kN), positive = clockwise rotation
+        x: Position along beam from left support (m)
+        M: Bending moment at node (kN·m), positive = sagging
+        V: Shear force at node (kN), positive = clockwise rotation
     """
-    x_m: float
-    M_kNm: float
-    V_kN: float
+    x: float
+    M: float
+    V: float
 
 
 @dataclass
@@ -85,26 +85,26 @@ class Beam:
         Get maximum positive (sagging) moment and its location.
 
         Returns:
-            Tuple of (max_M_kNm, x_m) or (0.0, 0.0) if no positive moments
+            Tuple of (max_M, x) or (0.0, 0.0) if no positive moments
         """
-        positive_nodes = [n for n in self.nodes if n.M_kNm > 0]
+        positive_nodes = [n for n in self.nodes if n.M > 0]
         if not positive_nodes:
             return (0.0, 0.0)
-        max_node = max(positive_nodes, key=lambda n: n.M_kNm)
-        return (max_node.M_kNm, max_node.x_m)
+        max_node = max(positive_nodes, key=lambda n: n.M)
+        return (max_node.M, max_node.x)
 
     def get_max_negative_moment(self) -> Tuple[float, float]:
         """
         Get maximum negative (hogging) moment and its location.
 
         Returns:
-            Tuple of (max_M_kNm, x_m) or (0.0, 0.0) if no negative moments
+            Tuple of (max_M, x) or (0.0, 0.0) if no negative moments
         """
-        negative_nodes = [n for n in self.nodes if n.M_kNm < 0]
+        negative_nodes = [n for n in self.nodes if n.M < 0]
         if not negative_nodes:
             return (0.0, 0.0)
-        min_node = min(negative_nodes, key=lambda n: n.M_kNm)
-        return (min_node.M_kNm, min_node.x_m)
+        min_node = min(negative_nodes, key=lambda n: n.M)
+        return (min_node.M, min_node.x)
 
     def get_M_cap_positive(self) -> float:
         """Get M_cap for positive moment region (max positive moment magnitude)."""
@@ -117,17 +117,17 @@ class Beam:
     @property
     def x_values(self) -> np.ndarray:
         """Array of x positions along beam (m)."""
-        return np.array([n.x_m for n in self.nodes])
+        return np.array([n.x for n in self.nodes])
 
     @property
     def M_values(self) -> np.ndarray:
         """Array of moments along beam (kN·m)."""
-        return np.array([n.M_kNm for n in self.nodes])
+        return np.array([n.M for n in self.nodes])
 
     @property
     def V_values(self) -> np.ndarray:
         """Array of shear forces along beam (kN)."""
-        return np.array([n.V_kN for n in self.nodes])
+        return np.array([n.V for n in self.nodes])
 
 
 @dataclass
@@ -167,7 +167,7 @@ class SimplySupportedBeam(Beam):
             # Shear: V = R_A - w*x (positive = clockwise)
             V = R_A - w * x
 
-            self.nodes.append(BeamNode(x_m=x, M_kNm=M, V_kN=V))
+            self.nodes.append(BeamNode(x=x, M=M, V=V))
 
 
 @dataclass
@@ -212,7 +212,7 @@ class FixedPinnedBeam(Beam):
             # Shear: V = R_A - w*x
             V = R_A - w * x
 
-            self.nodes.append(BeamNode(x_m=x, M_kNm=M, V_kN=V))
+            self.nodes.append(BeamNode(x=x, M=M, V=V))
 
 
 def _check_plotly() -> None:
@@ -472,8 +472,8 @@ def plot_tension_shift_comparison(
 
 def calculate_tension_shift_envelope_simplified(
     beam: Beam,
-    effective_depth_mm: float,
-    lever_arm_mm: float | None = None,
+    effective_depth: float,
+    lever_arm: float | None = None,
     cot_theta: float | None = None,
     stirrup_angle_degrees: float = 90.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -489,9 +489,9 @@ def calculate_tension_shift_envelope_simplified(
         - With shear reinforcement: a_l = z(cot θ - cot α)/2
 
     Args:
-        beam: Analyzed Beam object
-        effective_depth_mm: Effective depth d (mm)
-        lever_arm_mm: Internal lever arm z (mm), required if cot_theta provided
+        beam: Analysed Beam object
+        effective_depth: Effective depth d (mm)
+        lever_arm: Internal lever arm z (mm), required if cot_theta provided
         cot_theta: cot(θ) from shear design, None = no shear reinforcement
         stirrup_angle_degrees: Stirrup angle α in degrees (default 90° for vertical)
 
@@ -500,18 +500,18 @@ def calculate_tension_shift_envelope_simplified(
     """
     # Calculate shift distance
     if cot_theta is not None:
-        if lever_arm_mm is None:
-            raise ValueError("lever_arm_mm required when cot_theta is provided")
+        if lever_arm is None:
+            raise ValueError("lever_arm required when cot_theta is provided")
         # EC2 §9.2.1.3: a_l = z(cot θ - cot α)/2
         if stirrup_angle_degrees == 90.0:
             cot_alpha = 0.0
         else:
             import math
             cot_alpha = 1.0 / math.tan(math.radians(stirrup_angle_degrees))
-        a_l_mm = lever_arm_mm * (cot_theta - cot_alpha) / 2.0
-        a_l_mm = max(a_l_mm, 0.0)  # Ensure non-negative
+        a_l = lever_arm * (cot_theta - cot_alpha) / 2.0
+        a_l = max(a_l, 0.0)  # Ensure non-negative
     else:
-        a_l_mm = effective_depth_mm
+        a_l = effective_depth
 
     # Get M_cap for each sign (max magnitudes)
     M_cap_pos = beam.get_M_cap_positive()
@@ -521,11 +521,11 @@ def calculate_tension_shift_envelope_simplified(
     shift_distances = []
 
     for node in beam.nodes:
-        M_orig = node.M_kNm
-        V = node.V_kN
+        M_orig = node.M
+        V = node.V
 
         # M_add = |V| * a_l / 1000 (convert mm to m)
-        M_add = to_knm(abs(V) * a_l_mm, MomentUnit.NM)  # kN·mm = N·m → kN·m
+        M_add = to_knm(abs(V) * a_l, MomentUnit.NM)  # kN·mm = N·m → kN·m
 
         # Apply shift: increase magnitude, then cap
         sign = 1 if M_orig >= 0 else -1
@@ -536,7 +536,7 @@ def calculate_tension_shift_envelope_simplified(
         M_shifted = sign * M_shifted_magnitude
 
         shifted_moments.append(M_shifted)
-        shift_distances.append(a_l_mm)
+        shift_distances.append(a_l)
 
     return np.array(shifted_moments), np.array(shift_distances)
 
@@ -594,8 +594,8 @@ def apply_tension_shift_to_beam(
     cot_theta_values = []
 
     for node in beam.nodes:
-        M_Ed = node.M_kNm
-        V_Ed = node.V_kN
+        M_Ed = node.M
+        V_Ed = node.V
 
         # Determine M_cap based on sign of moment
         M_cap = M_cap_pos if M_Ed >= 0 else M_cap_neg
@@ -615,7 +615,7 @@ def apply_tension_shift_to_beam(
         )
 
         shifted_moments.append(result.M_design)
-        shift_distances.append(result.shift_distance_a_l_mm)
+        shift_distances.append(result.shift_distance_a_l)
         cot_theta_values.append(result.cot_theta)
 
     return (

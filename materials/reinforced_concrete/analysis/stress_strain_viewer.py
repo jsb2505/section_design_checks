@@ -22,11 +22,11 @@ class _StressStrainPlotState:
 
     # fibre fields (all same length)
     forces_N: np.ndarray
-    areas_mm2: np.ndarray
-    x_mm: np.ndarray
-    y_mm: np.ndarray
+    areas: np.ndarray
+    x: np.ndarray
+    y: np.ndarray
     strains: np.ndarray
-    stresses_MPa: np.ndarray
+    stresses: np.ndarray
     conc_mask: np.ndarray
     steel_mask: np.ndarray
 
@@ -67,8 +67,8 @@ class _StressStrainPlotState:
 
     # Equilibrium check: if solver hit bounds, the achieved forces won't match applied
     section_failed: bool  # True if equilibrium cannot be achieved (loads exceed capacity)
-    achieved_N_kN: float  # Actual axial force from the computed strain state
-    achieved_M_kNm: float  # Actual moment from the computed strain state
+    achieved_N: float  # Actual axial force from the computed strain state
+    achieved_M: float  # Actual moment from the computed strain state
     equilibrium_error_N: float  # |N_achieved - N_Ed| in kN
     equilibrium_error_M: float  # |M_achieved - M_Ed| in kN·m
 
@@ -165,9 +165,9 @@ class StressStrainViewer:
             ) from e
 
         # 2) Fibre-level data
-        forces_N, y_coords, areas_mm2 = d.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
+        forces_N, y_coords, areas = d.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
         strains = d._strain_field_from_end_strains(eps_top=eps_top, eps_bottom=eps_bottom)
-        stresses_MPa = np.divide(forces_N, areas_mm2, out=np.zeros_like(forces_N), where=areas_mm2 > 0)
+        stresses = np.divide(forces_N, areas, out=np.zeros_like(forces_N), where=areas > 0)
 
         material_type = d._fibre_mat
         x_coords = d._fibre_x
@@ -190,24 +190,24 @@ class StressStrainViewer:
         )
 
         # 5) Resultants (kN)
-        conc_forces_kN = to_kn(forces_N[conc_mask], ForceUnit.N)
-        steel_forces_kN = to_kn(forces_N[steel_mask], ForceUnit.N)
+        conc_forces = to_kn(forces_N[conc_mask], ForceUnit.N)
+        steel_forces = to_kn(forces_N[steel_mask], ForceUnit.N)
 
-        F_c_comp = float(np.sum(conc_forces_kN[conc_forces_kN > 0.0])) if conc_forces_kN.size else 0.0
-        F_c_tens = float(np.sum(conc_forces_kN[conc_forces_kN < 0.0])) if conc_forces_kN.size else 0.0
-        F_s_comp = float(np.sum(steel_forces_kN[steel_forces_kN > 0.0])) if steel_forces_kN.size else 0.0
-        F_s_tens = float(np.sum(steel_forces_kN[steel_forces_kN < 0.0])) if steel_forces_kN.size else 0.0
+        F_c_comp = float(np.sum(conc_forces[conc_forces > 0.0])) if conc_forces.size else 0.0
+        F_c_tens = float(np.sum(conc_forces[conc_forces < 0.0])) if conc_forces.size else 0.0
+        F_s_comp = float(np.sum(steel_forces[steel_forces > 0.0])) if steel_forces.size else 0.0
+        F_s_tens = float(np.sum(steel_forces[steel_forces < 0.0])) if steel_forces.size else 0.0
 
         # 5b) Equilibrium check: compute achieved N and M from the strain state
         # This tells us if the solver hit bounds and couldn't find an exact solution
-        achieved_N_kN = to_kn(float(np.sum(forces_N)), ForceUnit.N)
+        achieved_N = to_kn(float(np.sum(forces_N)), ForceUnit.N)
         # Moment about centroid (using section centroid y-coordinate)
         centroid_x, centroid_y = d.section.get_centroid()
-        achieved_M_Nm = float(np.sum(forces_N * (y_coords - centroid_y)))
-        achieved_M_kNm = to_knm(achieved_M_Nm, MomentUnit.NMM)
+        achieved_M_raw = float(np.sum(forces_N * (y_coords - centroid_y)))
+        achieved_M = to_knm(achieved_M_raw, MomentUnit.NMM)
 
-        equilibrium_error_N = abs(achieved_N_kN - N_Ed)
-        equilibrium_error_M = abs(achieved_M_kNm - M_Ed)
+        equilibrium_error_N = abs(achieved_N - N_Ed)
+        equilibrium_error_M = abs(achieved_M - M_Ed)
 
         # Determine if section failed: if errors exceed small tolerance, the solver
         # hit strain bounds and couldn't achieve equilibrium with the applied loads
@@ -235,7 +235,7 @@ class StressStrainViewer:
         z = float(abs(y_C - y_T)) if (y_C is not None and y_T is not None) else None
 
         # 8) Stress range (concrete only) + force scaling for arrows
-        max_stress_pos, min_stress_neg = self._concrete_stress_range(stresses_MPa, conc_mask)
+        max_stress_pos, min_stress_neg = self._concrete_stress_range(stresses, conc_mask)
         force_scale = self._force_scale(
             max_stress_pos=max_stress_pos,
             min_stress_neg=min_stress_neg,
@@ -263,11 +263,11 @@ class StressStrainViewer:
             eps_top=float(eps_top),
             eps_bottom=float(eps_bottom),
             forces_N=forces_N,
-            areas_mm2=areas_mm2,
-            x_mm=x_coords,
-            y_mm=y_coords,
+            areas=areas,
+            x=x_coords,
+            y=y_coords,
             strains=strains,
-            stresses_MPa=stresses_MPa,
+            stresses=stresses,
             conc_mask=conc_mask,
             steel_mask=steel_mask,
             y_top=y_top,
@@ -293,8 +293,8 @@ class StressStrainViewer:
             fibre_j=fibre_j,
             bbox=bbox,
             section_failed=section_failed,
-            achieved_N_kN=achieved_N_kN,
-            achieved_M_kNm=achieved_M_kNm,
+            achieved_N=achieved_N,
+            achieved_M=achieved_M,
             equilibrium_error_N=equilibrium_error_N,
             equilibrium_error_M=equilibrium_error_M,
             **self._get_capacity(M_Ed=M_Ed, N_Ed=N_Ed),
@@ -333,9 +333,9 @@ class StressStrainViewer:
                 self._add_concrete_filled_field(fig, go, s, row=1, col=1)
             else:
                 # points
-                conc_x = s.x_mm[s.conc_mask]
-                conc_y = s.y_mm[s.conc_mask]
-                conc_stresses = s.stresses_MPa[s.conc_mask]
+                conc_x = s.x[s.conc_mask]
+                conc_y = s.y[s.conc_mask]
+                conc_stresses = s.stresses[s.conc_mask]
 
                 cmin_val, cmax_val, colorscale = self._concrete_colorscale(conc_stresses)
 
@@ -375,9 +375,9 @@ class StressStrainViewer:
 
         # Steel rebars (single trace)
         if np.any(s.steel_mask):
-            sx = s.x_mm[s.steel_mask].astype(float)
-            sy = s.y_mm[s.steel_mask].astype(float)
-            ss = s.stresses_MPa[s.steel_mask].astype(float)
+            sx = s.x[s.steel_mask].astype(float)
+            sy = s.y[s.steel_mask].astype(float)
+            ss = s.stresses[s.steel_mask].astype(float)
             sf = to_kn(s.forces_N[s.steel_mask], ForceUnit.N).astype(float)
             se = (s.strains[s.steel_mask] * 1000.0).astype(float)   # ‰
 
@@ -561,10 +561,10 @@ class StressStrainViewer:
             )
 
         # Resultant arrows
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>cc</sub>", F_kN=s.F_c_comp, y=s.y_c_comp, force_scale=s.force_scale, line_color="red", tip_symbol="triangle-right", extra="Concrete Compression")
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>ct</sub>", F_kN=s.F_c_tens, y=s.y_c_tens, force_scale=s.force_scale, line_color="blue", tip_symbol="triangle-left", extra="Concrete Tension")
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>sc</sub>", F_kN=s.F_s_comp, y=s.y_s_comp, force_scale=s.force_scale, line_color="darkorange", tip_symbol="triangle-right", extra="Steel Compression")
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>st</sub>", F_kN=s.F_s_tens, y=s.y_s_tens, force_scale=s.force_scale, line_color="green", tip_symbol="triangle-left", extra="Steel Tension")
+        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>cc</sub>", force=s.F_c_comp, y=s.y_c_comp, force_scale=s.force_scale, line_color="red", tip_symbol="triangle-right", extra="Concrete Compression")
+        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>ct</sub>", force=s.F_c_tens, y=s.y_c_tens, force_scale=s.force_scale, line_color="blue", tip_symbol="triangle-left", extra="Concrete Tension")
+        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>sc</sub>", force=s.F_s_comp, y=s.y_s_comp, force_scale=s.force_scale, line_color="darkorange", tip_symbol="triangle-right", extra="Steel Compression")
+        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>st</sub>", force=s.F_s_tens, y=s.y_s_tens, force_scale=s.force_scale, line_color="green", tip_symbol="triangle-left", extra="Steel Tension")
 
         # Zero stress line
         fig.add_trace(
@@ -755,7 +755,7 @@ class StressStrainViewer:
         Render concrete stresses as a filled cell-based field using i/j fibre indices.
 
         Requires:
-        - s.fibre_i, s.fibre_j arrays aligned with s.stresses_MPa
+        - s.fibre_i, s.fibre_j arrays aligned with s.stresses
         - s.bbox = (min_x, min_y, max_x, max_y)
 
         Notes:
@@ -774,7 +774,7 @@ class StressStrainViewer:
         # Concrete-only i/j + stresses
         ci = fi[s.conc_mask]
         cj = fj[s.conc_mask]
-        conc_stresses = s.stresses_MPa[s.conc_mask]
+        conc_stresses = s.stresses[s.conc_mask]
 
         if ci.size == 0 or cj.size == 0:
             return
@@ -982,9 +982,9 @@ class StressStrainViewer:
         return -abs_max, abs_max, "RdBu_r"
 
     @staticmethod
-    def _concrete_stress_range(stresses_MPa: np.ndarray, conc_mask: np.ndarray) -> Tuple[float, float]:
+    def _concrete_stress_range(stresses: np.ndarray, conc_mask: np.ndarray) -> Tuple[float, float]:
         if np.any(conc_mask):
-            conc = stresses_MPa[conc_mask]
+            conc = stresses[conc_mask]
             max_pos = max(0.0, float(np.max(conc)))
             min_neg = min(0.0, float(np.min(conc)))
             return max_pos, min_neg
@@ -1012,18 +1012,18 @@ class StressStrainViewer:
         row: int,
         col: int,
         name: str,
-        F_kN: float,
+        force: float,
         y: float | None,
         force_scale: float,
         line_color: str,
         tip_symbol: str,
         extra: str,
-        tol_kN: float = 0.001,
+        tol: float = 0.001,
     ) -> None:
-        if y is None or abs(F_kN) <= tol_kN:
+        if y is None or abs(force) <= tol:
             return
 
-        arrow_x = float(F_kN * force_scale)
+        arrow_x = float(force * force_scale)
 
         fig.add_trace(
             go.Scatter(
@@ -1031,9 +1031,9 @@ class StressStrainViewer:
                 y=[y, y],
                 mode="lines",
                 line=dict(color=line_color, width=3),
-                name=f"{name} ({F_kN:.0f} kN)",
+                name=f"{name} ({force:.0f} kN)",
                 legendgroup=name,
-                hovertemplate=f"{name} = {F_kN:.1f} kN<br>y = {y:.1f} mm<extra>{extra}</extra>",
+                hovertemplate=f"{name} = {force:.1f} kN<br>y = {y:.1f} mm<extra>{extra}</extra>",
             ),
             row=row,
             col=col,
@@ -1106,7 +1106,7 @@ class StressStrainViewer:
             )
             txt += (
                 f'<br><span style="color:red"><b>Achieved:</b> '
-                f"N = {s.achieved_N_kN:.1f} kN, M = {s.achieved_M_kNm:.1f} kN·m</span>"
+                f"N = {s.achieved_N:.1f} kN, M = {s.achieved_M:.1f} kN·m</span>"
             )
         return txt
 

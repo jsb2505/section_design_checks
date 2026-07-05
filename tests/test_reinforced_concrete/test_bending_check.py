@@ -232,9 +232,9 @@ class TestTensionShiftRuleSimplified:
         assert details["M_add"] is not None
         assert details["M_add"] > 0
         assert details["V_Ed"] == 150.0
-        assert details["shift_distance_a_l_mm"] is not None
-        assert details["shift_distance_a_l_mm"] > 0
-        assert details["z_lever_arm_mm"] is not None
+        assert details["shift_distance_a_l"] is not None
+        assert details["shift_distance_a_l"] > 0
+        assert details["z_lever_arm"] is not None
         assert details["M_cap"] == 200.0
         assert details["shear_reinforcement_provided"] is False
 
@@ -522,8 +522,8 @@ class TestCheckResultDetails:
             "V_Ed",
             "M_cap",
             "cot_theta",
-            "shift_distance_a_l_mm",
-            "z_lever_arm_mm",
+            "shift_distance_a_l",
+            "z_lever_arm",
             "shear_reinforcement_provided",
             "N_Rd",
             "M_Rd",
@@ -557,8 +557,8 @@ class TestCheckResultDetails:
         assert result.details["V_Ed"] is not None
         assert result.details["M_cap"] is not None
         assert result.details["cot_theta"] is not None
-        assert result.details["shift_distance_a_l_mm"] is not None
-        assert result.details["z_lever_arm_mm"] is not None
+        assert result.details["shift_distance_a_l"] is not None
+        assert result.details["z_lever_arm"] is not None
         assert result.details["shear_reinforcement_provided"] is True
 
     def test_demand_and_capacity_components(self, test_beam, concrete_c30):
@@ -619,8 +619,8 @@ class TestTensionShiftResultDataclass:
         assert shift_result.M_add is not None
         assert shift_result.cot_theta is not None
         assert 1.0 <= shift_result.cot_theta <= 2.5
-        assert shift_result.shift_distance_a_l_mm is not None
-        assert shift_result.z_mm is not None
+        assert shift_result.shift_distance_a_l is not None
+        assert shift_result.z is not None
 
     def test_tension_shift_without_rebar_uses_d(self, test_beam, concrete_c30):
         """Test that shift distance equals d when no shear reinforcement."""
@@ -636,8 +636,8 @@ class TestTensionShiftResultDataclass:
 
         # a_l should equal d (effective depth)
         # For 500mm beam with 50mm cover, d ≈ 450mm
-        assert shift_result.shift_distance_a_l_mm is not None
-        assert 400 < shift_result.shift_distance_a_l_mm < 460  # Reasonable range for d
+        assert shift_result.shift_distance_a_l is not None
+        assert 400 < shift_result.shift_distance_a_l < 460  # Reasonable range for d
         assert shift_result.cot_theta is None  # Not calculated without shear rebar
 
 

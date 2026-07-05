@@ -657,32 +657,32 @@ class ShearCheck(BaseCodeCheck):
         v_min = find_v_min(f_ck, k, d, self.gamma_c_design)
         b_w = self.breadth
         V_Rd_c_min = (v_min + k_1 * sigma_cp) * b_w * d
-        V_Rd_c_kN = to_kn(max(V_Rd_c, V_Rd_c_min), ForceUnit.N)
+        V_Rd_c_result = to_kn(max(V_Rd_c, V_Rd_c_min), ForceUnit.N)
 
-        return max(V_Rd_c_kN, 0)  # Prevents negative values if sigma_cp is large negative
+        return max(V_Rd_c_result, 0)  # Prevents negative values if sigma_cp is large negative
 
 
-    def find_V_Ed_max_unreinforced(self, d: float) -> float:
+    def find_V_Rd_c_max_unreinforced(self, d: float) -> float:
         """
         Maximum shear force for members without shear reinforcement (§6.2.2(6), Eq. 6.5).
 
-        V_Ed,max = 0.5·b_w·d·ν·f_cd
+        V_Rd,c,max = 0.5·b_w·d·ν·f_cd
 
-        This limit applies when no shear reinforcement is provided. It ensures
-        diagonal compression failure does not occur.
+        This limit applies when no shear reinforcement is provided.
+        It ensures diagonal compression failure does not occur.
 
         Args:
             d: Effective depth in mm
 
         Returns:
-            V_Ed,max in kN
+            V_Rd,c,max in kN
         """
         b_w = self.breadth
         f_cd = self.f_cd_design
         nu = find_nu_factor(self.concrete.f_ck)
 
-        V_Ed_max = 0.5 * b_w * d * nu * f_cd
-        return to_kn(V_Ed_max, ForceUnit.N)
+        V_Rd_c_max = 0.5 * b_w * d * nu * f_cd
+        return to_kn(V_Rd_c_max, ForceUnit.N)
 
 
     def find_V_Rd_s(
@@ -978,6 +978,8 @@ class ShearCheck(BaseCodeCheck):
         ignore_compression_steel: bool = False,
     ) -> CheckResult:
         """Perform check for single load case (internal)."""
+        # TODO need to add force_cracked arg to this.
+        # TODO support uncracked shear check
         # Treat shear as magnitude (absolute value)
         # Negative shear from FEA sign conventions should not give negative utilization
         V_Ed = abs(V_Ed)
@@ -998,20 +1000,51 @@ class ShearCheck(BaseCodeCheck):
         # 1. Initialize variables that might not be reached
         V_Rd_s: Optional[float] = None
         V_Rd_max: Optional[float] = None
-        V_Ed_max_unreinf: Optional[float] = None
+        V_Rd_c_max: Optional[float] = None
         cot_theta: Optional[float] = None
         z_ec2: Optional[float] = None
         z_mech: Optional[float] = None
         K: Optional[float] = None
+        used_note_2: bool = False
 
         # Compute capacities (use z_ec2 for design checks per EC2)
+
+        # TODO  this is the cracked formula, consider adding an uncracked function too.
+        # However unlike for piles (CircularSectionCheck -which can be considered
+        # heavily axially loaded and not cracked) ensuring the section remains uncracked
+        # for all load combinations in ULS is risky, so even if this load combination
+        # doesn't crack the section 6.2.2(10 formula (cracked) should always be used).
+        #
+        # 6.2.2(2) applies to prestressed members and says where the concrete extreme
+        # fibre tensile stress < f_ctk_005 / gamma_c the shear resistance should be
+        # limited by the tensile strength of the concrete.
+        # In these regions the shear resistance is given by:
+        # 
+        # V_Rd_c_uncracked = (I * b_w / S) * sqrt((f_ctd)^2 + alpha_I * sigma_cp * f_ctd)
+        #
+        # Where:
+        # I = second moment of area (uncracked)
+        # S = is the first moment of area above and about the centroidal axis
+        # alpha_I  = 1.0 (for without pretensioned tendons)
+        #
+        # Need to run a comparison of V_Rd_c_cracked vs V_Rd_c_uncracked capacities.
+
+
         V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
 
         reinforcement = self.shear_reinforcement
 
-        if reinforcement:
 
-            z_ec2, z_mech = self.find_lever_arm(M_Ed, N_Ed, d, eps_top, eps_bottom, ignore_compression_steel=ignore_compression_steel)
+        if reinforcement:  # the section contains shear reinforcement
+
+            z_ec2, z_mech = self.find_lever_arm(
+                M_Ed=M_Ed,
+                N_Ed=N_Ed,
+                d=d,
+                eps_top=eps_top,
+                eps_bottom=eps_bottom,
+                ignore_compression_steel=ignore_compression_steel
+                )
 
             # Apply German NA z_cap if applicable: z_cap = max(d - 2·d_2, d - d_2 - 30)
             z_cap_ndp = get_ndp("z_cap")
@@ -1074,20 +1107,24 @@ class ShearCheck(BaseCodeCheck):
             # Calculate V_Rd_s with appropriate f_ywd (reduced if Note 2 is used)
             V_Rd_s = self.find_V_Rd_s(cot_theta, z_ec2, use_note_2=used_note_2)
 
-        # Determine governing capacity
-        if self.shear_reinforcement is None:
-            # For unreinforced members, also check V_Ed limit from Eq. 6.5
-            V_Ed_max_unreinf = self.find_V_Ed_max_unreinforced(d)
+        # TODO would an else work here? why is reinforcement variable used in some places and
+        # self.shear_reinforcement used elsewhere when they are the same thing?
 
-            if V_Rd_c <= V_Ed_max_unreinf:
+        # Determine governing capacity
+        if self.shear_reinforcement is None:  # only unreinforced checks reported
+            # For unreinforced members, also check V_Ed limit from Eq. 6.5
+            V_Rd_c_max = self.find_V_Rd_c_max_unreinforced(d)
+
+            if V_Rd_c <= V_Rd_c_max:
                 V_Rd = V_Rd_c
-                governing_mode = "concrete (no shear reinforcement)"
+                governing_mode = "concrete (no shear reinforcement)" # TODO expand on this failure mode. What does "concrete" mean? Also doesn't longitudinal steel contribute with rho?
                 code_ref = "EC2 §6.2.2 (Eq. 6.2)"
             else:
-                V_Rd = V_Ed_max_unreinf
+                V_Rd = V_Rd_c_max
                 governing_mode = "diagonal compression (no shear reinforcement)"
                 code_ref = "EC2 §6.2.2 (Eq. 6.5)"
-        else:
+        else: # TODO why is this else here? can this not go in the 'if reinforcement:' above ?
+            # V_Rd_c is calculated at the top. and V_Rd_max is reliant on the entering the first conditional
 
             assert V_Rd_s is not None and V_Rd_max is not None
 
@@ -1104,10 +1141,10 @@ class ShearCheck(BaseCodeCheck):
             else:
                 V_Rd = min(V_Rd_c, V_Rd_max)
                 if V_Rd_max < V_Rd_c:
-                    governing_mode = "compression strut"
+                    governing_mode = "compression strut" # TODO expand on this failure mode. "diagonal compression in concrete strut" ? (This is a reinforced strut)
                     code_ref = "EC2 §6.2.3 (Eq. 6.9)"
                 else:
-                    governing_mode = "concrete"
+                    governing_mode = "concrete"  # TODO expand on this failure mode. what does "concrete" mean?
                     code_ref = "EC2 §6.2.2"
 
         # Create message
@@ -1126,28 +1163,46 @@ class ShearCheck(BaseCodeCheck):
             else:
                 message = "Shear reinforcement capacity exceeded - reduce spacing or increase diameter"
 
-        # Details
+        # Details — common keys match CircularSectionCheck for consistency
         details = {
             "V_Ed": V_Ed,
             "M_Ed": M_Ed,
             "N_Ed": N_Ed,
             "V_Rd": V_Rd,
             "V_Rd_c": V_Rd_c,
-            "V_Ed_max_unreinforced": V_Ed_max_unreinf if self.shear_reinforcement is None else None,
-            "V_Rd_s": V_Rd_s if self.shear_reinforcement else None,
-            "V_Rd_max": V_Rd_max if self.shear_reinforcement else None,
+            "V_Rd_c_max_unreinforced": V_Rd_c_max if not reinforcement else None,
+            "V_Rd_s": V_Rd_s if reinforcement else None,
+            "V_Rd_max": V_Rd_max if reinforcement else None,
             "governing_mode": governing_mode,
-            "cot_theta": cot_theta if self.shear_reinforcement else None,
+            "cot_theta": cot_theta if reinforcement else None,
             "theta_deg": degrees(atan(1 / cot_theta)) if cot_theta else None,
             "section_name": self.section.section_name or "unnamed",
             "d": d,
-            "z": z_ec2 if self.shear_reinforcement else None,  # Lever arm used in EC2 check (capped if cap_lever_arm=True)
-            "z_mech": z_mech if self.shear_reinforcement else None,  # Mechanical lever arm from force centroids (uncapped)
+            "z": z_ec2 if reinforcement else None,
+            "z_mech": z_mech if reinforcement else None,
             "b_w": self.breadth,
-            "rho_l": rho_l,
             "sigma_cp": sigma_cp,
+            "alpha_cw": find_alpha_cw(self.f_cd_design, sigma_cp) if reinforcement else None,
+            "nu_1": (
+                find_nu_1_factor_note_2(self.concrete.f_ck, reinforcement.angle)
+                if reinforcement and used_note_2
+                else find_nu_1_factor(self.concrete.f_ck, reinforcement.angle)
+                if reinforcement
+                else None
+            ),
+            "K": K if reinforcement else None,
+            "f_ywd": (
+                0.8 * reinforcement.f_yk
+                if reinforcement and used_note_2
+                else self.f_ywd_design
+                if reinforcement
+                else None
+            ),
+            "used_note_2": used_note_2 if reinforcement else None,
+            # ShearCheck-specific
+            "rho_l": rho_l,
             "z_mode": "rigorous" if self.use_rigorous else "approximate",
-            "cap_lever_arm": self.cap_lever_arm,  # Document if capping was applied
+            "cap_lever_arm": self.cap_lever_arm,
         }
 
         return self._create_result(

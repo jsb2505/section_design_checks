@@ -295,8 +295,8 @@ class BendingCheck(BaseCodeCheck):
                 "V_Ed": float(V_Ed),
                 "M_cap": float(M_cap),
                 "cot_theta": float(shift_result.cot_theta) if shift_result.cot_theta is not None else None,
-                "shift_distance_a_l_mm": float(shift_result.shift_distance_a_l_mm),
-                "z_lever_arm_mm": float(shift_result.z_mm),
+                "shift_distance_a_l": float(shift_result.shift_distance_a_l),
+                "z_lever_arm": float(shift_result.z),
                 "shear_reinforcement_provided": shear_reinforcement is not None,
             }
         else:
@@ -308,8 +308,8 @@ class BendingCheck(BaseCodeCheck):
                 "V_Ed": None,
                 "M_cap": None,
                 "cot_theta": None,
-                "shift_distance_a_l_mm": None,
-                "z_lever_arm_mm": None,
+                "shift_distance_a_l": None,
+                "z_lever_arm": None,
                 "shear_reinforcement_provided": False,
             }
 
