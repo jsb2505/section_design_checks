@@ -1085,9 +1085,9 @@ class CrackingCheck(BaseCodeCheck):
         y_min, y_max = bounds[1], bounds[3]
 
         if compression_face == "top":
-            return y_max - cy_tr
+            return float(y_max - cy_tr)
         else:
-            return cy_tr - y_min
+            return float(cy_tr - y_min)
 
 
     # ===============================================
@@ -1924,7 +1924,7 @@ class CrackingCheck(BaseCodeCheck):
 
         bar_centre = Point(float(pos.x), float(pos.y))
         dist_to_boundary = self.section.outline.exterior.distance(bar_centre)
-        return max(0.0, dist_to_boundary - diameter / 2.0)
+        return max(0.0, float(dist_to_boundary) - diameter / 2.0)
 
     # ===============================================
     # Face-based crack width calculation

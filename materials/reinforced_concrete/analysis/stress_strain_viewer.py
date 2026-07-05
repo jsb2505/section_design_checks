@@ -280,7 +280,9 @@ class StressStrainViewer:
 
         # 2) Fibre-level data
         if strain_state_obj is not None and hasattr(d, "get_fibre_forces_from_strain_state"):
-            forces_N, y_coords, areas = d.get_fibre_forces_from_strain_state(strain_state_obj)
+            # Returns (forces, x_coords, y_coords, areas); x is recomputed below as
+            # x_coords = d._fibre_x, so the x slot is discarded here.
+            forces_N, _, y_coords, areas = d.get_fibre_forces_from_strain_state(strain_state_obj)
             strains = strain_state_obj.strain_field(
                 d._fibre_x - d.section.get_centroid()[0],
                 y_coords - d.section.get_centroid()[1],

@@ -334,6 +334,12 @@ class BiaxialMNInteractionSurface:
         """
         if not self.confined_concrete:
             return float(self.concrete_model.get_ultimate_strain())
+        # confined_concrete=True guarantees these are set (enforced by validator).
+        assert (
+            self.confinement_rho_s is not None
+            and self.confinement_f_yh is not None
+            and self.confinement_eps_su is not None
+        )
         f_cc_k, _ = self._confined_strength_and_peak_strain()
         rho_s = float(self.confinement_rho_s)
         f_yh_k = float(self.confinement_f_yh)
