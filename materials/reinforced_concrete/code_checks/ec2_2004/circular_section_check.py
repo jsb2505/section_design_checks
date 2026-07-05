@@ -72,7 +72,10 @@ class CircularSectionCheck(BaseModel):
         section: Circular RC section geometry with reinforcement
         concrete: Concrete material properties
         diameter: Section diameter (mm)
-        cover: Cover to outer face of shear links (mm)
+        cover:
+            Cover to outer face of shear links (mm).
+            Links are assumed to be on the outer layer.
+            If no shear reinforcement, cover is not used.
         shear_reinforcement: Shear links/spirals (optional)
         is_spiral: If True, ShearRebar.spacing is treated as spiral pitch for λ2
         apply_k_f: If True, multiply γ_c by k_f for cast-in-place piles (EC2 §2.4.2.5)
@@ -271,13 +274,38 @@ class CircularSectionCheck(BaseModel):
     # Private sub-checks
     # ===========================
 
+    @model_validator(mode="after")
+    def _validate_geometry(self) -> "CircularSectionCheck":    
+        r = self.diameter / 2
+        if self.cover >= r:
+            raise ValueError("cover must be < D/2")
+        
+        if self.r_sv_override is not None:
+            if self.r_sv_override <= 0 or self.r_sv_override >= r:
+                raise ValueError("r_sv_override must be > 0 and < D/2")
+
+        if self.shear_reinforcement is not None:
+            if self.shear_reinforcement.diameter <= 0:
+                raise ValueError("ShearRebar.diameter must be > 0")
+            if self.shear_reinforcement.spacing <= 0:
+                raise ValueError("ShearRebar.spacing must be > 0")
+
+            r_sv = self.diameter / 2 - self.cover - self.shear_reinforcement.diameter / 2
+            if self.r_sv_override is None and r_sv <= 0:
+                raise ValueError(
+                    "Computed r_sv <= 0. Check cover and shear link diameter "
+                    "(expected cover to outer face of links)."
+                )
+        return self
+    
+
     _bending_check: Optional[BendingCheck] = PrivateAttr(default=None)
     _shear_check: Optional[ShearCheck] = PrivateAttr(default=None)
     _cracking_check: Optional[CrackingCheck] = PrivateAttr(default=None)
     _concrete_uls: Optional[ConcreteMaterial] = PrivateAttr(default=None)
 
     @model_validator(mode="after")
-    def _init_sub_checks(self) -> "CircularSectionCheck":
+    def _post_init(self) -> "CircularSectionCheck":
         # Warn if shear reinforcement angle is not 90° (ineffective for circular)
         if (
             self.shear_reinforcement is not None
@@ -292,12 +320,15 @@ class CircularSectionCheck(BaseModel):
                 stacklevel=2,
             )
 
-        # Apply k_f to gamma_c for ULS if requested
+        # Apply k_f to concrete partial factors for ULS if requested
         concrete_uls = self.concrete
         if self.apply_k_f:
             k_f = cast(float, get_ndp("k_f"))
             concrete_uls = self.concrete.model_copy(
-                update={"gamma_c": self.concrete.gamma_c * k_f}
+                update={
+                    "gamma_c": self.concrete.gamma_c * k_f,
+                    "gamma_c_accidental": self.concrete.gamma_c_accidental * k_f,
+                }
             )
         self._concrete_uls = concrete_uls
 
@@ -341,28 +372,6 @@ class CircularSectionCheck(BaseModel):
             check_k4_stress=self.check_k4_stress,
         )
 
-        return self
-
-    # TODO is correct to have two model_validator functions or put all into one?
-    # if two, does order matter? prefer to fail fast.
-    @model_validator(mode="after")
-    def _validate_geometry(self) -> "CircularSectionCheck":
-        r = self.diameter / 2
-        if self.cover >= r:
-            raise ValueError("cover must be < D/2")
-
-        if self.shear_reinforcement is not None:
-            if self.shear_reinforcement.diameter <= 0:
-                raise ValueError("ShearRebar.diameter must be > 0")
-            if self.shear_reinforcement.spacing <= 0:
-                raise ValueError("ShearRebar.spacing must be > 0")
-
-            r_sv = self.diameter / 2 - self.cover - self.shear_reinforcement.diameter / 2
-            if self.r_sv_override is None and r_sv <= 0:
-                raise ValueError(
-                    "Computed r_sv <= 0. Check cover and shear link diameter "
-                    "(expected cover to outer face of links)."
-                )
         return self
 
 
