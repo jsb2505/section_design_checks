@@ -113,7 +113,7 @@ class CircularSectionCheck(BaseModel):
         >>>
         >>> bending_result = check.perform_bending_check(My_Ed=150, N_Ed=500)
         >>> shear_result = check.perform_shear_check(
-        ...     load_case=LoadCase(Vy_Ed=200, My_Ed=150, N_Ed=500)
+        ...     load_case=LoadCase(V_Ed=200, My_Ed=150, N_Ed=500)
         ... )
         >>> cracking_result = check.perform_cracking_check(My_Ed=80, N_Ed=300)
         >>> stress_result = check.perform_stress_limits_check(My_Ed=80, N_Ed=300)
