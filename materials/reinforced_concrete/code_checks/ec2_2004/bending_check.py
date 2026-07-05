@@ -373,16 +373,9 @@ class BendingCheck(BaseCodeCheck):
         N_Rd, M_Rd, utilization = capacity.N_Rd, capacity.M_Rd, capacity.utilization
 
         # --- Step 2a: reinforcement limit checks (EC2 §9.2.1.1) ---
-        A_s_total_provided = float(self.section.total_steel_area)
-        A_s_max_allowed = float(find_area_of_steel_maximum(section_area=float(self.section.get_area())))
-        A_s_max_satisfied = A_s_total_provided <= A_s_max_allowed + 1e-9
-
-        if not A_s_max_satisfied and not suppress_warnings:
-            warnings.warn(
-                "Maximum longitudinal reinforcement exceeded (EC2 §9.2.1.1(3)): "
-                f"A_s,prov={A_s_total_provided:.1f} mm² > A_s,max={A_s_max_allowed:.1f} mm².",
-                stacklevel=2,
-            )
+        A_s_total_provided: Optional[float] = None
+        A_s_max_allowed: Optional[float] = None
+        A_s_max_satisfied: Optional[bool] = None
 
         A_s_min_check_applicable = False
         A_s_min_required: Optional[float] = None
@@ -391,55 +384,69 @@ class BendingCheck(BaseCodeCheck):
         A_s_min_breadth_b: Optional[float] = None
         A_s_min_effective_depth_d: Optional[float] = None
         A_s_min_f_yk: Optional[float] = None
+        A_s_min_f_ctm: Optional[float] = None
 
-        try:
-            eps_top, eps_bottom = diagram.find_strains_for_MN(M_design, N_Ed)
-        except Exception:
-            eps_top, eps_bottom = None, None
+        if isinstance(self.section, RCSection):
+            A_s_total_provided = float(self.section.total_steel_area)
+            A_s_max_allowed = float(find_area_of_steel_maximum(section_area=float(self.section.get_area())))
+            A_s_max_satisfied = A_s_total_provided <= A_s_max_allowed + 1e-9
 
-        if eps_top is not None and eps_bottom is not None:
-            A_s_tension, f_yk_tension = self._find_tension_steel_area_and_f_yk(
-                eps_top=eps_top,
-                eps_bottom=eps_bottom,
-            )
+            if not A_s_max_satisfied and not suppress_warnings:
+                warnings.warn(
+                    "Maximum longitudinal reinforcement exceeded (EC2 §9.2.1.1(3)): "
+                    f"A_s,prov={A_s_total_provided:.1f} mm² > A_s,max={A_s_max_allowed:.1f} mm².",
+                    stacklevel=2,
+                )
 
-            if A_s_tension > 0.0 and f_yk_tension is not None:
-                try:
-                    d_flexure = find_effective_depth_for_flexure(
-                        section=self.section,
-                        diagram=diagram,
-                        M_Ed=M_design,
-                        N_Ed=N_Ed,
-                        eps_top=eps_top,
-                        eps_bottom=eps_bottom,
-                        warn_on_fallback=False,
-                    )
-                    b_flexure = calculate_section_breadth(self.section)
+            try:
+                eps_top, eps_bottom = diagram.find_strains_for_MN(M_design, N_Ed)
+            except Exception:
+                eps_top, eps_bottom = None, None
 
-                    A_s_min_required = float(find_area_of_steel_minimum(
-                        b=float(b_flexure),
-                        d=float(d_flexure),
-                        f_ctm=float(self.concrete.f_ctm),
-                        f_yk=float(f_yk_tension),
-                    ))
-                    A_s_min_provided_tension = float(A_s_tension)
-                    A_s_min_satisfied = A_s_min_provided_tension + 1e-9 >= A_s_min_required
-                    A_s_min_check_applicable = True
-                    A_s_min_breadth_b = float(b_flexure)
-                    A_s_min_effective_depth_d = float(d_flexure)
-                    A_s_min_f_yk = float(f_yk_tension)
+            if eps_top is not None and eps_bottom is not None:
+                A_s_tension, f_yk_tension = self._find_tension_steel_area_and_f_yk(
+                    eps_top=eps_top,
+                    eps_bottom=eps_bottom,
+                )
 
-                    if not A_s_min_satisfied and not suppress_warnings:
-                        warnings.warn(
-                            "Minimum tension reinforcement not satisfied (EC2 §9.2.1.1(1)): "
-                            f"A_s,tension={A_s_min_provided_tension:.1f} mm² < "
-                            f"A_s,min={A_s_min_required:.1f} mm².",
-                            stacklevel=2,
+                if A_s_tension > 0.0 and f_yk_tension is not None:
+                    try:
+                        d_flexure = find_effective_depth_for_flexure(
+                            section=self.section,
+                            diagram=diagram,
+                            M_Ed=M_design,
+                            N_Ed=N_Ed,
+                            eps_top=eps_top,
+                            eps_bottom=eps_bottom,
+                            warn_on_fallback=False,
                         )
-                except ValueError:
-                    # If effective depth cannot be established for this strain state,
-                    # keep A_s,min check as not applicable for this load case.
-                    pass
+                        b_flexure = calculate_section_breadth(self.section)
+                        A_s_min_f_ctm = float(self.concrete.f_ctm)
+
+                        A_s_min_required = float(find_area_of_steel_minimum(
+                            b=float(b_flexure),
+                            d=float(d_flexure),
+                            f_ctm=A_s_min_f_ctm,
+                            f_yk=float(f_yk_tension),
+                        ))
+                        A_s_min_provided_tension = float(A_s_tension)
+                        A_s_min_satisfied = A_s_min_provided_tension + 1e-9 >= A_s_min_required
+                        A_s_min_check_applicable = True
+                        A_s_min_breadth_b = float(b_flexure)
+                        A_s_min_effective_depth_d = float(d_flexure)
+                        A_s_min_f_yk = float(f_yk_tension)
+
+                        if not A_s_min_satisfied and not suppress_warnings:
+                            warnings.warn(
+                                "Minimum tension reinforcement not satisfied (EC2 §9.2.1.1(1)): "
+                                f"A_s,tension={A_s_min_provided_tension:.1f} mm² < "
+                                f"A_s,min={A_s_min_required:.1f} mm².",
+                                stacklevel=2,
+                            )
+                    except ValueError:
+                        # If effective depth cannot be established for this strain state,
+                        # keep A_s,min check as not applicable for this load case.
+                        pass
 
         demand_components = {"N": float(N_Ed), "M": float(M_Ed_original)}
         units_components = {"N": "kN", "M": "kN·m"}
@@ -465,7 +472,7 @@ class BendingCheck(BaseCodeCheck):
             "A_s_min_satisfied": A_s_min_satisfied,
             "A_s_min_breadth_b": A_s_min_breadth_b,
             "A_s_min_effective_depth_d": A_s_min_effective_depth_d,
-            "A_s_min_f_ctm": float(self.concrete.f_ctm),
+            "A_s_min_f_ctm": A_s_min_f_ctm,
             "A_s_min_f_yk": A_s_min_f_yk,
         }
 

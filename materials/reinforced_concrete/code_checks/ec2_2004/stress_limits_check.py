@@ -230,6 +230,9 @@ class StressLimitsCheck(BaseCodeCheck):
     with characteristic material properties (same SLS conventions as
     CrackingCheck).
 
+    Note: Applies a default creep coefficient of 1.5 to E_cm to get E_c,eff.
+    If short-term only is required set creep_coefficient to 1.0
+
     Example:
         >>> check = StressLimitsCheck(
         ...     section=section, concrete=concrete,
@@ -599,6 +602,7 @@ class StressLimitsCheck(BaseCodeCheck):
         N_Ed: float = 0.0,
         ignore_compression_steel: bool = False,
         warning_threshold: float = 0.95,
+        suppress_warnings: bool = False,
         **kwargs,
     ) -> CheckResult:
         """
@@ -609,6 +613,7 @@ class StressLimitsCheck(BaseCodeCheck):
             N_Ed: Design axial force at SLS (kN, compression positive).
             ignore_compression_steel: If True, use conservative diagram.
             warning_threshold: Utilization ratio triggering warnings.
+            suppress_warnings: If True, suppress warnings emitted during this check.
 
         Returns:
             CheckResult with governing stress check utilization.
@@ -662,8 +667,9 @@ class StressLimitsCheck(BaseCodeCheck):
             governing_util, governing_check = max(utilizations, key=lambda x: x[0])
 
         # Emit warnings for exceeded checks
-        for msg in r.messages:
-            warnings.warn(msg, stacklevel=2)
+        if not suppress_warnings:
+            for msg in r.messages:
+                warnings.warn(msg, stacklevel=2)
 
         # Build details
         details: Dict[str, Any] = {

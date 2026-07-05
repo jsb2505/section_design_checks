@@ -60,6 +60,7 @@ def calculate_tension_shift(
     f_cd: Optional[float] = None,
     f_ck: Optional[float] = None,
     sigma_cp: float = 0.0,
+    use_sigma_cp_for_alpha_cw: bool = False,
     shear_reinforcement: Optional[ShearRebar] = None,
     cot_theta_override: Optional[float] = None,
     use_v_rd_s_for_cot_theta: bool = False,
@@ -96,6 +97,9 @@ def calculate_tension_shift(
         f_ck: Characteristic concrete strength (MPa). Required if shear_reinforcement
               is provided and cot_theta_override is not.
         sigma_cp: Axial stress in concrete (MPa), for α_cw calculation. Default 0.
+        use_sigma_cp_for_alpha_cw:
+            If True, include ``sigma_cp`` in α_cw.
+            If False (default), α_cw is calculated with ``sigma_cp = 0``.
         shear_reinforcement: Optional ShearRebar object. If provided, calculates
                             cot(θ) from V_Ed using the variable strut angle method
                             (unless cot_theta_override is given).
@@ -173,7 +177,11 @@ def calculate_tension_shift(
             else:
                 # Variable strut angle method (EC2 §6.2.3)
                 # K = α_cw · b_w · z · ν · f_cd
-                alpha_cw = find_alpha_cw(f_cd=f_cd, sigma_cp=sigma_cp)
+                alpha_cw = find_alpha_cw(
+                    f_cd=f_cd,
+                    sigma_cp=sigma_cp,
+                    use_sigma_cp_for_alpha_cw=use_sigma_cp_for_alpha_cw,
+                )
                 nu = find_nu_factor(f_ck=f_ck)
                 K = alpha_cw * b_w * z * nu * f_cd  # in N
 
@@ -525,7 +533,12 @@ def clamp_cot_theta(
     return max(cot_min, min(cot_max, cot_theta))
 
 
-def find_alpha_cw(f_cd: float, sigma_cp: float) -> float:
+def find_alpha_cw(
+    f_cd: float,
+    sigma_cp: float,
+    *,
+    use_sigma_cp_for_alpha_cw: bool = False,
+) -> float:
     """
     Calculate coefficient α_cw for strut capacity (§6.2.3(3)).
 
@@ -538,12 +551,16 @@ def find_alpha_cw(f_cd: float, sigma_cp: float) -> float:
     Args:
         f_cd: Design compressive strength of concrete in MPa
         sigma_cp: Compressive stress from axial force in MPa
+        use_sigma_cp_for_alpha_cw:
+            If True, include ``sigma_cp`` in α_cw.
+            If False (default), α_cw is calculated with ``sigma_cp = 0``.
 
     Returns:
         Coefficient α_cw (dimensionless)
     """
     alpha_cw_fn = get_ndp_callable("alpha_cw")
-    return alpha_cw_fn(f_cd, sigma_cp)
+    sigma_cp_eff = sigma_cp if use_sigma_cp_for_alpha_cw else 0.0
+    return alpha_cw_fn(f_cd, sigma_cp_eff)
 
 
 def find_nu_factor(f_ck: float) -> float:

@@ -179,6 +179,14 @@ class CircularSectionCheck(BaseModel):
         ),
     )
 
+    use_sigma_cp_for_alpha_cw: bool = Field(
+        default=False,
+        description=(
+            "If True, include σ_cp in α_cw for V_Rd,max calculations. "
+            "If False (default), α_cw is calculated with σ_cp = 0."
+        ),
+    )
+
     # ===========================
     # Pile / foundation
     # ===========================
@@ -353,6 +361,7 @@ class CircularSectionCheck(BaseModel):
             use_accidental=self.use_accidental,
             use_rigorous=True,
             cap_lever_arm=True,  # z ≤ 0.9d safety cap. Circular z_mech is typically ~0.77d so rarely activates.
+            use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
             concrete_model_type=self.concrete_model_type,
             steel_model_type=self.steel_model_type,
         )
@@ -655,6 +664,7 @@ class CircularSectionCheck(BaseModel):
                 N_Ed=N_Ed,
                 V_Ed=V_Ed,
                 use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
+                ignore_compression_steel=ignore_compression_steel,
             )
 
         assert self._bending_check is not None
@@ -716,6 +726,7 @@ class CircularSectionCheck(BaseModel):
         use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float = 0.95,
         suppress_warnings: bool = False,
+        ignore_compression_steel: bool = False,
         force_cracked: bool = False,
     ) -> CheckResult:
         """
@@ -736,6 +747,7 @@ class CircularSectionCheck(BaseModel):
                 rearranged EC2 Eq. 6.14 / V_Rd,max.
             warning_threshold: Utilization threshold for warnings
             suppress_warnings: If True, suppress warnings emitted during this check.
+            ignore_compression_steel: If True, ignore compression reinforcement.
             force_cracked: If True, skip the cracking moment check and go
                 straight to the reinforced shear check
 
@@ -751,8 +763,17 @@ class CircularSectionCheck(BaseModel):
         N_Ed = load_case.N_Ed
 
         # 1. Get d and z from the solver
-        d = self._shear_check.find_effective_depth(M_Ed, N_Ed)
-        z_ec2, z_mech = self._shear_check.find_lever_arm(M_Ed, N_Ed, d)
+        d = self._shear_check.find_effective_depth(
+            M_Ed,
+            N_Ed,
+            ignore_compression_steel=ignore_compression_steel,
+        )
+        z_ec2, z_mech = self._shear_check.find_lever_arm(
+            M_Ed,
+            N_Ed,
+            d,
+            ignore_compression_steel=ignore_compression_steel,
+        )
         z = z_mech if z_mech is not None else z_ec2
 
         # 2. sigma_cp
@@ -844,7 +865,11 @@ class CircularSectionCheck(BaseModel):
         # Strut parameters
         f_cd = self._f_cd_design
         f_ck = self._concrete_uls.f_ck
-        alpha_cw = find_alpha_cw(f_cd, sigma_cp_capped)
+        alpha_cw = find_alpha_cw(
+            f_cd,
+            sigma_cp_capped,
+            use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
+        )
         rho_l_for_spacing = self._find_rho_l(b_w, d)
         V_Rd_c_for_spacing = find_V_Rd_c_cracked(
             b_w=b_w,
@@ -1026,7 +1051,11 @@ class CircularSectionCheck(BaseModel):
         f_yk = self.shear_reinforcement.f_yk
         f_ywd = self._f_ywd_design
         threshold = 0.8 * f_yk
-        alpha_cw = find_alpha_cw(f_cd, sigma_cp)
+        alpha_cw = find_alpha_cw(
+            f_cd,
+            sigma_cp,
+            use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
+        )
         A_sw_over_s = self.shear_reinforcement.area_per_unit_length
 
         # --- Iteration 1: Note 1 (standard ν₁) ---
@@ -1109,6 +1138,7 @@ class CircularSectionCheck(BaseModel):
         N_Ed: float,
         V_Ed: float,
         use_v_rd_s_for_cot_theta: bool = False,
+        ignore_compression_steel: bool = False,
     ) -> float:
         """
         Compute cot(θ) from circular equivalent web width for use in
@@ -1121,8 +1151,17 @@ class CircularSectionCheck(BaseModel):
         assert self._shear_check is not None
         assert self._concrete_uls is not None
 
-        d = self._shear_check.find_effective_depth(M_Ed, N_Ed)
-        _, z_mech = self._shear_check.find_lever_arm(M_Ed, N_Ed, d)
+        d = self._shear_check.find_effective_depth(
+            M_Ed,
+            N_Ed,
+            ignore_compression_steel=ignore_compression_steel,
+        )
+        _, z_mech = self._shear_check.find_lever_arm(
+            M_Ed,
+            N_Ed,
+            d,
+            ignore_compression_steel=ignore_compression_steel,
+        )
         z = z_mech if z_mech is not None else 0.9 * d
 
         b_w, _, _ = self.calculate_equivalent_web_width(d, z)
@@ -1133,7 +1172,11 @@ class CircularSectionCheck(BaseModel):
         sigma_cp = sigma_cp_from_N_and_area(N_Ed=N_Ed, area=A_c)
         sigma_cp_capped = cap_sigma_cp_upper(sigma_cp=sigma_cp, f_cd=f_cd)
 
-        alpha_cw = find_alpha_cw(f_cd, sigma_cp_capped)
+        alpha_cw = find_alpha_cw(
+            f_cd,
+            sigma_cp_capped,
+            use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
+        )
         nu_1 = find_nu_1_factor(f_ck, 90.0)
         K = alpha_cw * b_w * z * nu_1 * f_cd
 

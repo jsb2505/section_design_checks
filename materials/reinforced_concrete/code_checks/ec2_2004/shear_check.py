@@ -192,6 +192,14 @@ class ShearCheck(BaseCodeCheck):
         ),
     )
 
+    use_sigma_cp_for_alpha_cw: bool = Field(
+        default=False,
+        description=(
+            "If True, include σ_cp in α_cw for V_Rd,max calculations. "
+            "If False (default), α_cw is calculated with σ_cp = 0."
+        ),
+    )
+
     cap_lever_arm: bool = Field(
         default=True,
         description=(
@@ -726,7 +734,11 @@ class ShearCheck(BaseCodeCheck):
             raise ValueError("V_Rd_max cannot be found without providing shear reinforcement.")
 
         f_cd = self.f_cd_design
-        alpha_cw = find_alpha_cw(f_cd, sigma_cp)
+        alpha_cw = find_alpha_cw(
+            f_cd,
+            sigma_cp,
+            use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
+        )
         b_w = self.breadth
 
         # Select appropriate nu_1 factor
@@ -762,7 +774,11 @@ class ShearCheck(BaseCodeCheck):
             raise ValueError("K cannot be calculated without shear reinforcement.")
 
         f_cd = self.f_cd_design
-        alpha_cw = find_alpha_cw(f_cd, sigma_cp)
+        alpha_cw = find_alpha_cw(
+            f_cd,
+            sigma_cp,
+            use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
+        )
         b_w = self.breadth
 
         if use_note_2:
@@ -1293,7 +1309,15 @@ class ShearCheck(BaseCodeCheck):
             "z_mech": z_mech if reinforcement else None,
             "b_w": self.breadth,
             "sigma_cp": sigma_cp,
-            "alpha_cw": find_alpha_cw(self.f_cd_design, sigma_cp) if reinforcement else None,
+            "alpha_cw": (
+                find_alpha_cw(
+                    self.f_cd_design,
+                    sigma_cp,
+                    use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
+                )
+                if reinforcement
+                else None
+            ),
             "nu_1": (
                 find_nu_1_factor_note_2(self.concrete.f_ck, reinforcement.angle)
                 if reinforcement and used_note_2

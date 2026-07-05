@@ -230,7 +230,7 @@ class CrackingCheck(BaseCodeCheck):
             "steel_model_type": self.steel_model_type,
             "n_fibres_width": self.n_fibres_width,
             "n_fibres_height": self.n_fibres_height,
-            "E_cm_eff": self.E_cm_eff,
+            "E_c_eff": self.E_c_eff,
         }
 
     def _get_diagram(self, ignore_compression_steel: bool = False) -> MNInteractionDiagram:
@@ -248,7 +248,7 @@ class CrackingCheck(BaseCodeCheck):
                     n_fibres_height=self.n_fibres_height,
                     use_characteristic=True,
                     ignore_compression_steel=True,
-                    elastic_modulus=self.E_cm_eff,
+                    elastic_modulus=self.E_c_eff,
                 )
                 self._diagram_no_comp_snapshot = snapshot
             return self._diagram_no_comp_steel
@@ -263,7 +263,7 @@ class CrackingCheck(BaseCodeCheck):
                     n_fibres_height=self.n_fibres_height,
                     use_characteristic=True,
                     ignore_compression_steel=False,
-                    elastic_modulus=self.E_cm_eff,
+                    elastic_modulus=self.E_c_eff,
                 )
                 self._diagram_snapshot = snapshot
             return self._diagram
@@ -318,7 +318,7 @@ class CrackingCheck(BaseCodeCheck):
         return 1.0 + self.creep_coefficient
 
     @property
-    def E_cm_eff(self) -> float:
+    def E_c_eff(self) -> float:
         """
         Effective concrete modulus accounting for creep (EC2 §7.4.3).
 
@@ -332,7 +332,7 @@ class CrackingCheck(BaseCodeCheck):
     @property
     def alpha_e(self) -> float:
         """
-        Modular ratio E_s / E_cm,eff (EC2 §7.3.4(2)).
+        Modular ratio E_s / E_cm (EC2 §7.3.4(2)).
 
         Uses area-weighted average E_s when multiple rebar groups have different
         elastic moduli. This is appropriate since alpha_e multiplies rho_p_eff
@@ -357,7 +357,7 @@ class CrackingCheck(BaseCodeCheck):
 
             E_s = weighted_E_s / total_area if total_area > 0 else 200000.0
 
-        return E_s / self.E_cm_eff
+        return E_s / self.concrete.get_elastic_modulus()
 
 
     # ===============================================
@@ -388,8 +388,8 @@ class CrackingCheck(BaseCodeCheck):
         f_ctm_fl = self.concrete.find_mean_flexural_tensile_strength(self.height)
 
         # Elastic section modulus (uncracked transformed section)
-        I_yy, _, _ = self.section.get_transformed_second_moment_area(self.E_cm_eff)
-        _, c_y, _ = self.section.get_transformed_centroid(self.E_cm_eff)
+        I_yy, _, _ = self.section.get_transformed_second_moment_area(self.E_c_eff)
+        _, c_y, _ = self.section.get_transformed_centroid(self.E_c_eff)
         bounds = self.section.outline.bounds
         y_tension = c_y - bounds[1]  # Distance to bottom (tension) face
 
@@ -398,7 +398,7 @@ class CrackingCheck(BaseCodeCheck):
         # Axial stress contribution (compression positive increases M_cr)
         sigma_N = 0.0
         if N_Ed != 0.0:
-            A_tr = self.section.get_transformed_area(self.E_cm_eff)
+            A_tr = self.section.get_transformed_area(self.E_c_eff)
             sigma_N = N_Ed * 1000 / A_tr  # kN → N, then N/mm² = MPa
 
         # M_cr in kN·m (W_el in mm³, stresses in MPa → result in N·mm)
@@ -759,7 +759,7 @@ class CrackingCheck(BaseCodeCheck):
             A_ct = 0.5 * h * b
         else:
             # Tension - use transformed section centroid to estimate tension zone
-            _, c_y, _ = self.section.get_transformed_centroid(self.E_cm_eff)
+            _, c_y, _ = self.section.get_transformed_centroid(self.E_c_eff)
             bounds = self.section.outline.bounds
             y_from_bottom = c_y - bounds[1]
             A_ct = y_from_bottom * b
@@ -1124,8 +1124,8 @@ class CrackingCheck(BaseCodeCheck):
         )
 
 
-    def _build_diagram_with_E_cm_eff(
-        self, E_cm_eff: float, ignore_compression_steel: bool = False,
+    def _build_diagram_with_E_c_eff(
+        self, E_c_eff: float, ignore_compression_steel: bool = False,
     ) -> MNInteractionDiagram:
         """Build a temporary interaction diagram with a specific E_cm,eff."""
         return create_interaction_diagram(
@@ -1137,7 +1137,7 @@ class CrackingCheck(BaseCodeCheck):
             n_fibres_height=self.n_fibres_height,
             use_characteristic=True,
             ignore_compression_steel=ignore_compression_steel,
-            elastic_modulus=E_cm_eff,
+            elastic_modulus=E_c_eff,
         )
 
 
@@ -1392,6 +1392,14 @@ class CrackingCheck(BaseCodeCheck):
         suppress_warnings: bool = False,
     ) -> CheckResult:
         """Internal implementation of crack check."""
+        if (
+            not self.section.rebar_groups
+            or sum(len(group.positions) for group in self.section.rebar_groups) == 0
+        ):
+            raise ValueError(
+                "CrackingCheck is invalid for unreinforced sections. "
+                "Provide longitudinal reinforcement before calling perform_check()."
+            )
 
         # Step 1: Check if section is cracked
         M_cr = self.find_cracking_moment(N_Ed=N_Ed)
@@ -1460,13 +1468,13 @@ class CrackingCheck(BaseCodeCheck):
                 max_iterations = 5 if self.iterate_nonlinear_creep else 1
                 for _ in range(max_iterations):
                     phi_NL = self._compute_nonlinear_creep_coefficient(sigma_c_peak)
-                    E_cm_eff_NL = self.concrete.get_elastic_modulus() / (1.0 + phi_NL)
+                    E_c_eff_NL = self.concrete.get_elastic_modulus() / (1.0 + phi_NL)
 
-                    if abs(E_cm_eff_NL - (self.concrete.get_elastic_modulus() / (1.0 + creep_coefficient_used))) < 1.0:
+                    if abs(E_c_eff_NL - (self.concrete.get_elastic_modulus() / (1.0 + creep_coefficient_used))) < 1.0:
                         break  # Converged (within 1 MPa)
 
                     creep_coefficient_used = phi_NL
-                    diagram_for_check = self._build_diagram_with_E_cm_eff(E_cm_eff_NL, ignore_compression_steel)
+                    diagram_for_check = self._build_diagram_with_E_c_eff(E_c_eff_NL, ignore_compression_steel)
                     eps_top, eps_bottom = diagram_for_check.find_strains_for_MN(
                         M_target=M_Ed, N_target=N_Ed,
                     )
@@ -1659,11 +1667,11 @@ class CrackingCheck(BaseCodeCheck):
                 max_iterations = 5 if self.iterate_nonlinear_creep else 1
                 for _ in range(max_iterations):
                     phi_NL = self._compute_nonlinear_creep_coefficient(sigma_c_peak)
-                    E_cm_eff_NL = self.concrete.get_elastic_modulus() / (1.0 + phi_NL)
-                    if abs(E_cm_eff_NL - (self.concrete.get_elastic_modulus() / (1.0 + creep_coefficient_used))) < 1.0:
+                    E_c_eff_NL = self.concrete.get_elastic_modulus() / (1.0 + phi_NL)
+                    if abs(E_c_eff_NL - (self.concrete.get_elastic_modulus() / (1.0 + creep_coefficient_used))) < 1.0:
                         break
                     creep_coefficient_used = phi_NL
-                    diagram_nl = self._build_diagram_with_E_cm_eff(E_cm_eff_NL, ignore_compression_steel)
+                    diagram_nl = self._build_diagram_with_E_c_eff(E_c_eff_NL, ignore_compression_steel)
                     eps_top, eps_bottom = diagram_nl.find_strains_for_MN(M_Ed, N_Ed)
                     sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_nl)
                     nonlinear_creep_applied = True
