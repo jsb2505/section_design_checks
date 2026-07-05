@@ -100,7 +100,12 @@ class ShearRebar(Rebar):
     #------------------------
 
     def max_link_spacing(self, effective_depth: float) -> float:
-        """EC2 §9.2.2(6): s_l,max = 0.75 d (1 + cot α)."""
+        """
+        EC2 §9.2.2(6): s_l,max = 0.75 d (1 + cot α).
+
+        Note:
+            This is an NDP. This function is teh base EC2 version.
+        """
         if effective_depth <= 0:
             raise ValueError("effective_depth must be > 0")
 
@@ -108,7 +113,7 @@ class ShearRebar(Rebar):
             cot_alpha = 0.0
         else:
             cot_alpha = cot(radians(self.angle))
-        # TODO this is an NDP. Germans differ
+
         return 0.75 * effective_depth * (1.0 + cot_alpha)
 
     def max_leg_spacing(self, effective_depth: float) -> float:

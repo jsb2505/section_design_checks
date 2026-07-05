@@ -26,6 +26,7 @@ from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     calculate_section_breadth,
+    find_max_allowable_link_spacing,
     find_cot_theta_for_V_Ed_fromV_Rd_max,
     find_cot_theta_for_V_Ed_from_V_Rd_s,
     find_alpha_cw,
@@ -871,6 +872,7 @@ class ShearCheck(BaseCodeCheck):
         z: float,
         sigma_cp: float,
         use_v_rd_s_for_cot_theta: bool = False,
+        suppress_warnings: bool = False,
     ) -> tuple[float, bool]:
         """
         Calculate V_Rd,max with ν₁ Note 2 iteration per EC2 §6.2.3(3) Note 2.
@@ -942,13 +944,14 @@ class ShearCheck(BaseCodeCheck):
         # Check for oscillation: Note 2 pushes stress above threshold
         if sigma_s_2 >= threshold:
             # Oscillation detected - revert to Note 1
-            warnings.warn(
+            if not suppress_warnings:
+                warnings.warn(
                 f"EC2 §6.2.3(3) Note 2: Oscillation detected. "
                 f"Note 1: σ_s={sigma_s_1:.1f} MPa < {threshold:.1f} MPa, "
                 f"Note 2: σ_s={sigma_s_2:.1f} MPa >= {threshold:.1f} MPa. "
                 f"Reverting to Note 1 (conservative).",
-                stacklevel=3,
-            )
+                    stacklevel=3,
+                )
             return V_Rd_max_1, False
 
         # Converged with Note 2
@@ -966,6 +969,7 @@ class ShearCheck(BaseCodeCheck):
         cot_theta_override: Optional[float] = None,
         use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float = 0.95,
+        suppress_warnings: bool = False,
         ignore_compression_steel: bool = False,
         **kwargs,
     ) -> CheckResult:
@@ -984,6 +988,8 @@ class ShearCheck(BaseCodeCheck):
         Args:
             load_case: Single load case to check
             warning_threshold: Utilization threshold for warning
+            suppress_warnings:
+                If True, suppress warnings emitted during this check.
             cot_theta_override: User provided cot theta value to use
             use_v_rd_s_for_cot_theta: If True, solve cot(θ) from rearranged EC2
                 Eq. 6.13 (V_Rd,s = V_Ed). If False (default), solve cot(θ) from
@@ -1011,6 +1017,7 @@ class ShearCheck(BaseCodeCheck):
             cot_theta_override=cot_theta_override,
             use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
             warning_threshold=warning_threshold,
+            suppress_warnings=suppress_warnings,
             ignore_compression_steel=ignore_compression_steel,
         )
 
@@ -1023,6 +1030,7 @@ class ShearCheck(BaseCodeCheck):
         cot_theta_override: Optional[float],
         use_v_rd_s_for_cot_theta: bool,
         warning_threshold: float,
+        suppress_warnings: bool = False,
         ignore_compression_steel: bool = False,
     ) -> CheckResult:
         """Perform check for single load case (internal)."""
@@ -1055,6 +1063,8 @@ class ShearCheck(BaseCodeCheck):
         z_mech: Optional[float] = None
         K: Optional[float] = None
         used_note_2: bool = False
+        spacing_max_allowable: Optional[float] = None
+        spacing_satisfied: Optional[bool] = None
 
         # Compute capacities (use z_ec2 for design checks per EC2)
 
@@ -1126,15 +1136,17 @@ class ShearCheck(BaseCodeCheck):
                 cot_theta = cot_theta_override
 
                 if cot_theta_override > cot_max:
-                    warnings.warn(
+                    if not suppress_warnings:
+                        warnings.warn(
                         f"Cot theta value provided, cot(θ) = {cot_theta_override}, is greater than max value: {cot_max:.2f}.",
-                        stacklevel=2,
-                    )
+                            stacklevel=2,
+                        )
                 elif cot_theta_override < cot_min:
-                    warnings.warn(
+                    if not suppress_warnings:
+                        warnings.warn(
                         f"Cot theta value provided, cot(θ) = {cot_theta_override}, is smaller than min value: {cot_min:.2f}.",
-                        stacklevel=2,
-                    )
+                            stacklevel=2,
+                        )
             else:
                 # Calculate cot_theta from selected equation (already clamped by function)
                 cot_theta = self._find_cot_theta_for_V_Ed(
@@ -1152,13 +1164,37 @@ class ShearCheck(BaseCodeCheck):
             if self.use_increased_nu_1:
                 # Use EC2 §6.2.3(3) Note 2 iteration to potentially increase nu_1 if stress allows
                 V_Rd_max, used_note_2 = self._find_V_Rd_max_with_note_2_iteration(
-                    V_Ed, z_ec2, sigma_cp, use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta
+                    V_Ed,
+                    z_ec2,
+                    sigma_cp,
+                    use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
+                    suppress_warnings=suppress_warnings,
                 )
             else:
                 V_Rd_max = self.find_V_Rd_max(cot_min, z_ec2, sigma_cp)
 
             # Calculate V_Rd_s with appropriate f_ywd (reduced if Note 2 is used)
             V_Rd_s = self.find_V_Rd_s(cot_theta, z_ec2, use_note_2=used_note_2)
+
+            # Maximum allowable link spacing (NDP-dependent, e.g. EU_DE piecewise rule)
+            _, min_y, _, max_y = self.section.get_bounding_box()
+            section_depth = max_y - min_y
+            spacing_max_allowable = find_max_allowable_link_spacing(
+                effective_depth=d,
+                section_depth=section_depth,
+                f_ck=self.concrete.f_ck,
+                V_Ed=V_Ed,
+                V_Rd_max=V_Rd_max,
+                V_Rd_c=V_Rd_c,
+                link_angle_degrees=reinforcement.angle,
+            )
+            spacing_satisfied = reinforcement.spacing <= spacing_max_allowable + 1e-9
+            if not spacing_satisfied and not suppress_warnings:
+                warnings.warn(
+                    "Provided shear link spacing exceeds the maximum allowable spacing: "
+                    f"s={reinforcement.spacing:.1f} mm > s_max={spacing_max_allowable:.1f} mm.",
+                    stacklevel=2,
+                )
 
         # TODO would an else work here? why is reinforcement variable used in some places and
         # self.shear_reinforcement used elsewhere when they are the same thing?
@@ -1253,6 +1289,9 @@ class ShearCheck(BaseCodeCheck):
             ),
             "used_note_2": used_note_2 if reinforcement else None,
             "cot_theta_from_v_rd_s": use_v_rd_s_for_cot_theta if reinforcement else None,
+            "spacing_satisfied": spacing_satisfied if reinforcement else None,
+            "spacing_provided": reinforcement.spacing if reinforcement else None,
+            "spacing_max_allowable": spacing_max_allowable if reinforcement else None,
             # ShearCheck-specific
             "rho_l": rho_l,
             "z_mode": "rigorous" if self.use_rigorous else "approximate",

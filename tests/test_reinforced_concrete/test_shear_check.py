@@ -2,11 +2,13 @@
 Tests for ShearCheck with accidental limit state support.
 """
 
+import warnings
 import pytest
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
+from materials.reinforced_concrete.ndp import CountryCode, get_ndp_context, set_ndp_context
 
 
 def create_test_section():
@@ -316,3 +318,56 @@ class TestShearCheckBasicFunctionality:
         M_Ed, N_Ed = -50.0, 100.0  # Hogging moment (negative)
         d = check.find_effective_depth(M_Ed, N_Ed)
         assert d > 0
+
+
+class TestShearSpacingNDP:
+    """Tests for spacing limit behavior with NDP-dependent rules."""
+
+    def test_eu_de_spacing_exceedance_warns_and_sets_flag(self):
+        section = create_test_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        shear_rebar = ShearRebar(diameter=10, spacing=350, n_legs=2, grade="B500B")
+        check = ShearCheck(
+            section=section,
+            concrete=concrete,
+            shear_reinforcement=shear_rebar,
+            use_increased_nu_1=False,
+        )
+        load_case = ShearLoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
+
+        old_code, old_country = get_ndp_context()
+        try:
+            set_ndp_context(country=CountryCode.EU_DE)
+            with pytest.warns(UserWarning, match="maximum allowable spacing"):
+                result = check.perform_check(load_case=load_case)
+        finally:
+            set_ndp_context(code=old_code, country=old_country)
+
+        assert result.details["spacing_satisfied"] is False
+        assert result.details["spacing_provided"] == pytest.approx(350.0)
+        assert result.details["spacing_max_allowable"] is not None
+        assert result.details["spacing_provided"] > result.details["spacing_max_allowable"]
+
+    def test_eu_de_spacing_exceedance_can_suppress_warning(self):
+        section = create_test_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        shear_rebar = ShearRebar(diameter=10, spacing=350, n_legs=2, grade="B500B")
+        check = ShearCheck(
+            section=section,
+            concrete=concrete,
+            shear_reinforcement=shear_rebar,
+            use_increased_nu_1=False,
+        )
+        load_case = ShearLoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
+
+        old_code, old_country = get_ndp_context()
+        try:
+            set_ndp_context(country=CountryCode.EU_DE)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                result = check.perform_check(load_case=load_case, suppress_warnings=True)
+        finally:
+            set_ndp_context(code=old_code, country=old_country)
+
+        assert len(caught) == 0
+        assert result.details["spacing_satisfied"] is False

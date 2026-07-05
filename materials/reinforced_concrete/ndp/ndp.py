@@ -8,7 +8,72 @@ Structure:
 The lookup logic in __init__.py merges: EU base + country overrides + metadata
 """
 
-from math import cos, radians, sqrt
+from math import cos, radians, sqrt, tan
+
+
+def _max_link_spacing_ec2(
+    *,
+    effective_depth: float,
+    section_depth: float,
+    f_ck: float,
+    V_Ed: float,
+    V_Rd_max: float,
+    V_Rd_c: float | None,
+    link_angle_degrees: float,
+) -> float:
+    """Base EC2 §9.2.2(6): s_l,max = 0.75 d (1 + cot α)."""
+    if effective_depth <= 0:
+        raise ValueError(f"effective_depth must be > 0, got {effective_depth}")
+
+    if abs(link_angle_degrees - 90.0) < 1e-9:
+        cot_alpha = 0.0
+    else:
+        cot_alpha = 1.0 / tan(radians(link_angle_degrees))
+
+    return 0.75 * effective_depth * (1.0 + cot_alpha)
+
+
+def _max_link_spacing_eu_de(
+    *,
+    effective_depth: float,
+    section_depth: float,
+    f_ck: float,
+    V_Ed: float,
+    V_Rd_max: float,
+    V_Rd_c: float | None,
+    link_angle_degrees: float,
+) -> float:
+    """
+    German NA spacing limits (piecewise in V_Ed / V_Rd,max).
+
+    Bands:
+    - V_Ed <= 0.3*V_Rd,max
+    - 0.3*V_Rd,max < V_Ed <= 0.6*V_Rd,max
+    - V_Ed > 0.6*V_Rd,max
+
+    Note b:
+    - If h < 200 mm and V_Ed <= V_Rd,c, spacing need not be < 150 mm.
+    """
+    h = float(section_depth)
+    if h <= 0:
+        raise ValueError(f"section_depth must be > 0, got {section_depth}")
+
+    ved = abs(float(V_Ed))
+    vrd_max = max(float(V_Rd_max), 1e-12)
+    ratio = ved / vrd_max
+
+    f_ck_lim = 300.0 if float(f_ck) <= 50.0 else 200.0
+
+    if ratio <= 0.3:
+        s_l_max = min(0.7 * h, f_ck_lim)
+        if h < 200.0 and V_Rd_c is not None and ved <= abs(float(V_Rd_c)):
+            s_l_max = max(s_l_max, 150.0)
+        return s_l_max
+
+    if ratio <= 0.6:
+        return min(0.5 * h, f_ck_lim)
+
+    return min(0.25 * h, 200.0)
 
 # =============================================================================
 # METADATA: Descriptions and code references for all NDP parameters
@@ -139,6 +204,10 @@ _NDP_METADATA = {
         "description": "Minimum shear reinforcement ratio",
         "ref": "9.2.2(5) (9.5N)",
     },
+    "max_link_spacing": {
+        "description": "Maximum allowable longitudinal spacing of shear links/stirrups",
+        "ref": "9.2.2(6)",
+    },
 }
 
 
@@ -190,6 +259,7 @@ EN1992_1_1_2004 = {
         "k_4_crack": 0.425,
         "s_r_max_lim": None,  # No additional limit in base EC2
         "rho_w_min": lambda f_ck, f_yk, f_ctm: 0.08 * sqrt(f_ck) / f_yk,
+        "max_link_spacing": _max_link_spacing_ec2,
     },
 
     # -------------------------------------------------------------------------
@@ -244,6 +314,7 @@ EN1992_1_1_2004 = {
         "k_4_crack": 1.0 / 3.6,
         "s_r_max_lim": lambda sigma_s, diameter, f_ct_eff: (sigma_s * diameter) / (3.6 * f_ct_eff),
         "rho_w_min": lambda f_ck, f_yk, f_ctm: 0.16 * f_ctm / f_yk,  # (9.5aDE)
+        "max_link_spacing": _max_link_spacing_eu_de,
     },
 }
 
@@ -295,6 +366,7 @@ EN1992_2_2005 = {
         "k_3_crack": 3.4,
         "k_4_crack": 0.425,
         "s_r_max_lim": None,  # No additional limit in base EC2
+        "max_link_spacing": _max_link_spacing_ec2,
     },
 
     # -------------------------------------------------------------------------
@@ -348,5 +420,6 @@ EN1992_2_2005 = {
         "k_3_crack": 0.0,
         "k_4_crack": 1.0 / 3.6,
         "s_r_max_lim": lambda sigma_s, diameter, f_ct_eff: (sigma_s * diameter) / (3.6 * f_ct_eff),
+        "max_link_spacing": _max_link_spacing_eu_de,
     },
 }

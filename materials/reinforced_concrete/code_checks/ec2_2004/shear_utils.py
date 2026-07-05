@@ -291,6 +291,47 @@ def calculate_section_breadth(
     return min_width
 
 
+def find_max_allowable_link_spacing(
+    *,
+    effective_depth: float,
+    section_depth: float,
+    f_ck: float,
+    V_Ed: float,
+    V_Rd_max: float,
+    V_Rd_c: Optional[float],
+    link_angle_degrees: float = 90.0,
+) -> float:
+    """
+    Find maximum allowable longitudinal shear link spacing using active NDP.
+
+    This delegates to NDP key ``max_link_spacing`` so country-specific rules
+    can differ strongly from base EC2 while keeping call sites uniform.
+
+    Args:
+        effective_depth: Effective depth d in mm
+        section_depth: Section overall depth h in mm
+        f_ck: Characteristic concrete strength in MPa
+        V_Ed: Design shear force in kN
+        V_Rd_max: Compression strut resistance in kN
+        V_Rd_c: Concrete shear resistance in kN (for note-based rules, optional)
+        link_angle_degrees: Shear reinforcement angle α in degrees
+
+    Returns:
+        Maximum allowable link spacing s_l,max in mm
+    """
+    spacing_fn = get_ndp_callable("max_link_spacing")
+    s_l_max = spacing_fn(
+        effective_depth=float(effective_depth),
+        section_depth=float(section_depth),
+        f_ck=float(f_ck),
+        V_Ed=float(V_Ed),
+        V_Rd_max=float(V_Rd_max),
+        V_Rd_c=None if V_Rd_c is None else float(V_Rd_c),
+        link_angle_degrees=float(link_angle_degrees),
+    )
+    return float(s_l_max)
+
+
 def find_cot_theta_for_V_Ed_fromV_Rd_max(
     V_Ed: float,
     K: float,  # product of: alpha_cw * b_w * z * nu_1 * f_cd

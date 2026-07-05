@@ -35,6 +35,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
     LoadDuration,
 )
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
+    find_max_allowable_link_spacing,
     find_cot_theta_for_V_Ed_fromV_Rd_max,
     find_cot_theta_for_V_Ed_from_V_Rd_s,
     find_alpha_cw,
@@ -710,6 +711,7 @@ class CircularSectionCheck(BaseModel):
         cot_theta_override: Optional[float] = None,
         use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float = 0.95,
+        suppress_warnings: bool = False,
         force_cracked: bool = False,
     ) -> CheckResult:
         """
@@ -729,6 +731,7 @@ class CircularSectionCheck(BaseModel):
                 Eq. 6.13 (V_Rd,s = V_Ed). If False (default), solve from
                 rearranged EC2 Eq. 6.14 / V_Rd,max.
             warning_threshold: Utilization threshold for warnings
+            suppress_warnings: If True, suppress warnings emitted during this check.
             force_cracked: If True, skip the cracking moment check and go
                 straight to the reinforced shear check
 
@@ -838,6 +841,17 @@ class CircularSectionCheck(BaseModel):
         f_cd = self._f_cd_design
         f_ck = self._concrete_uls.f_ck
         alpha_cw = find_alpha_cw(f_cd, sigma_cp_capped)
+        rho_l_for_spacing = self._find_rho_l(b_w, d)
+        V_Rd_c_for_spacing = find_V_Rd_c_cracked(
+            b_w=b_w,
+            d=d,
+            rho_l=rho_l_for_spacing,
+            sigma_cp=sigma_cp_capped,
+            f_ck=f_ck,
+            gamma_c=self._concrete_uls.gamma_c,
+        )
+        spacing_max_allowable: Optional[float] = None
+        spacing_satisfied: Optional[bool] = None
 
         used_note_2 = False
         if cot_theta_override is not None:
@@ -859,6 +873,7 @@ class CircularSectionCheck(BaseModel):
                 self._find_V_Rd_max_with_note_2_iteration(
                     V_Ed, z, sigma_cp_capped, b_w, lambda_1, lambda_2,
                     use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
+                    suppress_warnings=suppress_warnings,
                 )
             )
             K = alpha_cw * b_w * z * nu_1 * f_cd
@@ -891,6 +906,23 @@ class CircularSectionCheck(BaseModel):
                 ForceUnit.N,
             )
 
+        spacing_max_allowable = find_max_allowable_link_spacing(
+            effective_depth=d,
+            section_depth=self.diameter,
+            f_ck=f_ck,
+            V_Ed=V_Ed,
+            V_Rd_max=V_Rd_max,
+            V_Rd_c=V_Rd_c_for_spacing,
+            link_angle_degrees=self.shear_reinforcement.angle,
+        )
+        spacing_satisfied = self.shear_reinforcement.spacing <= spacing_max_allowable + 1e-9
+        if not spacing_satisfied and not suppress_warnings:
+            warnings.warn(
+                "Provided shear link spacing exceeds the maximum allowable spacing: "
+                f"s={self.shear_reinforcement.spacing:.1f} mm > s_max={spacing_max_allowable:.1f} mm.",
+                stacklevel=2,
+            )
+
         # Governing capacity
         V_Rd = min(V_Rd_s, V_Rd_max)
         governing = "V_Rd_s" if V_Rd_s <= V_Rd_max else "V_Rd_max"
@@ -915,6 +947,9 @@ class CircularSectionCheck(BaseModel):
                 f_ywd=f_ywd, used_note_2=used_note_2,
                 cot_theta_from_v_rd_s=use_v_rd_s_for_cot_theta,
                 lambda_1=lambda_1, lambda_2=lambda_2, z_0=z_0,
+                spacing_satisfied=spacing_satisfied,
+                spacing_provided=self.shear_reinforcement.spacing,
+                spacing_max_allowable=spacing_max_allowable,
             ),
         )
 
@@ -932,6 +967,7 @@ class CircularSectionCheck(BaseModel):
         lambda_1: float,
         lambda_2: float,
         use_v_rd_s_for_cot_theta: bool = False,
+        suppress_warnings: bool = False,
     ) -> tuple[float, float, float, float, bool]:
         """
         Calculate V_Rd_max and V_Rd_s with ν₁ Note 2 iteration per EC2 §6.2.3(3).
@@ -1025,6 +1061,8 @@ class CircularSectionCheck(BaseModel):
         sigma_s_2 = f_ywd_n2 * (V_Ed / V_Rd_s_n2) if V_Rd_s_n2 > 0 else f_yk
 
         if sigma_s_2 >= threshold:
+            if suppress_warnings:
+                return V_Rd_max_n1, V_Rd_s_n1, cot_theta_n1, nu_1_n1, False
             # Oscillation — revert to Note 1
             warnings.warn(
                 f"EC2 §6.2.3(3) Note 2: Oscillation detected. "
@@ -1160,6 +1198,9 @@ class CircularSectionCheck(BaseModel):
         lambda_1: Optional[float] = None,
         lambda_2: Optional[float] = None,
         z_0: Optional[float] = None,
+        spacing_satisfied: Optional[bool] = None,
+        spacing_provided: Optional[float] = None,
+        spacing_max_allowable: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Assemble details dict for shear check results.
 
@@ -1191,6 +1232,9 @@ class CircularSectionCheck(BaseModel):
             "f_ywd": f_ywd,
             "used_note_2": used_note_2,
             "cot_theta_from_v_rd_s": cot_theta_from_v_rd_s,
+            "spacing_satisfied": spacing_satisfied,
+            "spacing_provided": spacing_provided,
+            "spacing_max_allowable": spacing_max_allowable,
         }
         # Circular-specific fields
         details["is_cracked"] = is_cracked
