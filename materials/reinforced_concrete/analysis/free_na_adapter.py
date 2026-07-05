@@ -519,32 +519,32 @@ class FreeNADiagramAdapter:
         depth, concrete pivot (eps_cu2) up to the full depth, then the over-
         compression branch (eps_c2 about z_p).
         """
+        # Local import to avoid a runtime circular import (biaxial_interaction is
+        # only type-imported at module level); cached in sys.modules after first call.
+        from materials.reinforced_concrete.analysis.biaxial_interaction import (
+            pivot_strain_slope,
+        )
+
         full_x_rel = self._fibre_x - self.section_centroid_x
         full_y_rel = self._fibre_y - self.section_centroid_y
         full_dist = full_y_rel * cos_a + full_x_rel * sin_a
         y_max_perp = float(np.max(full_dist))
+        y_min_perp = float(np.min(full_dist))
 
         steel_mask = self._fibre_mat == 'steel'
         rebar_y_min = (
-            float(np.min(full_dist[steel_mask])) if np.any(steel_mask) else float(np.min(full_dist))
+            float(np.min(full_dist[steel_mask])) if np.any(steel_mask) else y_min_perp
         )
-        d_eff = y_max_perp - rebar_y_min
-        y_na = y_max_perp - na_depth
 
-        eps_cu2 = self._biaxial.concrete.epsilon_cu2
-        eps_c2 = self._biaxial.concrete.epsilon_c2
-        eps_ud = self._biaxial._eps_tension_limit()
-        x_bal = (eps_cu2 / (eps_cu2 + eps_ud)) * d_eff
-        h_perp = y_max_perp - float(np.min(full_dist))
-        z_p = (1.0 - eps_c2 / eps_cu2) * h_perp
-
-        if na_depth <= x_bal:
-            slope = -eps_ud / (rebar_y_min - y_na)
-        elif na_depth <= h_perp:
-            slope = eps_cu2 / na_depth
-        else:
-            slope = eps_c2 / (na_depth - z_p)
-        return float(slope), float(y_na)
+        return pivot_strain_slope(
+            na_depth,
+            y_max_perp,
+            y_min_perp,
+            rebar_y_min,
+            self._biaxial.concrete.epsilon_cu2,
+            self._biaxial.concrete.epsilon_c2,
+            self._biaxial._eps_tension_limit(),
+        )
 
     def find_strains_for_MN(
         self,

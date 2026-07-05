@@ -92,6 +92,43 @@ class BiaxialInteractionPoint(BaseModel):
         }
 
 
+def pivot_strain_slope(
+    na_depth: float,
+    y_max: float,
+    y_min: float,
+    rebar_y_min: float,
+    eps_cu2: float,
+    eps_c2: float,
+    eps_ud: float,
+) -> tuple[float, float]:
+    """EC2 pivot-method strain slope and neutral-axis position (perpendicular axis).
+
+    Single source of truth for the three-zone pivot strain plane, shared by
+    ``BiaxialMNInteractionSurface.calculate_point_pivot`` / ``_get_strain_at_y_pivot``
+    and ``FreeNADiagramAdapter._pivot_slope_and_y_na`` (previously three verbatim
+    copies). All distances are measured perpendicular to the neutral axis, in
+    centroidal coordinates. Returns ``(slope, y_na)`` such that
+    ``strain(p) = slope * (dist_perp(p) - y_na)``.
+
+    Zones (EC2): tension pivot (eps_ud) below the balanced depth x_bal; concrete
+    pivot (eps_cu2) up to the full perpendicular extent h; then the over-compression
+    branch (eps_c2 about z_p).
+    """
+    h = y_max - y_min
+    d_eff = y_max - rebar_y_min
+    x_bal = (eps_cu2 / (eps_cu2 + eps_ud)) * d_eff
+    z_p = (1.0 - eps_c2 / eps_cu2) * h
+    y_na = y_max - na_depth
+
+    if na_depth <= x_bal:
+        slope = -eps_ud / (rebar_y_min - y_na)
+    elif na_depth <= h:
+        slope = eps_cu2 / na_depth
+    else:
+        slope = eps_c2 / (na_depth - z_p)
+    return float(slope), float(y_na)
+
+
 class BiaxialMNInteractionSurface:
     """
     Biaxial M-M-N interaction surface generator using fibre-based strain compatibility.
@@ -701,25 +738,10 @@ class BiaxialMNInteractionSurface:
         eps_cu2 = self.concrete.epsilon_cu2
         eps_c2 = self.concrete.epsilon_c2
         eps_ud = self._eps_tension_limit()
-
-        x_bal = (eps_cu2 / (eps_cu2 + eps_ud)) * d_eff
-        z_p = (1.0 - eps_c2 / eps_cu2) * h
-        y_na = y_max - na_depth
-
-        # ZONE A: Tension Failure
-        if na_depth <= x_bal:
-            slope = -eps_ud / (rebar_y_min - y_na)
-            return slope * (y - y_na)
-
-        # ZONE B: Bending Failure
-        elif na_depth <= h:
-            slope = eps_cu2 / na_depth
-            return slope * (y - y_na)
-
-        # ZONE C: Compression Failure
-        else:
-            slope = eps_c2 / (na_depth - z_p)
-            return slope * (y - y_na)
+        slope, y_na = pivot_strain_slope(
+            na_depth, y_max, y_min, rebar_y_min, eps_cu2, eps_c2, eps_ud
+        )
+        return slope * (y - y_na)
 
     def calculate_point_pivot(
         self,
@@ -760,7 +782,6 @@ class BiaxialMNInteractionSurface:
         # Find extreme coordinates for pivot logic
         y_max = float(np.max(dist_perp))
         y_min = float(np.min(dist_perp))
-        h = y_max - y_min
 
         # Find extreme rebar position for tension pivot
         steel_mask = material_type == 'steel'
@@ -769,23 +790,16 @@ class BiaxialMNInteractionSurface:
         else:
             rebar_y_min = y_min
 
-        d_eff = y_max - rebar_y_min
-
-        # Vectorized strain calculation
-        eps_cu2 = self.concrete.epsilon_cu2
-        eps_c2 = self.concrete.epsilon_c2
-        eps_ud = self._eps_tension_limit()
-
-        x_bal = (eps_cu2 / (eps_cu2 + eps_ud)) * d_eff
-        z_p = (1.0 - eps_c2 / eps_cu2) * h
-        y_na = y_max - na_depth
-
-        if na_depth <= x_bal:
-            slope = -eps_ud / (rebar_y_min - y_na)
-        elif na_depth <= h:
-            slope = eps_cu2 / na_depth
-        else:
-            slope = eps_c2 / (na_depth - z_p)
+        # Vectorized strain calculation (shared three-zone pivot slope)
+        slope, y_na = pivot_strain_slope(
+            na_depth,
+            y_max,
+            y_min,
+            rebar_y_min,
+            self.concrete.epsilon_cu2,
+            self.concrete.epsilon_c2,
+            self._eps_tension_limit(),
+        )
 
         strains = slope * (dist_perp - y_na)
 
