@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from materials.reinforced_concrete.analysis.crack_width_viewer import (
+from section_design_checks.reinforced_concrete.analysis.crack_width_viewer import (
     CrackWidthViewer,
     _build_compression_mask,
     _compute_load_case_result,
@@ -19,8 +19,8 @@ from materials.reinforced_concrete.analysis.crack_width_viewer import (
     _find_crack_width_boundary,
     _get_domain_bounds,
 )
-from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import CrackingResult
-from materials.reinforced_concrete.constitutive import ConcreteModelType
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.cracking_check import CrackingResult
+from section_design_checks.reinforced_concrete.constitutive import ConcreteModelType
 
 
 @dataclass
@@ -139,7 +139,7 @@ class TestCrackWidthViewerHelpers:
             _Point(M=60.0, N=0.0),
         ]
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer.create_interaction_diagram",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer.create_interaction_diagram",
             lambda **kwargs: _FakeDiagram(points),
         )
 
@@ -166,7 +166,7 @@ class TestCrackWidthViewerHelpers:
         # w_k = |M|/100, limit 0.5 => |M| = 50 boundary
         """Test find crack width boundary finds positive and negative branches."""
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
             lambda check, M, N, force_cracked, skip_stress_checks=True: abs(M) / 100.0,
         )
 
@@ -187,7 +187,7 @@ class TestCrackWidthViewerHelpers:
     def test_find_crack_width_boundary_handles_nan_eval(self, monkeypatch):
         """Test find crack width boundary handles nan eval."""
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
             lambda *args, skip_stress_checks=True, **kwargs: float("nan"),
         )
         pos, neg = _find_crack_width_boundary(
@@ -204,7 +204,7 @@ class TestCrackWidthViewerHelpers:
     def test_find_crack_width_boundary_brentq_valueerror_is_ignored(self, monkeypatch):
         """Test find crack width boundary brentq valueerror is ignored."""
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
             lambda check, M, N, force_cracked, skip_stress_checks=True: abs(M) / 100.0,
         )
         monkeypatch.setattr(
@@ -272,7 +272,7 @@ class TestBuildCompressionMask:
 def _patch_no_compression_mask(monkeypatch):
     """Patch _build_compression_mask to return all-False (no skipping)."""
     monkeypatch.setattr(
-        "materials.reinforced_concrete.analysis.crack_width_viewer._build_compression_mask",
+        "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._build_compression_mask",
         lambda check, M_vals, N_vals: np.zeros((len(N_vals), len(M_vals)), dtype=bool),
     )
 
@@ -341,15 +341,15 @@ class TestCrackWidthViewerPlots:
         viewer = CrackWidthViewer(_FakeCheck(w_k_limit=0.4))
 
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._get_domain_bounds",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._get_domain_bounds",
             lambda check, concrete_model_type, n_points: (-100.0, 100.0, -200.0, 200.0),
         )
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
             lambda check, M, N, force_cracked, skip_stress_checks=True: abs(M) / 200.0 + abs(N) / 1000.0,
         )
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._find_crack_width_boundary",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._find_crack_width_boundary",
             lambda check, N_values, M_min, M_max, w_k_limit, force_cracked, max_workers=None: (
                 [(20.0, float(n)) for n in N_values[:3]],
                 [(-20.0, float(n)) for n in N_values[:3]],
@@ -376,15 +376,15 @@ class TestCrackWidthViewerPlots:
         viewer = CrackWidthViewer(_FakeCheck())
 
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._get_domain_bounds",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._get_domain_bounds",
             lambda check, concrete_model_type, n_points: (-10.0, 10.0, -10.0, 10.0),
         )
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
             lambda check, M, N, force_cracked, skip_stress_checks=True: 0.1,
         )
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._find_crack_width_boundary",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._find_crack_width_boundary",
             lambda check, N_values, M_min, M_max, w_k_limit, force_cracked, max_workers=None: ([], []),
         )
 
@@ -399,15 +399,15 @@ class TestCrackWidthViewerPlots:
         save_path = tmp_path / "crack_contours.html"
 
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._get_domain_bounds",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._get_domain_bounds",
             lambda check, concrete_model_type, n_points: (-10.0, 10.0, -10.0, 10.0),
         )
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
             lambda check, M, N, force_cracked, skip_stress_checks=True: 0.1,
         )
         monkeypatch.setattr(
-            "materials.reinforced_concrete.analysis.crack_width_viewer._find_crack_width_boundary",
+            "section_design_checks.reinforced_concrete.analysis.crack_width_viewer._find_crack_width_boundary",
             lambda check, N_values, M_min, M_max, w_k_limit, force_cracked, max_workers=None: ([], []),
         )
 

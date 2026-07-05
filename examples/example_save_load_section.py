@@ -16,15 +16,15 @@ from typing import Dict, Any, Optional, List
 from shapely.geometry import Polygon
 from shapely import wkt
 
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     RCSection,
     RebarGroup,
     create_rectangular_section,
     create_circular_section,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry.rebar_layer import create_linear_rebar_layer
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.geometry.rebar_layer import create_linear_rebar_layer
 
 
 class RCSectionSerializer:

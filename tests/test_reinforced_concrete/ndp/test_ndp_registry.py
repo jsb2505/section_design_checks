@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-import materials.reinforced_concrete.ndp as ndp_mod
-from materials.reinforced_concrete.ndp import (
+import section_design_checks.reinforced_concrete.ndp as ndp_mod
+from section_design_checks.reinforced_concrete.ndp import (
     CountryCode,
     EurocodeVersion,
     NDPRegistry,

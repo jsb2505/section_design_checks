@@ -4,8 +4,8 @@ Tests for crack-width modular ratio handling (alpha_e = E_s / E_cm).
 
 import pytest
 
-from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
-from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import CrackingCheck
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.cracking_check import CrackingCheck
 
 
 def test_calculate_modular_ratio_pure_helper():

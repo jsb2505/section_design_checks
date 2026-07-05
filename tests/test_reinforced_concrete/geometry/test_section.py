@@ -7,14 +7,14 @@ import math
 import pytest
 from pydantic import ValidationError
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.geometry import (
     RCSection,
     RebarGroup,
     create_circular_section,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.geometry.reinforcement_reconcile import (
+from section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile import (
     ReinforcementInvalidPolicy,
     find_invalid_rebars,
 )

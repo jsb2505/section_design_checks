@@ -4,7 +4,7 @@ Tests for core.units module.
 
 import pytest
 
-from materials.core.units import (
+from section_design_checks.core.units import (
     FORCE_TO_KN,
     LENGTH_TO_MM,
     MOMENT_TO_KNM,

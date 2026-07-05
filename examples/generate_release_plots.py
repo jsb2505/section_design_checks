@@ -19,27 +19,27 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from materials.reinforced_concrete.analysis import create_interaction_diagram
-from materials.reinforced_concrete.analysis.biaxial_interaction import (
+from section_design_checks.reinforced_concrete.analysis import create_interaction_diagram
+from section_design_checks.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialMNInteractionSurface,
 )
-from materials.reinforced_concrete.analysis.biaxial_interaction_viewer import (
+from section_design_checks.reinforced_concrete.analysis.biaxial_interaction_viewer import (
     BiaxialInteractionViewer,
 )
-from materials.reinforced_concrete.analysis.mn_diagram_viewer import MNDiagramViewer
-from materials.reinforced_concrete.analysis.stress_strain_viewer import StressStrainViewer
-from materials.reinforced_concrete.code_checks.ec2_2004 import (
+from section_design_checks.reinforced_concrete.analysis.mn_diagram_viewer import MNDiagramViewer
+from section_design_checks.reinforced_concrete.analysis.stress_strain_viewer import StressStrainViewer
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004 import (
     CrackingCheck,
     LoadCase,
     LoadDuration,
     ShearCheck,
 )
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.geometry.section_viewer import SectionViewer
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
+from section_design_checks.reinforced_concrete.geometry.section_viewer import SectionViewer
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
 
 PLOTS_DIR = Path(__file__).parent / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)

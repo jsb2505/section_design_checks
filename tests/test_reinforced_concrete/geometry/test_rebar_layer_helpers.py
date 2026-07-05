@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_circular_perimeter_rebars,
     create_custom_rebar_layer,
     create_linear_rebar_layer,
@@ -18,7 +18,7 @@ from materials.reinforced_concrete.geometry import (
     create_rectangular_section,
     create_trapezoidal_section,
 )
-from materials.reinforced_concrete.materials import Rebar
+from section_design_checks.reinforced_concrete.materials import Rebar
 
 
 def _bar() -> Rebar:
@@ -407,7 +407,7 @@ class TestLinearGroupSpacingGuard:
 
     def test_spacing_exceeding_line_length_raises(self):
         """5 bars at 200 mm need an 800 mm span; a 100 mm line must be rejected."""
-        from materials.reinforced_concrete.geometry.rebar_layer import (
+        from section_design_checks.reinforced_concrete.geometry.rebar_layer import (
             _create_linear_group_from_line,
         )
 
@@ -425,7 +425,7 @@ class TestLinearGroupSpacingGuard:
 
     def test_spacing_within_line_length_is_placed(self):
         """3 bars at 40 mm (80 mm span) fit on a 200 mm line."""
-        from materials.reinforced_concrete.geometry.rebar_layer import (
+        from section_design_checks.reinforced_concrete.geometry.rebar_layer import (
             _create_linear_group_from_line,
         )
 

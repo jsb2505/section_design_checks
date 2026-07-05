@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from materials.reinforced_concrete.ndp.ndp import (
+from section_design_checks.reinforced_concrete.ndp.ndp import (
     _max_leg_spacing_ec2,
     _max_leg_spacing_eu_de,
     _max_link_spacing_ec2,

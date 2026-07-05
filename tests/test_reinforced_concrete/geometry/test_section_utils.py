@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_box_section,
     create_channel_section,
     create_circular_section,

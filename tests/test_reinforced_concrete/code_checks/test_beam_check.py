@@ -8,13 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 
-import materials.reinforced_concrete.code_checks.ec2_2004 as ec2_mod
-import materials.reinforced_concrete.code_checks.ec2_2004.beam_check as beam_mod
-from materials.reinforced_concrete.code_checks.base_check import CheckResult, CheckStatus
-from materials.reinforced_concrete.code_checks.ec2_2004 import BeamCheck
-from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
-from materials.reinforced_concrete.constitutive import ConcreteModelType
-from materials.reinforced_concrete.ndp import get_ndp_context
+import section_design_checks.reinforced_concrete.code_checks.ec2_2004 as ec2_mod
+import section_design_checks.reinforced_concrete.code_checks.ec2_2004.beam_check as beam_mod
+from section_design_checks.reinforced_concrete.code_checks.base_check import CheckResult, CheckStatus
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004 import BeamCheck
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+from section_design_checks.reinforced_concrete.constitutive import ConcreteModelType
+from section_design_checks.reinforced_concrete.ndp import get_ndp_context
 
 
 def _ok_result(name: str = "ok") -> CheckResult:

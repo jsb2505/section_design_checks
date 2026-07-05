@@ -5,11 +5,11 @@ Tests for reinforced_concrete.constitutive.steel_stress_strain module.
 import numpy as np
 import pytest
 
-from materials.reinforced_concrete.constitutive import (
+from section_design_checks.reinforced_concrete.constitutive import (
     SteelStressStrainEC2,
     create_steel_stress_strain,
 )
-from materials.reinforced_concrete.materials import ReinforcingSteel
+from section_design_checks.reinforced_concrete.materials import ReinforcingSteel
 
 
 class TestSteelStressStrainEC2:

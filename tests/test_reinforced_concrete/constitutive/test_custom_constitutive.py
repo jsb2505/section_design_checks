@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from materials.reinforced_concrete.constitutive.custom_constitutive import (
+from section_design_checks.reinforced_concrete.constitutive.custom_constitutive import (
     CustomConcreteModel,
     CustomSteelModel,
 )

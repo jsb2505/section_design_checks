@@ -5,8 +5,8 @@ Tests for reinforced_concrete.constitutive.concrete_stress_strain module.
 import numpy as np
 import pytest
 
-import materials.reinforced_concrete.constitutive.concrete_stress_strain as css_mod
-from materials.reinforced_concrete.constitutive import (
+import section_design_checks.reinforced_concrete.constitutive.concrete_stress_strain as css_mod
+from section_design_checks.reinforced_concrete.constitutive import (
     ConcreteModelType,
     ConcreteStressStrainBilinear,
     ConcreteStressStrainLinearElastic,
@@ -195,7 +195,7 @@ class TestEC2ConfinedConcrete:
     @pytest.fixture
     def concrete_c30(self):
         """C30/37 concrete material for confinement tests."""
-        from materials.reinforced_concrete.materials.concrete import ConcreteMaterial
+        from section_design_checks.reinforced_concrete.materials.concrete import ConcreteMaterial
         return ConcreteMaterial(grade="C30/37")
 
     def test_unconfined_default(self, concrete_c30):

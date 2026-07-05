@@ -5,9 +5,9 @@ Tests for reinforced_concrete.materials.concrete module.
 import pytest
 from pydantic import ValidationError
 
-import materials.reinforced_concrete.materials.concrete as concrete_mod
-from materials.reinforced_concrete.materials import ConcreteMaterial
-from materials.reinforced_concrete.materials.concrete import find_mean_flexural_tensile_strength
+import section_design_checks.reinforced_concrete.materials.concrete as concrete_mod
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial
+from section_design_checks.reinforced_concrete.materials.concrete import find_mean_flexural_tensile_strength
 
 
 class TestConcreteMaterial:

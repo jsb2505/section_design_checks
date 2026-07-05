@@ -7,10 +7,10 @@ modulus dσ/deps is correct (w.r.t. signed strain eps, not magnitude eps_t).
 
 import numpy as np
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
-from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+from section_design_checks.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 
 def finite_difference_tangent(diagram, strain, h=1e-10):

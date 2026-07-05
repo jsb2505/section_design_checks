@@ -12,20 +12,20 @@ from __future__ import annotations
 
 import pytest
 
-from materials.reinforced_concrete.analysis.biaxial_interaction import (
+from section_design_checks.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialMNInteractionSurface,
     create_biaxial_interaction_surface,
 )
-from materials.reinforced_concrete.analysis.free_na_adapter import FreeNADiagramAdapter
-from materials.reinforced_concrete.analysis.interaction_diagram import (
+from section_design_checks.reinforced_concrete.analysis.free_na_adapter import FreeNADiagramAdapter
+from section_design_checks.reinforced_concrete.analysis.interaction_diagram import (
     create_interaction_diagram,
 )
-from materials.reinforced_concrete.constitutive.concrete_stress_strain import ConcreteModelType
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.constitutive.concrete_stress_strain import ConcreteModelType
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import Rebar
+from section_design_checks.reinforced_concrete.materials import Rebar
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -116,7 +116,7 @@ class TestSolveUncrackedElastic:
     def test_near_singular_K_falls_through(self, symmetric_section, concrete_c30, monkeypatch):
         """A near-singular stiffness matrix must fall through (return None) rather
         than letting np.linalg.solve return garbage."""
-        import materials.reinforced_concrete.analysis.free_na_adapter as fna
+        import section_design_checks.reinforced_concrete.analysis.free_na_adapter as fna
 
         adapter = _make_adapter(symmetric_section, concrete_c30, 25000.0)
         # Normal solve works...

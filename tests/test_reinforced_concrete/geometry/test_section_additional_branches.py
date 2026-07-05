@@ -8,15 +8,15 @@ import numpy as np
 import pytest
 from shapely.geometry import Polygon
 
-import materials.reinforced_concrete.geometry.section as section_mod
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry import (
+import section_design_checks.reinforced_concrete.geometry.section as section_mod
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.geometry import (
     RCSection,
     RebarGroup,
     create_circular_section,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.geometry.reinforcement_reconcile import (
+from section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile import (
     ReinforcementInvalidPolicy,
 )
 
@@ -369,7 +369,7 @@ class TestSectionFactoriesAndWrappers:
         sec = create_rectangular_section(300.0, 500.0, section_name="PlotSection")
         assert str(sec) == repr(sec)
 
-        import materials.reinforced_concrete.geometry.section_viewer as sv_mod
+        import section_design_checks.reinforced_concrete.geometry.section_viewer as sv_mod
 
         captured = {}
 

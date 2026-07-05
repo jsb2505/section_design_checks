@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 from shapely.geometry import Point
 
-from materials.reinforced_concrete.geometry import FibreMesh
-from materials.reinforced_concrete.geometry.fibre_mesh import Fibre
+from section_design_checks.reinforced_concrete.geometry import FibreMesh
+from section_design_checks.reinforced_concrete.geometry.fibre_mesh import Fibre
 
 
 class TestFibreMesh:

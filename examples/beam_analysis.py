@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Tuple, TYPE_CHECKING
 
-from materials.core.units import MomentUnit, to_knm
+from section_design_checks.core.units import MomentUnit, to_knm
 import numpy as np
 
 try:
@@ -32,8 +32,8 @@ except ImportError:
     PLOTLY_AVAILABLE = False
 
 if TYPE_CHECKING:
-    from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
-    from materials.reinforced_concrete.materials.rebar import ShearRebar
+    from section_design_checks.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+    from section_design_checks.reinforced_concrete.materials.rebar import ShearRebar
 
 
 @dataclass

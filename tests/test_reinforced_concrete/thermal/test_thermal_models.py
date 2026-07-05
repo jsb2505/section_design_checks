@@ -9,7 +9,7 @@ from math import exp
 import pytest
 from pydantic import ValidationError
 
-from materials.reinforced_concrete.thermal import (
+from section_design_checks.reinforced_concrete.thermal import (
     AdiabaticTemperature,
     Binder,
     BinderSubstituteType,

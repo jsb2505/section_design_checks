@@ -9,12 +9,12 @@ Demonstrates:
 5. Evaluating stress-strain models
 """
 
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
-from materials.reinforced_concrete.constitutive import (
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.reinforced_concrete.constitutive import (
     create_concrete_stress_strain,
     create_steel_stress_strain,
 )
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_rectangular_section,
     create_linear_rebar_layer,
     FiberMesh,

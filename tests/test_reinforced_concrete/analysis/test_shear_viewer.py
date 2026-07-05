@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
+from section_design_checks.reinforced_concrete.analysis.shear_viewer import ShearViewer
 
 
 @dataclass(frozen=True)
@@ -318,7 +318,7 @@ class TestShearViewer:
     def test_plot_link_angle_study_builds_traces(self, monkeypatch):
         _install_fake_plotly(monkeypatch)
         viewer = ShearViewer(_FakeCheck())
-        import materials.reinforced_concrete.analysis.shear_viewer as sv_mod
+        import section_design_checks.reinforced_concrete.analysis.shear_viewer as sv_mod
 
         monkeypatch.setattr(
             sv_mod,
@@ -355,7 +355,7 @@ class TestShearViewer:
     def test_plot_link_angle_moment_shift_study_builds_traces(self, monkeypatch):
         _install_fake_plotly(monkeypatch)
         viewer = ShearViewer(_FakeCheck())
-        import materials.reinforced_concrete.analysis.shear_viewer as sv_mod
+        import section_design_checks.reinforced_concrete.analysis.shear_viewer as sv_mod
 
         monkeypatch.setattr(
             sv_mod,
@@ -577,7 +577,7 @@ class TestSliderValueAllocation:
     """_build_slider_values must not allocate an unbounded array for a tiny step."""
 
     def test_tiny_step_is_capped(self):
-        from materials.reinforced_concrete.analysis.shear_viewer import _build_slider_values
+        from section_design_checks.reinforced_concrete.analysis.shear_viewer import _build_slider_values
 
         vals = _build_slider_values(value_min=0.0, value_max=100.0, n_points=10, step=1e-9)
         assert len(vals) <= 10000
@@ -585,7 +585,7 @@ class TestSliderValueAllocation:
         assert vals[-1] == pytest.approx(100.0)
 
     def test_normal_step_unchanged(self):
-        from materials.reinforced_concrete.analysis.shear_viewer import _build_slider_values
+        from section_design_checks.reinforced_concrete.analysis.shear_viewer import _build_slider_values
 
         vals = _build_slider_values(value_min=0.0, value_max=10.0, n_points=5, step=2.0)
         assert list(vals) == pytest.approx([0.0, 2.0, 4.0, 6.0, 8.0, 10.0])

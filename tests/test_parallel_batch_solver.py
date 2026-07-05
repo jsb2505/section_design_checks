@@ -8,16 +8,16 @@ import time
 
 import pytest
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
-from materials.reinforced_concrete.analysis.parallel_batch_solver import (
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+from section_design_checks.reinforced_concrete.analysis.parallel_batch_solver import (
     analyze_batch_results,
     extract_strain_arrays,
     solve_batch_parallel,
     solve_batch_serial,
 )
-from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 
 def create_test_diagram():

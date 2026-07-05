@@ -11,11 +11,11 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from materials.reinforced_concrete.analysis.stress_strain_viewer import (
+from section_design_checks.reinforced_concrete.analysis.stress_strain_viewer import (
     StressStrainViewer,
     _StressStrainPlotState,
 )
-from materials.reinforced_concrete.geometry import create_rectangular_section
+from section_design_checks.reinforced_concrete.geometry import create_rectangular_section
 
 
 @dataclass

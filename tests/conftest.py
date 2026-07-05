@@ -4,11 +4,11 @@ Pytest configuration and shared fixtures.
 
 import pytest
 
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
 
 
 @pytest.fixture

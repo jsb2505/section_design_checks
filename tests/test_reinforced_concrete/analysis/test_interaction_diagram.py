@@ -9,16 +9,16 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from materials.reinforced_concrete.analysis.interaction_diagram import (
+from section_design_checks.reinforced_concrete.analysis.interaction_diagram import (
     InteractionPoint,
     MNInteractionDiagram,
     create_interaction_diagram,
 )
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial
 
 
 class TestInteractionPoint:

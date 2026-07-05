@@ -10,14 +10,14 @@ from types import SimpleNamespace
 import pytest
 from shapely.geometry import Point, Polygon
 
-from materials.reinforced_concrete.code_checks.ec2_2004 import shear_utils
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004 import shear_utils
+from section_design_checks.reinforced_concrete.geometry import (
     create_i_beam_section,
     create_linear_rebar_layer,
     create_rectangular_section,
 )
-from materials.reinforced_concrete.materials import Rebar, ShearRebar
-from materials.reinforced_concrete.ndp import ndp_override
+from section_design_checks.reinforced_concrete.materials import Rebar, ShearRebar
+from section_design_checks.reinforced_concrete.ndp import ndp_override
 
 
 def _make_shear_rebar(angle: float = 90.0) -> ShearRebar:

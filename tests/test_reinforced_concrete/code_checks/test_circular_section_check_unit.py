@@ -9,15 +9,15 @@ from types import SimpleNamespace
 
 import pytest
 
-import materials.reinforced_concrete.code_checks.ec2_2004.circular_section_check as csc_mod
-from materials.reinforced_concrete.code_checks.base_check import CheckResult, CheckStatus
-from materials.reinforced_concrete.code_checks.ec2_2004.circular_section_check import (
+import section_design_checks.reinforced_concrete.code_checks.ec2_2004.circular_section_check as csc_mod
+from section_design_checks.reinforced_concrete.code_checks.base_check import CheckResult, CheckStatus
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.circular_section_check import (
     CircularSectionCheck,
 )
-from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
-from materials.reinforced_concrete.geometry import create_circular_section
-from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
-from materials.reinforced_concrete.ndp import ndp_override
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+from section_design_checks.reinforced_concrete.geometry import create_circular_section
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
+from section_design_checks.reinforced_concrete.ndp import ndp_override
 
 
 def _make_stub_check() -> CircularSectionCheck:
@@ -73,7 +73,7 @@ def _make_stub_check() -> CircularSectionCheck:
     object.__setattr__(check, "_stress_limits_check", None)
 
     # Snapshot the current NDP context so the guard doesn't fire on stubs
-    from materials.reinforced_concrete.ndp import get_ndp_context
+    from section_design_checks.reinforced_concrete.ndp import get_ndp_context
     object.__setattr__(check, "_ndp_snapshot", get_ndp_context())
 
     return check

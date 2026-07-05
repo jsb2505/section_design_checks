@@ -2,13 +2,13 @@
 
 import pytest
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry.reinforcement_reconcile import (
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile import (
     ReinforcementInvalidPolicy,
     find_clashing_rebars,
 )
-from materials.reinforced_concrete.geometry.section import RCSection, RebarGroup
-from materials.reinforced_concrete.materials.rebar import Rebar
+from section_design_checks.reinforced_concrete.geometry.section import RCSection, RebarGroup
+from section_design_checks.reinforced_concrete.materials.rebar import Rebar
 
 # ---------------------------------------------------------------------------
 # Helpers

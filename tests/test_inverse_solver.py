@@ -2,10 +2,10 @@
 Quick test to verify the inverse solver works with round-trip verification.
 """
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
-from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+from section_design_checks.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 
 def create_test_section():
@@ -113,7 +113,7 @@ def test_inverse_solver_round_trip():
 def _create_asymmetric_section():
     """300x500mm section with 4xH20 bottom, 2xH16 top — the section used in
     shear viewer demonstrations where tension branch jumping was observed."""
-    from materials.reinforced_concrete.geometry import create_linear_rebar_layer
+    from section_design_checks.reinforced_concrete.geometry import create_linear_rebar_layer
 
     section = create_rectangular_section(width=300, height=500)
     bot_bar = Rebar(diameter=20, grade="B500B")

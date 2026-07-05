@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from materials.reinforced_concrete.analysis.circular_shear_viewer import CircularShearViewer
+from section_design_checks.reinforced_concrete.analysis.circular_shear_viewer import CircularShearViewer
 
 
 @dataclass(frozen=True)
@@ -239,7 +239,7 @@ def _patch_tension_shift(monkeypatch):
     """Patch calculate_tension_shift to avoid needing real shear_utils internals."""
     result = SimpleNamespace(M_design=12.0, M_add=2.0, shift_distance_a_l=50.0, cot_theta=1.5, capped_by_M_cap=False, z=430.0, d=500.0)
     monkeypatch.setattr(
-        "materials.reinforced_concrete.analysis.circular_shear_viewer.calculate_tension_shift",
+        "section_design_checks.reinforced_concrete.analysis.circular_shear_viewer.calculate_tension_shift",
         lambda **kwargs: result,
     )
 
@@ -247,7 +247,7 @@ def _patch_tension_shift(monkeypatch):
 def _patch_V_Rd_c_cracked(monkeypatch):
     """Patch find_V_Rd_c_cracked to return a fixed value."""
     monkeypatch.setattr(
-        "materials.reinforced_concrete.analysis.circular_shear_viewer.find_V_Rd_c_cracked",
+        "section_design_checks.reinforced_concrete.analysis.circular_shear_viewer.find_V_Rd_c_cracked",
         lambda **kwargs: 120.0,
     )
 
@@ -255,11 +255,11 @@ def _patch_V_Rd_c_cracked(monkeypatch):
 def _patch_sigma_cp(monkeypatch):
     """Patch sigma_cp helpers to return simple values."""
     monkeypatch.setattr(
-        "materials.reinforced_concrete.analysis.circular_shear_viewer.sigma_cp_from_N_and_area",
+        "section_design_checks.reinforced_concrete.analysis.circular_shear_viewer.sigma_cp_from_N_and_area",
         lambda N_Ed, area: N_Ed * 1000.0 / area,
     )
     monkeypatch.setattr(
-        "materials.reinforced_concrete.analysis.circular_shear_viewer.cap_sigma_cp_upper",
+        "section_design_checks.reinforced_concrete.analysis.circular_shear_viewer.cap_sigma_cp_upper",
         lambda sigma_cp, f_cd: min(sigma_cp, 0.2 * f_cd),
     )
 

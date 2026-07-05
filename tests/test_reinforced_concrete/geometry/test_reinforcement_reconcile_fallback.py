@@ -8,16 +8,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry.reinforcement_reconcile import (
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile import (
     ReinforcementInvalidPolicy,
     find_clashing_rebars,
     find_invalid_rebars,
     prune_reinforcement_for_outline,
     update_outline,
 )
-from materials.reinforced_concrete.geometry.section import RCSection, RebarGroup
-from materials.reinforced_concrete.materials import Rebar
+from section_design_checks.reinforced_concrete.geometry.section import RCSection, RebarGroup
+from section_design_checks.reinforced_concrete.materials import Rebar
 
 
 class _DummySectionWithMethod:
@@ -78,7 +78,7 @@ class TestUpdateOutlineHelper:
             return "fallback-report"
 
         monkeypatch.setattr(
-            "materials.reinforced_concrete.geometry.reinforcement_reconcile.reconcile_after_outline_change",
+            "section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile.reconcile_after_outline_change",
             _fake_reconcile,
         )
 
@@ -102,7 +102,7 @@ class TestUpdateOutlineHelper:
         """Test fallback path without optional flags."""
         section = _DummySectionFallback(with_suspend_flag=False, with_invalidate=False)
         monkeypatch.setattr(
-            "materials.reinforced_concrete.geometry.reinforcement_reconcile.reconcile_after_outline_change",
+            "section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile.reconcile_after_outline_change",
             lambda sec, *, policy: "ok",
         )
 
@@ -126,7 +126,7 @@ class TestUpdateOutlineHelper:
             raise RuntimeError("reconcile failed")
 
         monkeypatch.setattr(
-            "materials.reinforced_concrete.geometry.reinforcement_reconcile.reconcile_after_outline_change",
+            "section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile.reconcile_after_outline_change",
             _boom,
         )
 
@@ -158,7 +158,7 @@ class TestPruneDefensiveBranches:
         section = SimpleNamespace(rebar_groups=[g0, g1])
 
         monkeypatch.setattr(
-            "materials.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
+            "section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
             lambda sec: (["g0 bar1 invalid"], [(0, 1)]),
         )
 
@@ -179,7 +179,7 @@ class TestPruneDefensiveBranches:
         """Test unknown policy raises value error."""
         section = SimpleNamespace(rebar_groups=[])
         monkeypatch.setattr(
-            "materials.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
+            "section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
             lambda sec: (["invalid"], [(0, 0)]),
         )
 
@@ -236,7 +236,7 @@ class TestPruneDefensiveBranches:
         """Test prune allow invalid returns report without mutating."""
         section = SimpleNamespace(rebar_groups=[SimpleNamespace(), SimpleNamespace()])
         monkeypatch.setattr(
-            "materials.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
+            "section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
             lambda sec: (["invalid-a", "invalid-b"], [(0, 0), (1, 0)]),
         )
 
@@ -254,7 +254,7 @@ class TestPruneDefensiveBranches:
         """Test prune error policy raises."""
         section = SimpleNamespace(rebar_groups=[SimpleNamespace()])
         monkeypatch.setattr(
-            "materials.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
+            "section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
             lambda sec: (["invalid"], [(0, 0)]),
         )
 
@@ -276,7 +276,7 @@ class TestPruneDefensiveBranches:
         )
         section = SimpleNamespace(rebar_groups=[g0, g1])
         monkeypatch.setattr(
-            "materials.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
+            "section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
             lambda sec: (["group 0 invalid"], [(0, 0)]),
         )
 
@@ -298,7 +298,7 @@ class TestPruneDefensiveBranches:
         )
         section = SimpleNamespace(rebar_groups=[g0])
         monkeypatch.setattr(
-            "materials.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
+            "section_design_checks.reinforced_concrete.geometry.reinforcement_reconcile.find_invalid_rebars",
             lambda sec: (["group 0 bar 0 invalid"], [(0, 0)]),
         )
 

@@ -9,8 +9,8 @@ The accidental limit state provides higher design strength due to the reduced pa
 which is appropriate for exceptional loading conditions like impact or explosion.
 """
 
-from materials.reinforced_concrete.materials import ConcreteMaterial
-from materials.reinforced_concrete.constitutive import create_concrete_stress_strain
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial
+from section_design_checks.reinforced_concrete.constitutive import create_concrete_stress_strain
 
 
 def main():

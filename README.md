@@ -77,25 +77,35 @@ All plots are interactive Plotly figures; the PNGs above are regenerated with
 
 ## Installation
 
+From the first published release onwards, via PyPI:
+
+```bash
+pip install "section-design-checks[viz]"   # viz extra adds Plotly
+```
+
+Or from source:
+
 ```bash
 git clone https://github.com/jsb2505/section_design_checks.git
 cd section_design_checks
-pip install -e ".[viz]"        # viz extra adds Plotly
+pip install -e ".[viz]"
 ```
 
-Requires Python 3.11+. Core dependencies: Pydantic v2, NumPy, SciPy, Shapely.
-For static image export of the Plotly figures, additionally `pip install kaleido`.
+The distribution is named `section-design-checks`; the import package is
+`section_design_checks`. Requires Python 3.11+. Core dependencies: Pydantic v2,
+NumPy, SciPy, Shapely. For static image export of the Plotly figures,
+additionally `pip install kaleido`.
 
 ## Quick start
 
 ```python
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
+from section_design_checks.reinforced_concrete.geometry import (
     create_rectangular_section,
     create_linear_rebar_layer,
 )
-from materials.reinforced_concrete.analysis import create_interaction_diagram
-from materials.reinforced_concrete.code_checks.ec2_2004 import (
+from section_design_checks.reinforced_concrete.analysis import create_interaction_diagram
+from section_design_checks.reinforced_concrete.code_checks.ec2_2004 import (
     CrackingCheck,
     LoadCase,
     ShearCheck,
@@ -144,7 +154,7 @@ print(f"w_k = {crack.w_k:.3f} mm (limit {crack.w_k_limit} mm)")
 ### Biaxial bending
 
 ```python
-from materials.reinforced_concrete.analysis.biaxial_interaction import (
+from section_design_checks.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialMNInteractionSurface,
 )
 
@@ -163,7 +173,7 @@ surface.plot(
 ### National Annexes
 
 ```python
-from materials.reinforced_concrete.ndp import CountryCode, set_ndp_context
+from section_design_checks.reinforced_concrete.ndp import CountryCode, set_ndp_context
 
 set_ndp_context(country=CountryCode.EU_UK)   # UK National Annex
 set_ndp_context(country=CountryCode.EU_DE)   # German National Annex
@@ -213,7 +223,7 @@ pytest -m slow        # slow lane (biaxial surface regression)
 ## Project structure
 
 ```
-materials/
+section_design_checks/
 ├── core/                        # Base abstractions: materials, constitutive, units
 └── reinforced_concrete/
     ├── materials/               # Concrete, rebar, ageing
@@ -238,8 +248,8 @@ Issues and pull requests are welcome. Please run the test suite and the
 `ruff`/`mypy` gates before submitting:
 
 ```bash
-ruff check materials tests --extend-ignore E501
-mypy materials --ignore-missing-imports
+ruff check section_design_checks tests --extend-ignore E501
+mypy section_design_checks --ignore-missing-imports
 pytest
 ```
 

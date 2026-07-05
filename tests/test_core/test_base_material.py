@@ -1,9 +1,9 @@
-"""Tests for :mod:`materials.core.base_material`."""
+"""Tests for :mod:`section_design_checks.core.base_material`."""
 
 import pytest
 from pydantic import ValidationError
 
-from materials.core.base_material import BaseMaterial
+from section_design_checks.core.base_material import BaseMaterial
 
 
 class ExampleMaterial(BaseMaterial):

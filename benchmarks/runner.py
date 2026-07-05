@@ -25,11 +25,11 @@ from benchmarks.schemas import (
     LimitState,
     PointError,
 )
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.analysis import create_interaction_diagram
-from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
-from materials.reinforced_concrete.geometry import RCSection, RebarGroup
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.analysis import create_interaction_diagram
+from section_design_checks.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
+from section_design_checks.reinforced_concrete.geometry import RCSection, RebarGroup
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 
 # ---------------------------------------------------------------------------

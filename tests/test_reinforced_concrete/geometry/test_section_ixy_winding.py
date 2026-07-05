@@ -8,8 +8,8 @@ corrupted I_xy. The fix normalises every hole term by sign(area).
 
 import pytest
 
-from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry import RCSection
+from section_design_checks.core.geometry import Point2D
+from section_design_checks.reinforced_concrete.geometry import RCSection
 
 
 def _rect(x0, y0, x1, y1, ccw=True):
