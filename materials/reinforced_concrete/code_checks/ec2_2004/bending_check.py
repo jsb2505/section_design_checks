@@ -7,7 +7,7 @@ Uses the fibre-based M-N interaction diagram infrastructure.
 
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, model_validator
 import numpy as np
 
 from materials.reinforced_concrete.code_checks.base_check import (
@@ -115,6 +115,15 @@ class BendingCheck(BaseCodeCheck):
     _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
     _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
     _diagram_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _validate_concrete_model_type(self) -> "BendingCheck":
+        if self.concrete_model_type == ConcreteModelType.LINEAR_ELASTIC:
+            raise ValueError(
+                "LINEAR_ELASTIC concrete model is only valid for SLS checks "
+                "(e.g. CrackingCheck), not for ULS bending checks."
+            )
+        return self
 
     def _take_snapshot(self) -> dict:
         """Capture current state of inputs that affect the interaction diagram."""

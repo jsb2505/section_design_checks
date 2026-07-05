@@ -45,6 +45,7 @@ class ConcreteModelType(StrEnum):
     SCHEMATIC = "schematic"
     PARABOLA_RECTANGLE = "parabola-rectangle"
     BILINEAR = "bilinear"
+    LINEAR_ELASTIC = "linear-elastic"
 
 
 def _apply_ultimate_tolerance_clip(
@@ -676,11 +677,135 @@ class ConcreteStressStrainBilinear(BaseConstitutiveModel):
         return float(self.f_c)
 
 
+class ConcreteStressStrainLinearElastic(BaseConstitutiveModel):
+    """
+    Linear elastic stress-strain relationship for concrete.
+
+    Primarily used for Serviceability Limit State (SLS) analysis where concrete
+    stresses remain in the elastic range. Non-linearity at SLS is typically handled
+    through the effective modulus E_cm,eff rather than the constitutive law.
+
+    Formulation:
+        Compression (ε > 0): σ = E_mod × ε
+        Tension (ε < 0, when include_tension=True):
+            σ = E_mod × ε  for |ε| ≤ f_ctm / E_mod
+            σ = 0           for |ε| > f_ctm / E_mod  (cracked, brittle cutoff)
+        Tension (ε < 0, when include_tension=False):
+            σ = 0
+
+    The elastic modulus can be set explicitly (e.g. E_cm_eff for long-term
+    creep-reduced analysis) or defaults to E_cm from the concrete material.
+
+    Sign convention:
+        - Strain > 0 => compression, Stress > 0 => compression
+        - Strain < 0 => tension, Stress < 0 => tension (when include_tension=True)
+    """
+
+    concrete: ConcreteMaterial = Field(..., description="Concrete material")
+    name: str = Field(default="EC2 Linear Elastic", description="Model name")
+
+    elastic_modulus: Optional[float] = Field(
+        default=None,
+        description="Elastic modulus in MPa. If None, uses concrete.E_cm.",
+        gt=0.0,
+    )
+
+    include_tension: bool = Field(
+        default=False,
+        description="If True, model concrete tension up to f_ctm (brittle cutoff).",
+    )
+
+    @property
+    def E_mod(self) -> float:
+        """Effective elastic modulus (MPa)."""
+        if self.elastic_modulus is not None:
+            return self.elastic_modulus
+        return self.concrete.E_cm
+
+    @property
+    def cracking_strain(self) -> float:
+        """Cracking strain (negative, tension convention). Only meaningful when include_tension=True."""
+        return -self.concrete.f_ctm / self.E_mod
+
+    def get_stress(self, strain: float) -> float:
+        """
+        Calculate stress for given strain.
+
+        Args:
+            strain: Strain (compression positive)
+
+        Returns:
+            Stress in MPa (compression positive, tension negative when enabled)
+        """
+        if strain > 0.0:
+            return self.E_mod * strain
+
+        if strain == 0.0:
+            return 0.0
+
+        # Tension (strain < 0)
+        if not self.include_tension:
+            return 0.0
+
+        if strain < self.cracking_strain:
+            return 0.0
+
+        return self.E_mod * strain
+
+    def get_stress_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """Vectorized stress calculation."""
+        strains = np.asarray(strains)
+        stresses = np.zeros_like(strains)
+
+        # Compression: σ = E × ε
+        comp = strains > 0.0
+        if np.any(comp):
+            stresses[comp] = self.E_mod * strains[comp]
+
+        # Tension (optional)
+        if self.include_tension:
+            tension = (strains < 0.0) & (strains >= self.cracking_strain)
+            if np.any(tension):
+                stresses[tension] = self.E_mod * strains[tension]
+
+        return stresses
+
+    def get_tangent_modulus(self, strain: float) -> float:
+        """Tangent modulus (analytical)."""
+        if strain > 0.0:
+            return self.E_mod
+        if self.include_tension and self.cracking_strain <= strain < 0.0:
+            return self.E_mod
+        return 0.0
+
+    def get_tangent_modulus_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """Vectorized tangent modulus."""
+        strains = np.asarray(strains)
+        E_t = np.zeros_like(strains)
+
+        active = strains > 0.0
+        if self.include_tension:
+            active = active | ((strains < 0.0) & (strains >= self.cracking_strain))
+
+        E_t[active] = self.E_mod
+        return E_t
+
+    def get_ultimate_strain(self) -> float:
+        """No defined ultimate strain for linear elastic at SLS; return large value."""
+        return 0.01  # 1% - well beyond any SLS strain
+
+    def get_yield_stress(self) -> float:
+        """Return f_ck as reference strength."""
+        return float(self.concrete.f_ck)
+
+
 def create_concrete_stress_strain(
     concrete: ConcreteMaterial,
     model_type: ConcreteModelType = ConcreteModelType.PARABOLA_RECTANGLE,
     use_characteristic: bool = False,
     use_accidental: bool = False,
+    elastic_modulus: Optional[float] = None,
+    include_tension: bool = False,
 ) -> BaseConstitutiveModel:
     """
     Factory function to create concrete stress-strain models.
@@ -688,8 +813,10 @@ def create_concrete_stress_strain(
     Args:
         concrete: Concrete material
         model_type: Type of model to create
-        use_characteristic: Use f_ck instead of f_cd (ignored for schematic)
-        use_accidental: Use f_cd_accidental instead of f_cd (ignored for schematic)
+        use_characteristic: Use f_ck instead of f_cd (ignored for schematic and linear-elastic)
+        use_accidental: Use f_cd_accidental instead of f_cd (ignored for schematic and linear-elastic)
+        elastic_modulus: Elastic modulus override in MPa (only used for LINEAR_ELASTIC)
+        include_tension: Model tension up to f_ctm (only used for LINEAR_ELASTIC)
 
     Returns:
         Concrete stress-strain model
@@ -710,13 +837,20 @@ def create_concrete_stress_strain(
                 use_characteristic=use_characteristic,
                 use_accidental=use_accidental
             )
-        
+
         case ConcreteModelType.BILINEAR:
             return ConcreteStressStrainBilinear(
                 concrete=concrete,
                 use_characteristic=use_characteristic,
                 use_accidental=use_accidental
             )
-        
+
+        case ConcreteModelType.LINEAR_ELASTIC:
+            return ConcreteStressStrainLinearElastic(
+                concrete=concrete,
+                elastic_modulus=elastic_modulus,
+                include_tension=include_tension,
+            )
+
         case _:
             raise ValueError(f"Unknown model type: {model_type}")

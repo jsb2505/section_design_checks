@@ -182,6 +182,8 @@ class MNInteractionDiagram:
         confinement_rho_s: Optional[float] = None,
         confinement_f_yh: Optional[float] = None,
         ignore_compression_steel: bool = False,
+        elastic_modulus: Optional[float] = None,
+        include_tension: bool = False,
     ):
         self.section = section
         self.concrete = concrete
@@ -190,6 +192,8 @@ class MNInteractionDiagram:
         self.confined_concrete = confined_concrete
         self.ignore_compression_steel = ignore_compression_steel
         self.confinement_rho_s = confinement_rho_s
+        self.elastic_modulus = elastic_modulus
+        self.include_tension = include_tension
 
         # IMPORTANT: treat confinement_f_yh as CHARACTERISTIC if provided.
         # If None, default to the first longitudinal group's characteristic yield strength.
@@ -200,7 +204,9 @@ class MNInteractionDiagram:
             concrete=concrete,
             model_type=concrete_model_type,
             use_characteristic=use_characteristic,
-            use_accidental=use_accidental
+            use_accidental=use_accidental,
+            elastic_modulus=elastic_modulus,
+            include_tension=include_tension,
         )
 
         if len(section.rebar_groups) == 0:

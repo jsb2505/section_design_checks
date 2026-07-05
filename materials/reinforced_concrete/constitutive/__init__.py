@@ -7,6 +7,7 @@ from materials.reinforced_concrete.constitutive.concrete_stress_strain import (
     ConcreteStressStrainSchematic,
     ConcreteStressStrainParabolaRectangle,
     ConcreteStressStrainBilinear,
+    ConcreteStressStrainLinearElastic,
     ConcreteModelType,
     create_concrete_stress_strain,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "ConcreteStressStrainSchematic",
     "ConcreteStressStrainParabolaRectangle",
     "ConcreteStressStrainBilinear",
+    "ConcreteStressStrainLinearElastic",
     "ConcreteModelType",
     "create_concrete_stress_strain",
     "SteelStressStrainEC2",

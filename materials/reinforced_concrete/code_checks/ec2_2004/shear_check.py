@@ -11,7 +11,7 @@ This enables checking multiple load cases against the same section efficiently.
 from typing import Optional, ClassVar
 from math import atan, degrees, radians, sin, sqrt
 import warnings
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from materials.core.units import ForceUnit, to_kn
 from materials.reinforced_concrete.ndp import get_ndp
@@ -224,16 +224,28 @@ class ShearCheck(BaseCodeCheck):
     )
 
 
+
     # =========================
     # Internal state (private)
     # =========================
 
     _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
+    _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
     _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
+    _diagram_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
 
     # NDP cot(θ) limits from National Annex (EC2 §6.2.3(2))
     MIN_COT_THETA: ClassVar[float] = get_ndp("cot_theta_lower_lim")  # θ = 45°
     MAX_COT_THETA: ClassVar[float] = get_ndp("cot_theta_upper_lim")  # θ = 21.8°
+
+    @model_validator(mode="after")
+    def _validate_concrete_model_type(self) -> "ShearCheck":
+        if self.concrete_model_type == ConcreteModelType.LINEAR_ELASTIC:
+            raise ValueError(
+                "LINEAR_ELASTIC concrete model is only valid for SLS checks "
+                "(e.g. CrackingCheck), not for ULS shear checks."
+            )
+        return self
 
     def _take_snapshot(self) -> dict:
         """Capture current state of inputs that affect the interaction diagram."""
@@ -245,20 +257,36 @@ class ShearCheck(BaseCodeCheck):
             "use_accidental": self.use_accidental,
         }
 
-    def _get_diagram(self) -> MNInteractionDiagram:
+    def _get_diagram(self, ignore_compression_steel: bool = False) -> MNInteractionDiagram:
         """Get the cached diagram, rebuilding if inputs have changed."""
         snapshot = self._take_snapshot()
-        if self._diagram is None or snapshot != self._diagram_snapshot:
-            self._diagram = MNInteractionDiagram(
-                section=self.section,
-                concrete=self.concrete,
-                concrete_model_type=self.concrete_model_type,
-                steel_model_type=self.steel_model_type,
-                use_characteristic=False,
-                use_accidental=self.use_accidental,
-            )
-            self._diagram_snapshot = snapshot
-        return self._diagram
+
+        if ignore_compression_steel:
+            if self._diagram_no_comp_steel is None or snapshot != self._diagram_no_comp_snapshot:
+                self._diagram_no_comp_steel = MNInteractionDiagram(
+                    section=self.section,
+                    concrete=self.concrete,
+                    concrete_model_type=self.concrete_model_type,
+                    steel_model_type=self.steel_model_type,
+                    use_characteristic=False,
+                    use_accidental=self.use_accidental,
+                    ignore_compression_steel=True,
+                )
+                self._diagram_no_comp_snapshot = snapshot
+            return self._diagram_no_comp_steel
+        else:
+            if self._diagram is None or snapshot != self._diagram_snapshot:
+                self._diagram = MNInteractionDiagram(
+                    section=self.section,
+                    concrete=self.concrete,
+                    concrete_model_type=self.concrete_model_type,
+                    steel_model_type=self.steel_model_type,
+                    use_characteristic=False,
+                    use_accidental=self.use_accidental,
+                    ignore_compression_steel=False,
+                )
+                self._diagram_snapshot = snapshot
+            return self._diagram
 
     @property
     def _A_transformed(self) -> float:
@@ -323,6 +351,7 @@ class ShearCheck(BaseCodeCheck):
         m_tol: float = 1e-6,
         strain_tol: float = 1e-15,
         warn_on_fallback: bool = True,
+        ignore_compression_steel: bool = False,
     ) -> float:
         """
         Effective depth d (mm) measured from the governing compression face.
@@ -374,7 +403,7 @@ class ShearCheck(BaseCodeCheck):
         # If strains missing, try to solve if you can (robust helper)
         if eps_top is None or eps_bottom is None:
             try:
-                eps_top, eps_bottom = self._get_diagram().find_strains_for_MN(M_Ed, N_Ed)
+                eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(M_Ed, N_Ed)
             except Exception:
                 eps_top, eps_bottom = None, None
 
@@ -430,6 +459,7 @@ class ShearCheck(BaseCodeCheck):
         d: float,
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
+        ignore_compression_steel: bool = False,
     ) -> tuple[float, Optional[float]]:
         """
         Lever arm for this load case.
@@ -450,7 +480,7 @@ class ShearCheck(BaseCodeCheck):
         # - fallback to 0.9d when z_mech is None / suspicious
         # - optionally cap to 0.9d
         # - emit warnings when fallback/cap occurs
-        return self._get_diagram().get_lever_arm(
+        return self._get_diagram(ignore_compression_steel).get_lever_arm(
             M_Ed=M_Ed,
             N_Ed=N_Ed,
             d=d,
@@ -468,6 +498,7 @@ class ShearCheck(BaseCodeCheck):
         d: float,
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
+        ignore_compression_steel: bool = False,
     ) -> float:
         """
         Longitudinal reinforcement ratio (§6.2.2(1)).
@@ -513,7 +544,7 @@ class ShearCheck(BaseCodeCheck):
 
         # Rigorous: use actual NA from strain state
         if eps_top is None or eps_bottom is None:
-            eps_top, eps_bottom = self._get_diagram().find_strains_for_MN(M_Ed, N_Ed)
+            eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(M_Ed, N_Ed)
         return self._compute_rho_l_from_strains(eps_top, eps_bottom, d)
 
 
@@ -684,6 +715,7 @@ class ShearCheck(BaseCodeCheck):
         load_case: ShearLoadCase,
         cot_theta_override: Optional[float] = None,
         warning_threshold: float = 0.95,
+        ignore_compression_steel: bool = False,
         **kwargs,
     ) -> CheckResult:
         """
@@ -724,6 +756,7 @@ class ShearCheck(BaseCodeCheck):
             N_Ed=load_case.N_Ed,
             cot_theta_override=cot_theta_override,
             warning_threshold=warning_threshold,
+            ignore_compression_steel=ignore_compression_steel,
         )
 
 
@@ -734,6 +767,7 @@ class ShearCheck(BaseCodeCheck):
         N_Ed: float,
         cot_theta_override: Optional[float],
         warning_threshold: float,
+        ignore_compression_steel: bool = False,
     ) -> CheckResult:
         """Perform check for single load case (internal)."""
         # Treat shear as magnitude (absolute value)
@@ -744,14 +778,14 @@ class ShearCheck(BaseCodeCheck):
         # This avoids redundant solves and ensures consistency
         # Only solve if M_Ed is non-zero (moment determines compression face, not axial load)
         if abs(M_Ed) > 1e-6:
-            eps_top, eps_bottom = self._get_diagram().find_strains_for_MN(M_Ed, N_Ed)
+            eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(M_Ed, N_Ed)
         else:
             eps_top, eps_bottom = None, None
 
         # Compute load-dependent geometric parameters (pass strains to avoid re-solving)
-        d = self.find_effective_depth(M_Ed, N_Ed, eps_top, eps_bottom)
+        d = self.find_effective_depth(M_Ed, N_Ed, eps_top, eps_bottom, ignore_compression_steel=ignore_compression_steel)
         sigma_cp = self._find_sigma_cp(N_Ed)
-        rho_l = self._find_rho_l(M_Ed, N_Ed, d, eps_top, eps_bottom)
+        rho_l = self._find_rho_l(M_Ed, N_Ed, d, eps_top, eps_bottom, ignore_compression_steel=ignore_compression_steel)
 
         # 1. Initialize variables that might not be reached
         V_Rd_s: Optional[float] = None
@@ -767,7 +801,7 @@ class ShearCheck(BaseCodeCheck):
 
         if reinforcement:
 
-            z_ec2, z_mech = self.find_lever_arm(M_Ed, N_Ed, d, eps_top, eps_bottom)
+            z_ec2, z_mech = self.find_lever_arm(M_Ed, N_Ed, d, eps_top, eps_bottom, ignore_compression_steel=ignore_compression_steel)
 
             if cot_theta_override is not None:
                 cot_theta = cot_theta_override
