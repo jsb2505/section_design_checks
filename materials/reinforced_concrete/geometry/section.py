@@ -678,6 +678,70 @@ class RCSection(BaseGeometry):
         return (float(min_x), float(min_y), float(max_x), float(max_y))
 
 
+    def is_symmetric_about_vertical_axis(self, tol: float = 0.01) -> bool:
+        """
+        Check whether the section (geometry + rebar) is approximately symmetric
+        about the vertical axis through the gross concrete centroid.
+
+        When this returns False, the 2D M-N solver (horizontal NA only) cannot
+        satisfy minor-axis equilibrium. The biaxial solver should be used instead.
+
+        Uses two independent checks:
+        1. Geometry: the product of inertia I_xy ≈ 0 relative to I_xx and I_yy
+        2. Rebar: for each bar at (x, y), a matching bar exists at (2·cx − x, y)
+
+        Args:
+            tol: Relative tolerance for geometry check and absolute tolerance (mm)
+                 for rebar position matching.
+
+        Returns:
+            True if section is symmetric about the vertical centroidal axis.
+        """
+        import math
+
+        # 1. Geometry check via product of inertia
+        I_xx, I_yy, I_xy = self.get_second_moment_area()
+        I_ref = math.sqrt(max(I_xx * I_yy, 1e-18))
+        if abs(I_xy) > tol * I_ref:
+            return False
+
+        # 2. Rebar symmetry check
+        if self.rebar_groups:
+            cx, _ = self.get_centroid()
+
+            # Collect all bar positions and areas
+            bars: list[tuple[float, float, float]] = []
+            for group in self.rebar_groups:
+                for pos in group.positions:
+                    bars.append((float(pos.x), float(pos.y), float(group.rebar.area)))
+
+            if bars:
+                matched = [False] * len(bars)
+                for i, (xi, yi, ai) in enumerate(bars):
+                    if matched[i]:
+                        continue
+                    # Find mirror bar at (2*cx - xi, yi)
+                    mirror_x = 2.0 * cx - xi
+                    found = False
+                    for j, (xj, yj, aj) in enumerate(bars):
+                        if j == i or matched[j]:
+                            continue
+                        if (abs(xj - mirror_x) < tol
+                                and abs(yj - yi) < tol
+                                and abs(aj - ai) < max(tol * ai, 1e-6)):
+                            matched[i] = True
+                            matched[j] = True
+                            found = True
+                            break
+                    if not found:
+                        # Bar on centroidal axis counts as its own mirror
+                        if abs(xi - cx) < tol:
+                            matched[i] = True
+                        else:
+                            return False
+
+        return True
+
     @property
     def total_steel_area(self) -> float:
         """Total area of all reinforcement in mm²."""

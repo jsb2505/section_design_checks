@@ -124,6 +124,16 @@ class BendingCheck(BaseCodeCheck):
         description="Use accidental limit state partial factors (gamma_c_accidental, gamma_s_accidental)",
     )
 
+    free_neutral_axis: bool = Field(
+        default=False,
+        description=(
+            "Allow the neutral axis to rotate to satisfy biaxial equilibrium. "
+            "When True and the section is asymmetric about the minor axis, the "
+            "biaxial solver is used to produce an M-N diagram where Mz = 0 is "
+            "enforced. When False (default), the neutral axis is locked horizontal."
+        ),
+    )
+
     apply_tension_cot_theta_limit: bool = Field(
         default=True,
         description=(
@@ -206,6 +216,7 @@ class BendingCheck(BaseCodeCheck):
                 self._diagram_no_comp_steel = create_interaction_diagram(
                     section=self.section,
                     concrete=self.concrete,
+                    free_neutral_axis=self.free_neutral_axis,
                     concrete_model_type=self.concrete_model_type,
                     steel_model_type=self.steel_model_type,
                     n_fibres_width=self.n_fibres_width,
@@ -222,6 +233,7 @@ class BendingCheck(BaseCodeCheck):
                 self._diagram = create_interaction_diagram(
                     section=self.section,
                     concrete=self.concrete,
+                    free_neutral_axis=self.free_neutral_axis,
                     concrete_model_type=self.concrete_model_type,
                     steel_model_type=self.steel_model_type,
                     n_fibres_width=self.n_fibres_width,

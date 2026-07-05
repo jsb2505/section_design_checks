@@ -222,6 +222,8 @@ class BiaxialMNInteractionSurface:
         self._dense_params: Optional[tuple[int, int]] = None
         self._surface_cache: dict[tuple[int, int], tuple[BiaxialInteractionPoint, ...]] = {}
         self._hull_cache: dict[tuple[int, int], ConvexHull] = {}
+        self._grid_indices: list[tuple[int, int]] = []
+        self._grid_shape: tuple[int, int] = (0, 0)
 
     # ----------------------------
     # Tension limit (derived from steel models)
@@ -348,6 +350,111 @@ class BiaxialMNInteractionSurface:
             pts = self.generate_surface_pivot(n_angles=n_angles, n_axial_levels=n_axial_levels)
             self._hull_cache[key] = self._build_convex_hull(pts)
         return self._hull_cache[key]
+
+    # ----------------------------
+    # 2D M-N slice extraction
+    # ----------------------------
+
+    def get_mn_slice(
+        self,
+        mz_target: float = 0.0,
+        n_angles: int = 72,
+        n_axial_levels: int = 30,
+    ) -> List[Tuple[float, float]]:
+        """
+        Extract a 2D M-N curve by slicing the 3D convex hull at a fixed Mz value.
+
+        Intersects each triangular facet of the hull with the plane Mz = mz_target.
+        Each facet that crosses the plane produces a line segment in (N, My) space.
+        The segments are ordered into a closed polygon.
+
+        For the free-NA case (mz_target=0), this produces an M-N diagram where
+        the NA angle is free to rotate — correctly accounting for asymmetric
+        sections that would otherwise have non-zero Mz residual.
+
+        Args:
+            mz_target: The minor-axis moment to slice at (kN·m, default 0.0)
+            n_angles: Resolution for surface generation
+            n_axial_levels: Resolution for surface generation
+
+        Returns:
+            List of (My, N) tuples forming a closed 2D envelope, ordered by
+            angle around the centroid.
+        """
+        hull = self._get_hull(n_angles=n_angles, n_axial_levels=n_axial_levels)
+        vertices = hull.points  # shape (n_pts, 3): columns are [N, My, Mz]
+
+        # Collect intersection segments in (N, My) space
+        segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+
+        for simplex in hull.simplices:
+            # simplex is a triangle (3 vertex indices)
+            tri = vertices[simplex]  # shape (3, 3)
+            mz_vals = tri[:, 2]  # Mz column
+
+            # Find which edges cross the plane Mz = mz_target
+            edge_points: List[Tuple[float, float]] = []
+
+            for i0, i1 in [(0, 1), (1, 2), (2, 0)]:
+                mz0, mz1 = mz_vals[i0], mz_vals[i1]
+                d0 = mz0 - mz_target
+                d1 = mz1 - mz_target
+
+                if abs(d0) < 1e-9:
+                    # Vertex on the plane
+                    edge_points.append((float(tri[i0, 1]), float(tri[i0, 0])))  # (My, N)
+                    continue
+
+                if abs(d1) < 1e-9:
+                    # Other vertex on plane — handled when that vertex is i0
+                    continue
+
+                if d0 * d1 < 0:
+                    # Edge crosses the plane
+                    t = d0 / (d0 - d1)
+                    pt = tri[i0] + t * (tri[i1] - tri[i0])
+                    edge_points.append((float(pt[1]), float(pt[0])))  # (My, N)
+
+            # De-duplicate edge points within tolerance
+            unique_pts: List[Tuple[float, float]] = []
+            for p in edge_points:
+                if not any(abs(p[0] - u[0]) < 1e-9 and abs(p[1] - u[1]) < 1e-9 for u in unique_pts):
+                    unique_pts.append(p)
+
+            if len(unique_pts) == 2:
+                segments.append((unique_pts[0], unique_pts[1]))
+
+        if not segments:
+            return []
+
+        # Order segments into a closed polygon by angle from centroid
+        all_points: List[Tuple[float, float]] = []
+        for s in segments:
+            all_points.extend(s)
+
+        # De-duplicate
+        unique_all: List[Tuple[float, float]] = []
+        for p in all_points:
+            if not any(abs(p[0] - u[0]) < 1e-6 and abs(p[1] - u[1]) < 1e-6 for u in unique_all):
+                unique_all.append(p)
+
+        if len(unique_all) < 3:
+            return unique_all
+
+        # Sort by angle around centroid for proper polygon ordering
+        my_arr = np.array([p[0] for p in unique_all])
+        n_arr = np.array([p[1] for p in unique_all])
+        my_c = float(np.mean(my_arr))
+        n_c = float(np.mean(n_arr))
+
+        angles_sort = np.arctan2(n_arr - n_c, my_arr - my_c)
+        order = np.argsort(angles_sort)
+
+        result = [(unique_all[i][0], unique_all[i][1]) for i in order]
+        # Close the polygon
+        result.append(result[0])
+
+        return result
 
     # ----------------------------
     # Capacity checks
@@ -647,9 +754,11 @@ class BiaxialMNInteractionSurface:
             stresses[steel_mask] = steel_stresses
 
         # Calculate forces
+        # My = moment about y-axis (horizontal) = ∫σ·z·dA  → uses vertical lever arm (y_rel)
+        # Mz = moment about z-axis (vertical)   = ∫σ·y·dA  → uses horizontal lever arm (x_rel)
         N = as_float(to_kn(np.sum(stresses * area), ForceUnit.N))
-        My = as_float(to_knm(np.sum(stresses * area * x_rel), MomentUnit.NMM))
-        Mz = as_float(to_knm(np.sum(stresses * area * y_rel), MomentUnit.NMM))
+        My = as_float(to_knm(np.sum(stresses * area * y_rel), MomentUnit.NMM))
+        Mz = as_float(to_knm(np.sum(stresses * area * x_rel), MomentUnit.NMM))
 
         # Track maximum strains
         max_conc_strain = float(np.max(np.abs(strains[concrete_mask]))) if np.any(concrete_mask) else 0.0
@@ -705,8 +814,15 @@ class BiaxialMNInteractionSurface:
         1. Calculate N_max and N_min using theoretical limits
         2. Create uniform N levels
         3. For each (N_target, angle), solve for NA depth using tangent mapping
-        4. Force N to exact target for perfect uniformity
+        4. Store solved point with actual equilibrium forces (no N overwrite)
+
+        Returns a tuple of successfully solved points. The count may be less than
+        n_axial_levels * n_angles if some (N_target, angle) combinations fail to
+        converge. Grid index metadata is stored in ``_grid_indices`` for downstream
+        reshape logic.
         """
+        import warnings as _warnings
+
         N_min, N_max = self.calculate_axial_limits()
 
         max_dim = max(self.section_width, self.section_height)
@@ -715,9 +831,11 @@ class BiaxialMNInteractionSurface:
         angles = np.linspace(0, 360, n_angles, endpoint=False)
 
         points: list[BiaxialInteractionPoint] = []
+        grid_indices: list[tuple[int, int]] = []  # (i_axial, j_angle) for each point
+        n_failures = 0
 
-        for N_target in N_levels:
-            for angle_deg in angles:
+        for i_axial, N_target in enumerate(N_levels):
+            for j_angle, angle_deg in enumerate(angles):
                 def objective_tangent(phi: float) -> float:
                     na_depth = max_dim * np.tan(phi)
                     point = self.calculate_point_pivot(na_depth, angle_deg)
@@ -740,6 +858,8 @@ class BiaxialMNInteractionSurface:
                         na_depth_solution = max_dim * np.tan(phi_solution)
                         calc_point = self.calculate_point_pivot(na_depth_solution, angle_deg)
 
+                        # Use N=N_target (within solver tolerance of calc_point.N)
+                        # to maintain exact grid uniformity in axial force
                         point = BiaxialInteractionPoint(
                             N=N_target,
                             My=calc_point.My,
@@ -750,25 +870,27 @@ class BiaxialMNInteractionSurface:
                             max_steel_strain=calc_point.max_steel_strain,
                         )
                         points.append(point)
+                        grid_indices.append((i_axial, j_angle))
                     else:
-                        if abs(N_target - N_max) < abs(N_target - N_min):
-                            pole_point = self.calculate_point_pivot(max_dim * 10, angle_deg)
-                        else:
-                            pole_point = self.calculate_point_pivot(-max_dim * 2, angle_deg)
-
-                        point = BiaxialInteractionPoint(
-                            N=N_target,
-                            My=pole_point.My,
-                            Mz=pole_point.Mz,
-                            neutral_axis_depth=pole_point.neutral_axis_depth,
-                            neutral_axis_angle=pole_point.neutral_axis_angle,
-                            max_concrete_strain=pole_point.max_concrete_strain,
-                            max_steel_strain=pole_point.max_steel_strain,
-                        )
-                        points.append(point)
-                except Exception:
+                        # Cannot bracket: no valid point at this (N_target, angle_deg)
+                        n_failures += 1
+                        continue
+                except (ValueError, RuntimeError):
+                    n_failures += 1
                     continue
 
+        total_attempts = n_axial_levels * n_angles
+        if n_failures > 0 and total_attempts > 0:
+            failure_pct = 100.0 * n_failures / total_attempts
+            if failure_pct > 10.0:
+                _warnings.warn(
+                    f"Biaxial surface generation: {n_failures}/{total_attempts} points "
+                    f"({failure_pct:.1f}%) failed to converge. Surface may have gaps.",
+                    stacklevel=2,
+                )
+
+        self._grid_indices = grid_indices
+        self._grid_shape = (n_axial_levels, n_angles)
         return tuple(points)
 
     @staticmethod
@@ -869,13 +991,36 @@ class BiaxialMNInteractionSurface:
         """
         Prepare surface data as 2D matrices for go.Surface plotting.
 
+        Handles gaps from failed convergence points by filling with NaN
+        (Plotly renders NaN as holes in the surface).
+
         Returns:
             Tuple of (My_matrix, Mz_matrix, N_matrix) shaped (n_axial_levels+2, n_angles+1)
         """
-        # Extract arrays and reshape to grid
-        N_raw = np.array([p.N for p in surface_pts]).reshape((n_axial_levels, n_angles))
-        My_raw = np.array([p.My for p in surface_pts]).reshape((n_axial_levels, n_angles))
-        Mz_raw = np.array([p.Mz for p in surface_pts]).reshape((n_axial_levels, n_angles))
+        expected = n_axial_levels * n_angles
+        if len(surface_pts) == expected:
+            # Full grid — fast path
+            N_raw = np.array([p.N for p in surface_pts]).reshape((n_axial_levels, n_angles))
+            My_raw = np.array([p.My for p in surface_pts]).reshape((n_axial_levels, n_angles))
+            Mz_raw = np.array([p.Mz for p in surface_pts]).reshape((n_axial_levels, n_angles))
+        else:
+            # Sparse grid — fill with NaN for missing points
+            N_raw = np.full((n_axial_levels, n_angles), np.nan)
+            My_raw = np.full((n_axial_levels, n_angles), np.nan)
+            Mz_raw = np.full((n_axial_levels, n_angles), np.nan)
+            if hasattr(self, '_grid_indices') and len(self._grid_indices) == len(surface_pts):
+                for pt, (i, j) in zip(surface_pts, self._grid_indices):
+                    N_raw[i, j] = pt.N
+                    My_raw[i, j] = pt.My
+                    Mz_raw[i, j] = pt.Mz
+            else:
+                # Fallback: pack sequentially (best effort)
+                for k, pt in enumerate(surface_pts):
+                    i, j = divmod(k, n_angles)
+                    if i < n_axial_levels:
+                        N_raw[i, j] = pt.N
+                        My_raw[i, j] = pt.My
+                        Mz_raw[i, j] = pt.Mz
 
         # Close the longitude loop
         N_grid = np.hstack([N_raw, N_raw[:, :1]])

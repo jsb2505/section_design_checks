@@ -148,11 +148,11 @@ class TestCrackingAdditionalBranches:
         monkeypatch.setattr(type(check.section), "get_transformed_centroid", lambda self, E: (0.0, 200.0, 0.0))
         monkeypatch.setattr(type(check.section), "get_transformed_area", lambda self, E: 100000.0)
 
-        with_axial = check.find_cracking_moment(N_Ed=100.0)
+        with_axial = check.find_cracking_moment(N_Ed=100.0, use_f_ctm_fl=True)
         assert with_axial == pytest.approx(40.0, rel=1e-12)
 
         monkeypatch.setattr(type(check.section), "get_transformed_centroid", lambda self, E: (0.0, 0.0, 0.0))
-        no_y_tension = check.find_cracking_moment(N_Ed=0.0)
+        no_y_tension = check.find_cracking_moment(N_Ed=0.0, use_f_ctm_fl=True)
         assert no_y_tension == pytest.approx(24.0, rel=1e-12)
 
     def test_maximum_spacing_eq714_without_x(self, concrete_c30):

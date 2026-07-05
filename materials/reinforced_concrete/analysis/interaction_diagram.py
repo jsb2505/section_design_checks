@@ -47,6 +47,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union, NamedTuple
 if TYPE_CHECKING:
     from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
     from materials.reinforced_concrete.materials.rebar import ShearRebar
+    from materials.reinforced_concrete.analysis.strain_state import StrainState
 
 import warnings
 import csv
@@ -1722,6 +1723,44 @@ class MNInteractionDiagram:
         return float(z_mech)
 
 
+    def find_strain_state_for_MN(
+        self,
+        M_target: float,
+        N_target: float,
+        initial_guess: Optional[Tuple[float, float]] = None,
+        tol: float = 1e-6,
+        strict: bool = False,
+    ) -> "StrainState":
+        """
+        Inverse solver returning a full :class:`StrainState` for target (M, N).
+
+        Thin wrapper around :meth:`find_strains_for_MN` that packages the result
+        with plane coefficients.  For the 2D solver (horizontal NA), ``plane_a``
+        is always 0 (no horizontal strain gradient).
+
+        Returns:
+            :class:`StrainState` with ``is_biaxial=False``.
+        """
+        from materials.reinforced_concrete.analysis.strain_state import StrainState
+
+        eps_top, eps_bottom = self.find_strains_for_MN(
+            M_target=M_target,
+            N_target=N_target,
+            initial_guess=initial_guess,
+            tol=tol,
+            strict=strict,
+        )
+
+        y_top = float(self.section_top) - float(self._section_cy)
+        y_bottom = float(self.section_bottom) - float(self._section_cy)
+
+        return StrainState.from_end_strains(
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+            y_top=y_top,
+            y_bottom=y_bottom,
+        )
+
     # ----------------------------
     # Diagram generation
     # ----------------------------
@@ -1930,10 +1969,12 @@ class MNInteractionDiagram:
                 na_depth = h * abs(eps_top) / abs(eps_top - eps_bottom)
                 compression_from_bottom = eps_bottom > 0
 
-            # Get max strains - use absolute values of end strains as approximation
-            # (exact fibre-level analysis would require iterating through mesh)
-            max_concrete_strain = max(abs(eps_top), abs(eps_bottom))
-            max_steel_strain = max_concrete_strain  # Same strain field applies to all fibres
+            # Get max strains from fibre-level data
+            strains = self._strain_field_from_end_strains(eps_top, eps_bottom)
+            conc_mask = self._fibre_mat == "concrete"
+            steel_mask = self._fibre_mat == "steel"
+            max_concrete_strain = float(np.max(np.abs(strains[conc_mask]))) if np.any(conc_mask) else 0.0
+            max_steel_strain = float(np.max(np.abs(strains[steel_mask]))) if np.any(steel_mask) else 0.0
 
             details = {
                 'eps_top': float(eps_top),
@@ -2496,6 +2537,7 @@ class MNInteractionDiagram:
 def create_interaction_diagram(
     section: RCSection,
     concrete: ConcreteMaterial,
+    free_neutral_axis: bool = False,
     **kwargs: Any,
 ) -> MNInteractionDiagram:
     """
@@ -2504,6 +2546,15 @@ def create_interaction_diagram(
     Args:
         section: RC section with reinforcement
         concrete: Concrete material
+        free_neutral_axis:
+            If True and the section is asymmetric about the minor axis, the
+            solver allows the neutral axis to rotate to satisfy biaxial
+            equilibrium (Mz = 0).  The returned object is a
+            :class:`FreeNADiagramAdapter` wrapping the biaxial solver, but it
+            exposes the same interface as :class:`MNInteractionDiagram`.
+            If the section is symmetric, the standard 2D solver is used
+            regardless of this flag.
+            (defaults to False)
         concrete_model_type: Stress-strain relationship of concrete
         steel_model_type: Stress-strain relationship of rebar
         n_fibres_width: Number of fibres to split width of section
@@ -2513,10 +2564,10 @@ def create_interaction_diagram(
             EC2-style average tension stress-strain relationship.
             (defaults to False)
         use_characteristic:
-            Enables characteristic strength limits for materials. 
+            Enables characteristic strength limits for materials.
             (defaults to False)
         use_accidental:
-            Enables accidental limit state factors for design strengths of materials. 
+            Enables accidental limit state factors for design strengths of materials.
             (defaults to False)
         confined_concrete:
             Enables a Mander-style confined concrete response is applied in compression
@@ -2525,9 +2576,9 @@ def create_interaction_diagram(
         confinement_f_yh:
             Characteristic transverse steel yield strength for confinement
         ignore_compression_steel:
-            If True, steel in compression (positive strain) contributes zero force. 
+            If True, steel in compression (positive strain) contributes zero force.
             (defaults to False)
-        elastic_modulus: 
+        elastic_modulus:
             Used only when the concrete_model_type is linear-elastic.
             The elastic modulus can be set explicitly (e.g. E_cm_eff for long-term
             creep-reduced analysis) or defaults to E_cm from the concrete material.
@@ -2543,15 +2594,72 @@ def create_interaction_diagram(
             (fully cracked tension zone to NA) for that load case.
             (defaults to False)
         concrete_model_override:
-            Used when a custom concrete model instance is provided directly (bypassing concrete_model_type). 
+            Used when a custom concrete model instance is provided directly (bypassing concrete_model_type).
             (defaults to None)
         steel_models_override:
-            Used when custom steel model instances are provided directly (bypassing steel_model_type). 
+            Used when custom steel model instances are provided directly (bypassing steel_model_type).
             (defaults to None)
         **kwargs: Additional arguments passed to MNInteractionDiagram
 
     Returns:
-        MNInteractionDiagram instance
+        MNInteractionDiagram (or FreeNADiagramAdapter with same interface)
     """
+    is_asymmetric = not section.is_symmetric_about_vertical_axis()
+
+    if free_neutral_axis and is_asymmetric:
+        # The biaxial solver only supports ULS-style parameters.
+        # SLS-specific kwargs (elastic_modulus, include_tension,
+        # crack_to_neutral_axis_on_first_tension_failure, concrete_model_override,
+        # steel_models_override) are not supported — fall back to 2D with a warning.
+        sls_only_keys = {
+            'elastic_modulus', 'include_tension',
+            'crack_to_neutral_axis_on_first_tension_failure',
+            'concrete_model_override', 'steel_models_override',
+        }
+        has_sls_kwargs = any(
+            kwargs.get(k) not in (None, False) for k in sls_only_keys
+        )
+
+        if has_sls_kwargs:
+            warnings.warn(
+                "free_neutral_axis=True requested on asymmetric section, but "
+                "SLS-specific parameters (elastic_modulus, include_tension, etc.) "
+                "are not supported by the biaxial solver. Falling back to 2D solver "
+                "with horizontal NA for this diagram.",
+                stacklevel=2,
+            )
+        else:
+            from materials.reinforced_concrete.analysis.biaxial_interaction import (
+                BiaxialMNInteractionSurface,
+            )
+            from materials.reinforced_concrete.analysis.free_na_adapter import (
+                FreeNADiagramAdapter,
+            )
+
+            # Filter kwargs to those accepted by BiaxialMNInteractionSurface
+            biaxial_kwargs_keys = {
+                'concrete_model_type', 'steel_model_type',
+                'n_fibres_width', 'n_fibres_height',
+                'tension_stiffening', 'use_characteristic', 'use_accidental',
+                'confined_concrete', 'confinement_rho_s', 'confinement_f_yh',
+                'ignore_compression_steel',
+            }
+            biaxial_kwargs = {k: v for k, v in kwargs.items() if k in biaxial_kwargs_keys}
+
+            biaxial = BiaxialMNInteractionSurface(
+                section=section,
+                concrete=concrete,
+                **biaxial_kwargs,
+            )
+            return FreeNADiagramAdapter(biaxial)  # type: ignore[return-value]
+
+    if not free_neutral_axis and is_asymmetric:
+        warnings.warn(
+            "Section is asymmetric about the minor axis. Minor-axis equilibrium "
+            "is not enforced with free_neutral_axis=False. Consider using "
+            "free_neutral_axis=True for correct biaxial equilibrium.",
+            stacklevel=2,
+        )
+
     return MNInteractionDiagram(section=section, concrete=concrete, **kwargs)
 

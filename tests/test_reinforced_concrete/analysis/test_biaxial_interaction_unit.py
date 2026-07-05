@@ -503,16 +503,16 @@ class TestSurfaceGenerationAndPlotting:
         assert len(pts) == 1
         assert pts[0].N == pytest.approx(0.0, rel=1e-12)
 
+        # When brentq cannot bracket (N always returns constant), points are skipped
+        # (no non-physical fallback). This is correct behaviour — a missing point is
+        # better than a point with fabricated N.
         surface2 = _make_surface_stub()
         surface2.section_width = 1.0
         surface2.section_height = 1.0
         surface2.calculate_axial_limits = lambda: (-1.0, 1.0)
         surface2.calculate_point_pivot = lambda na_depth, angle: _pt(N=5.0, My=na_depth, Mz=0.0, depth=na_depth, angle=angle)
         pts2 = surface2._generate_surface_raw(n_angles=1, n_axial_levels=2)
-        assert len(pts2) == 2
-        # Lower target tends to tension pole (-2*max_dim), upper target to compression pole (+10*max_dim).
-        assert pts2[0].My == pytest.approx(-2.0, rel=1e-12)
-        assert pts2[1].My == pytest.approx(10.0, rel=1e-12)
+        assert len(pts2) == 0  # Both points fail to bracket, so no points are generated
 
         surface3 = _make_surface_stub()
         surface3.section_width = 1.0

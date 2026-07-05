@@ -317,6 +317,16 @@ class StressLimitsCheck(BaseCodeCheck):
         description="Iterate non-linear creep adjustment until convergence.",
     )
 
+    free_neutral_axis: bool = Field(
+        default=False,
+        description=(
+            "Allow the neutral axis to rotate to satisfy biaxial equilibrium. "
+            "Note: for SLS checks (linear-elastic), the biaxial solver is not "
+            "used even when True; the 2D solver is used instead. "
+            "The flag is accepted for API consistency."
+        ),
+    )
+
     # --- Internal state ---
 
     _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
@@ -377,6 +387,7 @@ class StressLimitsCheck(BaseCodeCheck):
                 self._diagram_no_comp_steel = create_interaction_diagram(
                     section=self.section,
                     concrete=self.concrete,
+                    free_neutral_axis=self.free_neutral_axis,
                     concrete_model_type=self.concrete_model_type,
                     steel_model_type=self.steel_model_type,
                     n_fibres_width=self.n_fibres_width,
@@ -392,6 +403,7 @@ class StressLimitsCheck(BaseCodeCheck):
                 self._diagram = create_interaction_diagram(
                     section=self.section,
                     concrete=self.concrete,
+                    free_neutral_axis=self.free_neutral_axis,
                     concrete_model_type=self.concrete_model_type,
                     steel_model_type=self.steel_model_type,
                     n_fibres_width=self.n_fibres_width,

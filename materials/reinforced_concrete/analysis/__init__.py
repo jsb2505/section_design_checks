@@ -10,6 +10,8 @@ from materials.reinforced_concrete.analysis.biaxial_interaction import (
     BiaxialMNInteractionSurface,
     create_biaxial_interaction_surface,
 )
+from materials.reinforced_concrete.analysis.strain_state import StrainState
+from materials.reinforced_concrete.analysis.free_na_adapter import FreeNADiagramAdapter
 
 __all__ = [
     "InteractionPoint",
@@ -18,4 +20,6 @@ __all__ = [
     "BiaxialInteractionPoint",
     "BiaxialMNInteractionSurface",
     "create_biaxial_interaction_surface",
+    "StrainState",
+    "FreeNADiagramAdapter",
 ]
