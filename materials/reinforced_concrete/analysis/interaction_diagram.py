@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, NamedTuple, Sequence
+from dataclasses import dataclass
 
 import csv
 import json
@@ -131,6 +132,62 @@ class InteractionPoint(BaseModel):
             "max_concrete_strain": self.max_concrete_strain,
             "max_steel_strain": self.max_steel_strain,
         }
+
+
+# ------------------------------------------
+# Helper Class for Stress-Strain Plot State
+# ------------------------------------------
+
+@dataclass(frozen=True)
+class _StressStrainPlotState:
+    # inputs
+    M_Ed: float
+    N_Ed: float
+
+    # solved end strains
+    eps_top: float
+    eps_bottom: float
+
+    # fibre fields (all same length)
+    forces_N: np.ndarray
+    areas_mm2: np.ndarray
+    x_mm: np.ndarray
+    y_mm: np.ndarray
+    strains: np.ndarray
+    stresses_MPa: np.ndarray
+    conc_mask: np.ndarray
+    steel_mask: np.ndarray
+
+    # section geometry
+    y_top: float
+    y_bottom: float
+    h: float
+
+    # neutral axis
+    y_na: float | None
+    na_in_section: bool
+
+    # resultants (kN)
+    F_c_comp: float
+    F_c_tens: float
+    F_s_comp: float
+    F_s_tens: float
+
+    # centroids (mm)
+    y_c_comp: float | None
+    y_c_tens: float | None
+    y_s_comp: float | None
+    y_s_tens: float | None
+
+    # overall compression/tension centroids + lever arm
+    y_C: float | None
+    y_T: float | None
+    z: float | None
+
+    # stress range info for scaling / axes
+    max_stress_pos: float
+    min_stress_neg: float
+    force_scale: float
 
 
 # ----------------------------
@@ -2012,15 +2069,48 @@ class MNInteractionDiagram:
             y_na = None
             na_in_section = False
 
-        # Resultant forces
-        # TODO all steel forces are summed here and not separated by tension/compression
-        # Need 3 sets of forces, Fc_comp, Fs_comp, Fs_tens.
-        # These should sum to zero.
-        # Change legend to report these 3 values.
-        F_concrete = np.sum(forces[conc_mask])  # Total concrete force (kN)
-        F_steel = np.sum(forces[steel_mask])  # Total steel force (kN)
+        # Resultant forces - separated by material and tension/compression
+        # Note: forces from get_fibre_forces_from_end_strains are in N, convert to kN
+        # Concrete forces
+        conc_forces = forces[conc_mask] / 1000.0  # Convert N to kN
+        F_c_comp = np.sum(conc_forces[conc_forces > 0])  # Concrete compression (kN)
+        F_c_tens = np.sum(conc_forces[conc_forces < 0])  # Concrete tension (kN) - for SLS/uncracked
 
-        # Centroids of tension and compression forces
+        # Steel forces
+        steel_forces_all = forces[steel_mask] / 1000.0  # Convert N to kN
+        F_s_comp = np.sum(steel_forces_all[steel_forces_all > 0])  # Steel compression (kN)
+        F_s_tens = np.sum(steel_forces_all[steel_forces_all < 0])  # Steel tension (kN)
+
+        # Centroids of forces - separated by material and tension/compression
+        # Concrete compression centroid
+        conc_comp_mask = conc_mask & (forces > 0)
+        if np.any(conc_comp_mask) and np.sum(forces[conc_comp_mask]) > 1e-6:
+            y_c_comp = np.sum(forces[conc_comp_mask] * y_coords[conc_comp_mask]) / np.sum(forces[conc_comp_mask])
+        else:
+            y_c_comp = None
+
+        # Concrete tension centroid (for SLS/uncracked)
+        conc_tens_mask = conc_mask & (forces < 0)
+        if np.any(conc_tens_mask) and abs(np.sum(forces[conc_tens_mask])) > 1e-6:
+            y_c_tens = np.sum(forces[conc_tens_mask] * y_coords[conc_tens_mask]) / np.sum(forces[conc_tens_mask])
+        else:
+            y_c_tens = None
+
+        # Steel compression centroid
+        steel_comp_mask = steel_mask & (forces > 0)
+        if np.any(steel_comp_mask) and np.sum(forces[steel_comp_mask]) > 1e-6:
+            y_s_comp = np.sum(forces[steel_comp_mask] * y_coords[steel_comp_mask]) / np.sum(forces[steel_comp_mask])
+        else:
+            y_s_comp = None
+
+        # Steel tension centroid
+        steel_tens_mask = steel_mask & (forces < 0)
+        if np.any(steel_tens_mask) and abs(np.sum(forces[steel_tens_mask])) > 1e-6:
+            y_s_tens = np.sum(forces[steel_tens_mask] * y_coords[steel_tens_mask]) / np.sum(forces[steel_tens_mask])
+        else:
+            y_s_tens = None
+
+        # Overall compression/tension centroids (for lever arm calculation)
         comp_mask = forces > 0
         tens_mask = forces < 0
 
@@ -2043,14 +2133,14 @@ class MNInteractionDiagram:
         # 4. Create subplots
         fig = make_subplots(
             rows=1, cols=3,
-            column_widths=[0.4, 0.3, 0.3],
+            column_widths=[0.33, 0.33, 0.34],
             subplot_titles=("Section (Stress)", "Strain Profile", "Stress Profile"),
-            horizontal_spacing=0.08,
+            horizontal_spacing=0.1,
         )
 
-        # ===========================
+        # =====================================
         # Left: Section with stress colour map
-        # ===========================
+        # =====================================
         # Get section outline
         outline_coords = list(self.section.outline.exterior.coords)
         outline_x = [c[0] for c in outline_coords]
@@ -2074,7 +2164,24 @@ class MNInteractionDiagram:
             conc_x = x_coords[conc_mask]
             conc_y = y_coords[conc_mask]
 
-            # Colour scale: blue (tension/zero) to red (compression)
+            # Determine color scale range based on whether tension stresses exist
+            # For ULS, typically only compression (positive) stresses exist
+            conc_stress_min = float(np.min(conc_stresses)) if len(conc_stresses) > 0 else 0
+            conc_stress_max = float(np.max(conc_stresses)) if len(conc_stresses) > 0 else 1
+
+            if conc_stress_min >= 0:
+                # No tension - use 0 to max scale (compression only)
+                cmin_val = 0.0
+                cmax_val = conc_stress_max if conc_stress_max > 0 else 1.0
+                # Use a compression-only colorscale (white to red)
+                colorscale = [[0, "white"], [1, "red"]]
+            else:
+                # Has tension - use symmetric scale centered on zero
+                abs_max = max(abs(conc_stress_min), abs(conc_stress_max))
+                cmin_val = -abs_max
+                cmax_val = abs_max
+                colorscale = "RdBu_r"  # Red = compression, Blue = tension
+
             fig.add_trace(
                 go.Scatter(
                     x=conc_x, y=conc_y,
@@ -2082,13 +2189,15 @@ class MNInteractionDiagram:
                     marker=dict(
                         size=6,
                         color=conc_stresses,
-                        colorscale="RdBu_r",  # Red = compression, Blue = tension
-                        cmin=-max(abs(conc_stresses.min()), abs(conc_stresses.max())) if len(conc_stresses) > 0 else -1,
-                        cmax=max(abs(conc_stresses.min()), abs(conc_stresses.max())) if len(conc_stresses) > 0 else 1,
+                        colorscale=colorscale,
+                        cmin=cmin_val,
+                        cmax=cmax_val,
                         colorbar=dict(
-                            title="σ (MPa)",
-                            x=0.32,
-                            len=0.8,
+                            title=dict(text="σ<br>(MPa)", side="right"),
+                            x=0.28,
+                            len=0.7,
+                            y=0.5,
+                            thickness=15,
                         ),
                     ),
                     hovertemplate=(
@@ -2107,7 +2216,7 @@ class MNInteractionDiagram:
         steel_x = x_coords[steel_mask]
         steel_y = y_coords[steel_mask]
         steel_stresses_arr = stresses[steel_mask]
-        steel_forces_arr = forces[steel_mask]
+        steel_forces_arr = forces[steel_mask] / 1000.0  # Convert N to kN
         steel_strains_arr = strains[steel_mask]
 
         # Steel rebars as circles
@@ -2162,17 +2271,35 @@ class MNInteractionDiagram:
         # ===========================
         # Centre: Strain profile
         # ===========================
-        # Linear strain distribution
-        y_profile = np.array([y_bottom, y_top])
-        strain_profile = np.array([eps_bottom, eps_top]) * 1000  # Convert to ‰
+        # Linear strain distribution - closed polygon back to zero line
+        eps_bottom_permille = eps_bottom * 1000  # Convert to ‰
+        eps_top_permille = eps_top * 1000
+
+        # Create closed polygon: zero at bottom -> strain at bottom -> strain at top -> zero at top -> close
+        strain_polygon_x = [0, eps_bottom_permille, eps_top_permille, 0, 0]
+        strain_polygon_y = [y_bottom, y_bottom, y_top, y_top, y_bottom]
 
         fig.add_trace(
             go.Scatter(
-                x=strain_profile, y=y_profile,
-                mode="lines+markers",
-                line=dict(color="blue", width=3),
-                marker=dict(size=8),
+                x=strain_polygon_x, y=strain_polygon_y,
+                mode="lines",
+                line=dict(color="blue", width=2),
+                fill="toself",
+                fillcolor="rgba(0, 0, 255, 0.15)",
                 name="Strain",
+                hovertemplate="ε: %{x:.3f} ‰<br>y: %{y:.1f} mm<extra></extra>",
+            ),
+            row=1, col=2,
+        )
+
+        # Add markers at the strain endpoints
+        fig.add_trace(
+            go.Scatter(
+                x=[eps_bottom_permille, eps_top_permille],
+                y=[y_bottom, y_top],
+                mode="markers",
+                marker=dict(size=8, color="blue"),
+                showlegend=False,
                 hovertemplate="ε: %{x:.3f} ‰<br>y: %{y:.1f} mm<extra></extra>",
             ),
             row=1, col=2,
@@ -2207,42 +2334,187 @@ class MNInteractionDiagram:
         # Right: Stress profile
         # ===========================
         # For concrete: plot stress vs y for concrete fibres (sorted by y)
+        # Close the stress block back to the zero line
         if np.any(conc_mask):
             conc_y_sorted_idx = np.argsort(y_coords[conc_mask])
             conc_y_sorted = y_coords[conc_mask][conc_y_sorted_idx]
             conc_stress_sorted = stresses[conc_mask][conc_y_sorted_idx]
+            conc_strain_sorted = strains[conc_mask][conc_y_sorted_idx]
 
+            # Create closed polygon: start at zero, trace stress profile, back to zero
+            stress_polygon_x = np.concatenate([[0], conc_stress_sorted, [0]])
+            stress_polygon_y = np.concatenate(
+                [[conc_y_sorted[0]], conc_y_sorted, [conc_y_sorted[-1]]]
+            )
+
+            # Filled polygon (no hover - just for visual fill)
             fig.add_trace(
                 go.Scatter(
-                    x=conc_stress_sorted, y=conc_y_sorted,
+                    x=stress_polygon_x, y=stress_polygon_y,
                     mode="lines",
                     line=dict(color="gray", width=2),
-                    fill="tozerox",
+                    fill="toself",
                     fillcolor="rgba(128, 128, 128, 0.3)",
                     name="Concrete σ",
-                    hovertemplate="σ: %{x:.2f} MPa<br>y: %{y:.1f} mm<extra>Concrete</extra>",
+                    hoverinfo="skip",
+                    legendgroup="concrete_stress",
                 ),
                 row=1, col=3,
             )
 
-        # Steel stresses as horizontal bars
-        if np.any(steel_mask):
-            for i in range(len(steel_x)):
-                stress_val = float(steel_stresses_arr[i])
-                y_val = float(steel_y[i])
-                color = "green" if stress_val < 0 else "darkorange"
+            # Separate trace with markers for hover interaction
+            # Build custom hover text for each point (including strain)
+            hover_texts = [
+                f"σ: {conc_stress_sorted[i]:.2f} MPa<br>ε: {conc_strain_sorted[i]*1000:.3f} ‰<br>y: {conc_y_sorted[i]:.1f} mm"
+                for i in range(len(conc_stress_sorted))
+            ]
 
-                fig.add_trace(
-                    go.Scatter(
-                        x=[0, stress_val], y=[y_val, y_val],
-                        mode="lines+markers",
-                        line=dict(color=color, width=4),
-                        marker=dict(size=8, color=color),
-                        showlegend=False,
-                        hovertemplate=f"σ: {stress_val:.1f} MPa<br>y: {y_val:.1f} mm<extra>Steel</extra>",
-                    ),
-                    row=1, col=3,
-                )
+            fig.add_trace(
+                go.Scatter(
+                    x=conc_stress_sorted, y=conc_y_sorted,
+                    mode="markers",
+                    marker=dict(size=4, color="gray", opacity=0.5),
+                    text=hover_texts,
+                    hovertemplate="%{text}<extra>Concrete</extra>",
+                    showlegend=False,
+                    legendgroup="concrete_stress",
+                ),
+                row=1, col=3,
+            )
+
+        # Resultant force arrows - scale forces to fit within stress axis range
+        # Calculate max force magnitude for scaling
+        max_force = max(
+            abs(F_c_comp) if F_c_comp else 0,
+            abs(F_c_tens) if F_c_tens else 0,
+            abs(F_s_comp) if F_s_comp else 0,
+            abs(F_s_tens) if F_s_tens else 0,
+            1.0  # Minimum to avoid division by zero
+        )
+
+        # Calculate stress range for scaling force arrows
+        # Use ONLY concrete stresses for range - steel stresses are much larger and would dominate
+        if np.any(conc_mask):
+            conc_stresses_for_range = stresses[conc_mask]
+            max_stress_pos = max(0, float(np.max(conc_stresses_for_range)))
+            min_stress_neg = min(0, float(np.min(conc_stresses_for_range)))
+        else:
+            max_stress_pos = 1.0
+            min_stress_neg = -1.0
+
+        # Scale factor: map max force to ~50% of concrete stress range for visibility
+        # Use concrete stress range so arrows are proportional to concrete stress block
+        stress_range = max(max_stress_pos, abs(min_stress_neg), 1.0)
+        force_scale = stress_range * 0.5 / max_force
+
+        # Concrete compression resultant arrow (F_c_comp is positive)
+        if y_c_comp is not None and abs(F_c_comp) > 0.001:
+            arrow_x = float(F_c_comp * force_scale)
+            fig.add_trace(
+                go.Scatter(
+                    x=[0, arrow_x], y=[y_c_comp, y_c_comp],
+                    mode="lines",
+                    line=dict(color="red", width=3),
+                    name=f"F_c,comp ({F_c_comp:.0f} kN)",
+                    legendgroup="Fc_comp",
+                    hovertemplate=f"F_c,comp = {F_c_comp:.1f} kN<br>y = {y_c_comp:.1f} mm<extra>Concrete Compression</extra>",
+                ),
+                row=1, col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[arrow_x], y=[y_c_comp],
+                    mode="markers",
+                    marker=dict(size=14, color="red", symbol="triangle-right"),
+                    showlegend=False,
+                    legendgroup="Fc_comp",
+                    hoverinfo="skip",
+                ),
+                row=1, col=3,
+            )
+
+        # Concrete tension resultant arrow (F_c_tens is negative)
+        if y_c_tens is not None and abs(F_c_tens) > 0.001:
+            arrow_x = float(F_c_tens * force_scale)  # Already negative, so arrow goes left
+            fig.add_trace(
+                go.Scatter(
+                    x=[0, arrow_x], y=[y_c_tens, y_c_tens],
+                    mode="lines",
+                    line=dict(color="blue", width=3),
+                    name=f"F_c,tens ({F_c_tens:.0f} kN)",
+                    legendgroup="Fc_tens",
+                    hovertemplate=f"F_c,tens = {F_c_tens:.1f} kN<br>y = {y_c_tens:.1f} mm<extra>Concrete Tension</extra>",
+                ),
+                row=1, col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[arrow_x], y=[y_c_tens],
+                    mode="markers",
+                    marker=dict(size=14, color="blue", symbol="triangle-left"),
+                    showlegend=False,
+                    legendgroup="Fc_tens",
+                    hoverinfo="skip",
+                ),
+                row=1, col=3,
+            )
+
+        # Steel compression resultant arrow (F_s_comp is positive)
+        if y_s_comp is not None and abs(F_s_comp) > 0.001:
+            arrow_x = float(F_s_comp * force_scale)
+            fig.add_trace(
+                go.Scatter(
+                    x=[0, arrow_x], y=[y_s_comp, y_s_comp],
+                    mode="lines",
+                    line=dict(color="darkorange", width=3),
+                    name=f"F_s,comp ({F_s_comp:.0f} kN)",
+                    legendgroup="Fs_comp",
+                    hovertemplate=f"F_s,comp = {F_s_comp:.1f} kN<br>y = {y_s_comp:.1f} mm<extra>Steel Compression</extra>",
+                ),
+                row=1, col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[arrow_x], y=[y_s_comp],
+                    mode="markers",
+                    marker=dict(size=14, color="darkorange", symbol="triangle-right"),
+                    showlegend=False,
+                    legendgroup="Fs_comp",
+                    hoverinfo="skip",
+                ),
+                row=1, col=3,
+            )
+
+        # Steel tension resultant arrow (F_s_tens is negative)
+        if y_s_tens is not None and abs(F_s_tens) > 0.001:
+            arrow_x = float(F_s_tens * force_scale)  # Already negative, so arrow goes left
+            fig.add_trace(
+                go.Scatter(
+                    x=[0, arrow_x], y=[y_s_tens, y_s_tens],
+                    mode="lines",
+                    line=dict(color="green", width=3),
+                    name=f"F_s,tens ({F_s_tens:.0f} kN)",
+                    legendgroup="Fs_tens",
+                    hovertemplate=f"F_s,tens = {F_s_tens:.1f} kN<br>y = {y_s_tens:.1f} mm<extra>Steel Tension</extra>",
+                ),
+                row=1, col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[arrow_x], y=[y_s_tens],
+                    mode="markers",
+                    marker=dict(size=14, color="green", symbol="triangle-left"),
+                    showlegend=False,
+                    legendgroup="Fs_tens",
+                    hoverinfo="skip",
+                ),
+                row=1, col=3,
+            )
+
+        # Note: Steel stress bars removed from stress profile plot.
+        # Steel stresses (~400 MPa) are much larger than concrete stresses (~20 MPa)
+        # and would dominate the x-axis scale, making the concrete stress curve invisible.
+        # Steel forces are shown via the resultant force arrows above.
 
         # Zero stress line
         fig.add_trace(
@@ -2287,16 +2559,34 @@ class MNInteractionDiagram:
             annotation_text += "<br>"
         if z is not None:
             annotation_text += f"<b>Lever Arm:</b> z = {z:.1f} mm<br>"
-        annotation_text += (
-            f"<b>Resultants:</b> F_conc = {F_concrete/1000:.1f} kN, F_steel = {F_steel/1000:.1f} kN"
-        )
+
+        # Resultant forces annotation - show all 4 components
+        annotation_text += "<b>Resultants:</b> "
+        force_parts = []
+        if abs(F_c_comp) > 0.001:
+            force_parts.append(f"F_c,comp = {F_c_comp:.1f} kN")
+        if abs(F_c_tens) > 0.001:
+            force_parts.append(f"F_c,tens = {F_c_tens:.1f} kN")
+        if abs(F_s_comp) > 0.001:
+            force_parts.append(f"F_s,comp = {F_s_comp:.1f} kN")
+        if abs(F_s_tens) > 0.001:
+            force_parts.append(f"F_s,tens = {F_s_tens:.1f} kN")
+
+        if force_parts:
+            annotation_text += ", ".join(force_parts)
+        else:
+            annotation_text += "No forces"
+
+        # Show sum check
+        F_total = F_c_comp + F_c_tens + F_s_comp + F_s_tens
+        annotation_text += f"<br><b>ΣF = {F_total:.1f} kN</b> (≈ N_Ed = {N_Ed:.1f} kN)"
 
         fig.add_annotation(
             xref="paper", yref="paper",
-            x=0.5, y=-0.12,
+            x=0.5, y=-0.25,
             text=annotation_text,
             showarrow=False,
-            font=dict(size=11),
+            font=dict(size=10),
             align="center",
         )
 
@@ -2306,18 +2596,50 @@ class MNInteractionDiagram:
             height=height,
             showlegend=True,
             legend=dict(x=1.02, y=1),
-            margin=dict(b=120),
+            margin=dict(l=60, r=120, t=80, b=180),  # Increased bottom margin for annotation
         )
 
-        # Axis labels
+        # Calculate common y-axis range for all plots
+        y_range_min = y_bottom - 20
+        y_range_max = y_top + 20
+
+        # Axis labels - all plots share the same y-axis range
         fig.update_xaxes(title_text="x (mm)", row=1, col=1)
-        fig.update_yaxes(title_text="y (mm)", row=1, col=1, scaleanchor="x", scaleratio=1)
+        fig.update_yaxes(title_text="y (mm)", row=1, col=1, range=[y_range_min, y_range_max])
 
         fig.update_xaxes(title_text="Strain (‰)", row=1, col=2)
-        fig.update_yaxes(title_text="y (mm)", row=1, col=2)
+        fig.update_yaxes(title_text="y (mm)", row=1, col=2, range=[y_range_min, y_range_max])
 
-        fig.update_xaxes(title_text="Stress (MPa)", row=1, col=3)
-        fig.update_yaxes(title_text="y (mm)", row=1, col=3)
+        # Calculate stress plot x-axis range to include both concrete stress curve and force arrows
+        # Concrete stress range
+        stress_x_min = min_stress_neg if min_stress_neg < 0 else 0
+        stress_x_max = max_stress_pos if max_stress_pos > 0 else 0
+
+        # Force arrow range (scaled forces)
+        arrow_x_values = []
+        if y_c_comp is not None and abs(F_c_comp) > 0.001:
+            arrow_x_values.append(F_c_comp * force_scale)
+        if y_c_tens is not None and abs(F_c_tens) > 0.001:
+            arrow_x_values.append(F_c_tens * force_scale)
+        if y_s_comp is not None and abs(F_s_comp) > 0.001:
+            arrow_x_values.append(F_s_comp * force_scale)
+        if y_s_tens is not None and abs(F_s_tens) > 0.001:
+            arrow_x_values.append(F_s_tens * force_scale)
+
+        if arrow_x_values:
+            stress_x_min = min(stress_x_min, min(arrow_x_values))
+            stress_x_max = max(stress_x_max, max(arrow_x_values))
+
+        # Add padding
+        stress_x_range = stress_x_max - stress_x_min
+        stress_x_pad = stress_x_range * 0.1 if stress_x_range > 0 else 1.0
+
+        fig.update_xaxes(
+            title_text="Stress (MPa)",
+            range=[stress_x_min - stress_x_pad, stress_x_max + stress_x_pad],
+            row=1, col=3
+        )
+        fig.update_yaxes(title_text="y (mm)", row=1, col=3, range=[y_range_min, y_range_max])
 
         if show:
             fig.show()
