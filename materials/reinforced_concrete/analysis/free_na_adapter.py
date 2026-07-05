@@ -1191,6 +1191,60 @@ class FreeNADiagramAdapter:
             max_steel_strain=max_steel,
         )
 
+    def plot_mn(
+        self,
+        *,
+        load_points=None,
+        show_vectors: bool = False,
+        show_metadata: bool = True,
+        n_points: int = 120,
+        Mz_slice: float = 0.0,
+        save_path=None,
+        show: bool = True,
+        title=None,
+        width: int = 900,
+        height: int = 700,
+    ):
+        from materials.reinforced_concrete.analysis.mn_diagram_viewer import MNDiagramViewer
+
+        viewer = MNDiagramViewer(self)
+        return viewer.plot(
+            load_points=load_points,
+            show_vectors=show_vectors,
+            show_metadata=show_metadata,
+            n_points=n_points,
+            Mz_slice=Mz_slice,
+            save_path=save_path,
+            show=show,
+            title=title,
+            width=width,
+            height=height,
+        )
+
+    def plot_stress_strain(
+        self,
+        M_Ed: float,
+        N_Ed: float,
+        *,
+        show: bool = True,
+        title=None,
+        width: int = 1200,
+        height: int = 1000,
+        section_render: str = "points",
+    ):
+        from materials.reinforced_concrete.analysis.stress_strain_viewer import StressStrainViewer
+
+        viewer = StressStrainViewer(self)
+        return viewer.plot(
+            M_Ed=float(M_Ed),
+            N_Ed=float(N_Ed),
+            show=show,
+            title=title,
+            width=width,
+            height=height,
+            section_render=section_render,
+        )
+
     def __repr__(self) -> str:
         return (
             f"FreeNADiagramAdapter("
