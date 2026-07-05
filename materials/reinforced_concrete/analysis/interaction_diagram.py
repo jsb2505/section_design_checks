@@ -184,6 +184,7 @@ class MNInteractionDiagram:
         confined_concrete: bool = False,
         confinement_rho_s: Optional[float] = None,
         confinement_f_yh: Optional[float] = None,
+        confinement_eps_su: float = 0.10,
         ignore_compression_steel: bool = False,
         elastic_modulus: Optional[float] = None,
         include_tension: bool = False,
@@ -207,6 +208,9 @@ class MNInteractionDiagram:
         # IMPORTANT: treat confinement_f_yh as CHARACTERISTIC if provided.
         # If None, default to the first longitudinal group's characteristic yield strength.
         self.confinement_f_yh = confinement_f_yh
+        # Transverse-steel rupture strain for the Mander/Priestley confined ultimate
+        # strain (eps_su, typically 0.10-0.15 for B500). Default 0.10.
+        self.confinement_eps_su = confinement_eps_su
 
         # Constitutive models for design-level capacity evaluation
         if concrete_model_override is not None:
@@ -268,6 +272,12 @@ class MNInteractionDiagram:
 
             if self.confinement_f_yh <= 0:
                 raise ValueError(f"confinement_f_yh must be > 0, got {self.confinement_f_yh}")
+
+            if not (0.0 < self.confinement_eps_su <= 0.20):
+                raise ValueError(
+                    f"confinement_eps_su (transverse-steel rupture strain) must be in "
+                    f"(0, 0.20], got {self.confinement_eps_su}"
+                )
 
         # Fibre mesh
         self.mesh = FibreMesh(
@@ -355,6 +365,46 @@ class MNInteractionDiagram:
 
         return (as_float(N), as_float(M))
 
+    def _confined_strength_and_peak_strain(self) -> Tuple[float, float]:
+        """Mander confined characteristic strength f_cc,k and peak strain eps_cc.
+
+        Pure function of the (instance-level) confinement inputs — no per-fibre
+        state — so it can be reused for the effective ultimate strain and the
+        per-fibre confined stress curve without recomputation.
+        """
+        assert self.confinement_rho_s is not None
+        assert self.confinement_f_yh is not None
+        rho_s = float(self.confinement_rho_s)
+        f_yh_k = float(self.confinement_f_yh)
+        f_co_k_safe = max(float(self.concrete.f_ck), 1e-6)
+        eps_co = float(self.concrete.epsilon_c2)
+
+        k_e = 0.75
+        f_l_k = 0.5 * k_e * rho_s * f_yh_k
+        term = max(1.0 + 7.94 * f_l_k / f_co_k_safe, 1e-12)
+        f_cc_k = f_co_k_safe * (2.254 * np.sqrt(term) - 2.0 * f_l_k / f_co_k_safe - 1.254)
+        f_ratio = max(f_cc_k / f_co_k_safe, 1e-6)
+        eps_cc = max(eps_co * (1.0 + 5.0 * (f_ratio - 1.0)), 1e-9)
+        return float(f_cc_k), float(eps_cc)
+
+    def effective_ultimate_strain(self) -> float:
+        """Concrete ultimate compressive strain used for the solver bounds and the
+        diagram strain-limit loop.
+
+        Unconfined: the constitutive model's ultimate strain (~0.0035).
+        Confined: the Mander/Priestley energy-balance value
+        ``eps_cu = 0.004 + 1.4·rho_s·f_yh·eps_su / f_cc`` (confined strength f_cc,
+        explicit transverse-steel rupture strain eps_su). This is what lets the
+        solver actually explore the extended confined ductility — previously the
+        unconfined ~0.0035 was used everywhere, making confinement inert.
+        """
+        if not self.confined_concrete:
+            return float(self.concrete_model.get_ultimate_strain())
+        f_cc_k, _ = self._confined_strength_and_peak_strain()
+        rho_s = float(self.confinement_rho_s)
+        f_yh_k = float(self.confinement_f_yh)
+        eps_su = float(self.confinement_eps_su)
+        return 0.004 + 1.4 * rho_s * f_yh_k * eps_su / max(f_cc_k, 1e-6)
 
     def _concrete_stress_with_options(
         self,
@@ -374,32 +424,14 @@ class MNInteractionDiagram:
             assert self.confinement_rho_s is not None
             assert self.confinement_f_yh is not None
 
-            rho_s = float(self.confinement_rho_s)
-            f_yh_k = float(self.confinement_f_yh)  # characteristic transverse steel yield
-
             comp_mask = concrete_strains > 0.0
             if np.any(comp_mask):
                 # Compute confinement at characteristic level, then reduce to design consistently.
-                f_co_k = float(self.concrete.f_ck)
-                eps_co = float(self.concrete.epsilon_c2)
-
-                k_e = 0.75
-                f_co_k_safe = max(f_co_k, 1e-6)
-
-                f_l_k = 0.5 * k_e * rho_s * f_yh_k
-
-                term = 1.0 + 7.94 * f_l_k / f_co_k_safe
-                term = max(term, 1e-12)
-
-                f_cc_k = f_co_k * (
-                    2.254 * np.sqrt(term) - 2.0 * f_l_k / f_co_k_safe - 1.254
-                )
-
-                f_ratio = max(f_cc_k / f_co_k_safe, 1e-6)
-                eps_cc = eps_co * (1.0 + 5.0 * (f_ratio - 1.0))
-                eps_cc = max(eps_cc, 1e-9)
-
-                eps_cu_conf = 0.004 + 0.14 * rho_s * f_yh_k / f_co_k_safe
+                # f_cc,k and eps_cc come from the shared helper; eps_cu_conf uses the
+                # corrected Mander/Priestley form (eps_su, confined f_cc) and is the
+                # SAME value the solver bounds / strain loop use (effective_ultimate_strain).
+                f_cc_k, eps_cc = self._confined_strength_and_peak_strain()
+                eps_cu_conf = self.effective_ultimate_strain()
 
                 # Reduce confined characteristic stresses to design level
                 design_factor = float(self.concrete.alpha_cc) / float(self.concrete.gamma_c)
@@ -1156,7 +1188,7 @@ class MNInteractionDiagram:
 
         # Define strain bounds to prevent solver wandering into absurd strain space
         # This prevents numerical artifacts where extreme strains "match" forces via clipping
-        eps_cu = self.concrete_model.get_ultimate_strain()  # Compression limit (~0.0035)
+        eps_cu = self.effective_ultimate_strain()  # confined-aware compression limit
         eps_t = self._eps_tension_limit()  # Tension limit (steel-controlled, ~0.01-0.05)
         eps_y = self.steel_models[0].epsilon_y if self.steel_models else 0.002
 
@@ -2119,8 +2151,8 @@ class MNInteractionDiagram:
         if self._dense_diagram_points is not None and self._dense_diagram_n == n_dense:
             return self._dense_diagram_points
         
-        # --- Compression-side strain limit (concrete-controlled)
-        eps_cu = float(self.concrete_model.get_ultimate_strain())
+        # --- Compression-side strain limit (concrete-controlled; confined-aware)
+        eps_cu = float(self.effective_ultimate_strain())
 
         # --- Tension-side strain limit (steel-controlled, finite by design)
         eps_t = self._eps_tension_limit()
@@ -3006,6 +3038,7 @@ def create_interaction_diagram(
                 'n_fibres_width', 'n_fibres_height',
                 'tension_stiffening', 'use_characteristic', 'use_accidental',
                 'confined_concrete', 'confinement_rho_s', 'confinement_f_yh',
+                'confinement_eps_su',
                 'ignore_compression_steel',
                 'elastic_modulus',
                 'include_tension',
