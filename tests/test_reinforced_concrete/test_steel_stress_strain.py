@@ -1,0 +1,194 @@
+"""
+Tests for reinforced_concrete.constitutive.steel_stress_strain module.
+"""
+
+import pytest
+import numpy as np
+from materials.reinforced_concrete.constitutive import (
+    SteelStressStrainEC2,
+    create_steel_stress_strain,
+)
+
+
+class TestSteelStressStrainEC2:
+    """Tests for SteelStressStrainEC2 class."""
+
+    @pytest.fixture
+    def model_inclined(self, steel_b500b):
+        """Inclined branch model (with strain hardening)."""
+        return SteelStressStrainEC2(steel=steel_b500b, branch_type="inclined")
+
+    @pytest.fixture
+    def model_horizontal(self, steel_b500b):
+        """Horizontal branch model (perfectly plastic)."""
+        return SteelStressStrainEC2(steel=steel_b500b, branch_type="horizontal")
+
+    def test_create_model_inclined(self, model_inclined):
+        """Test creating inclined branch model."""
+        assert model_inclined.name == "EC2 Steel"
+        assert model_inclined.branch_type == "inclined"
+
+    def test_create_model_horizontal(self, model_horizontal):
+        """Test creating horizontal branch model."""
+        assert model_horizontal.branch_type == "horizontal"
+
+    def test_design_vs_characteristic(self, steel_b500b):
+        """Test design vs characteristic strength."""
+        design_model = SteelStressStrainEC2(steel=steel_b500b, use_characteristic=False)
+        char_model = SteelStressStrainEC2(steel=steel_b500b, use_characteristic=True)
+
+        assert design_model.f_y == steel_b500b.f_yd
+        assert char_model.f_y == steel_b500b.f_yk
+
+    def test_yield_strain(self, model_inclined, steel_b500b):
+        """Test yield strain calculation."""
+        expected = steel_b500b.f_yd / steel_b500b.E_s
+        assert model_inclined.epsilon_y == pytest.approx(expected, rel=1e-6)
+
+    def test_stress_at_zero(self, model_inclined):
+        """Test stress at zero strain."""
+        assert model_inclined.get_stress(0.0) == 0.0
+
+    def test_elastic_region_tension(self, model_inclined, steel_b500b):
+        """Test elastic region in tension."""
+        strain = model_inclined.epsilon_y / 2
+        stress = model_inclined.get_stress(strain)
+
+        # σ = E · ε
+        expected = steel_b500b.E_s * strain
+        assert stress == pytest.approx(expected, rel=1e-6)
+
+    def test_stress_at_yield(self, model_inclined):
+        """Test stress at yield."""
+        stress = model_inclined.get_stress(model_inclined.epsilon_y)
+        assert stress == pytest.approx(model_inclined.f_y, rel=1e-3)
+
+    def test_plastic_region_inclined(self, model_inclined, steel_b500b):
+        """Test plastic region with strain hardening."""
+        # Mid-point between yield and ultimate
+        strain = (model_inclined.epsilon_y + steel_b500b.epsilon_ud) / 2
+        stress = model_inclined.get_stress(strain)
+
+        # Should be between f_yd and f_t
+        assert model_inclined.f_y < stress < steel_b500b.f_t
+
+    def test_plastic_region_horizontal(self, model_horizontal):
+        """Test plastic region for perfectly plastic."""
+        strain = model_horizontal.epsilon_y * 2  # Beyond yield
+        stress = model_horizontal.get_stress(strain)
+
+        # Should equal f_y (constant)
+        assert stress == pytest.approx(model_horizontal.f_y, rel=1e-6)
+
+    def test_stress_at_ultimate_inclined(self, model_inclined, steel_b500b):
+        """Test stress at ultimate strain for inclined branch."""
+        stress = model_inclined.get_stress(steel_b500b.epsilon_ud)
+        # Should reach f_t
+        assert stress == pytest.approx(steel_b500b.f_t, rel=1e-3)
+
+    def test_beyond_ultimate(self, model_inclined, steel_b500b):
+        """Test stress beyond ultimate strain."""
+        stress = model_inclined.get_stress(steel_b500b.epsilon_ud + 0.01)
+        assert stress == 0.0
+
+    def test_compression_elastic(self, model_inclined, steel_b500b):
+        """Test elastic compression."""
+        strain = -model_inclined.epsilon_y / 2
+        stress = model_inclined.get_stress(strain)
+
+        expected = steel_b500b.E_s * strain  # Negative
+        assert stress == pytest.approx(expected, rel=1e-6)
+
+    def test_compression_plastic(self, model_inclined):
+        """Test plastic compression."""
+        strain = -model_inclined.epsilon_y * 2  # Beyond yield in compression
+        stress = model_inclined.get_stress(strain)
+
+        # Should be negative. For inclined model, compression also has strain hardening
+        # so magnitude will be slightly higher than f_y
+        assert stress < 0
+        assert abs(stress) >= model_inclined.f_y  # At least f_y, possibly higher due to hardening
+
+    def test_stress_array(self, model_inclined, steel_b500b):
+        """Test vectorized calculation."""
+        strains = np.linspace(-0.01, 0.05, 100)
+        stresses = model_inclined.get_stress_array(strains)
+
+        assert isinstance(stresses, np.ndarray)
+        assert len(stresses) == len(strains)
+
+        # Check elastic region
+        elastic_mask = np.abs(strains) <= model_inclined.epsilon_y
+        expected_elastic = steel_b500b.E_s * strains[elastic_mask]
+        np.testing.assert_allclose(
+            stresses[elastic_mask],
+            expected_elastic,
+            rtol=1e-5
+        )
+
+    def test_get_stress_tension_only(self, model_inclined):
+        """Test get_stress_tension_only method."""
+        # Tension
+        stress_tension = model_inclined.get_stress_tension_only(0.01)
+        assert stress_tension > 0
+
+        # Compression (should return 0)
+        stress_compression = model_inclined.get_stress_tension_only(-0.01)
+        assert stress_compression == 0.0
+
+    def test_get_stress_compression_only(self, model_inclined):
+        """Test get_stress_compression_only method."""
+        # Compression
+        stress_compression = model_inclined.get_stress_compression_only(-0.01)
+        assert stress_compression < 0
+
+        # Tension (should return 0)
+        stress_tension = model_inclined.get_stress_compression_only(0.01)
+        assert stress_tension == 0.0
+
+    def test_get_ultimate_strain(self, model_inclined, steel_b500b):
+        """Test get_ultimate_strain method."""
+        assert model_inclined.get_ultimate_strain() == steel_b500b.epsilon_ud
+
+    def test_get_yield_stress(self, model_inclined):
+        """Test get_yield_stress method."""
+        assert model_inclined.get_yield_stress() == model_inclined.f_y
+
+
+class TestCreateSteelStressStrain:
+    """Tests for factory function."""
+
+    def test_create_inclined(self, steel_b500b):
+        """Test creating inclined branch model."""
+        model = create_steel_stress_strain(steel_b500b, "inclined")
+        assert isinstance(model, SteelStressStrainEC2)
+        assert model.branch_type == "inclined"
+
+    def test_create_horizontal(self, steel_b500b):
+        """Test creating horizontal branch model."""
+        model = create_steel_stress_strain(steel_b500b, "horizontal")
+        assert isinstance(model, SteelStressStrainEC2)
+        assert model.branch_type == "horizontal"
+
+    def test_default_branch_type(self, steel_b500b):
+        """Test default branch type."""
+        model = create_steel_stress_strain(steel_b500b)
+        assert model.branch_type == "inclined"
+
+    def test_use_characteristic_flag(self, steel_b500b):
+        """Test use_characteristic flag."""
+        model = create_steel_stress_strain(steel_b500b, use_characteristic=True)
+        assert model.f_y == steel_b500b.f_yk
+
+    def test_comparison_inclined_vs_horizontal(self, steel_b500b):
+        """Test that inclined has higher stress at large strains."""
+        inclined = create_steel_stress_strain(steel_b500b, "inclined")
+        horizontal = create_steel_stress_strain(steel_b500b, "horizontal")
+
+        # At large strain (near ultimate)
+        strain = steel_b500b.epsilon_ud * 0.9
+        stress_inclined = inclined.get_stress(strain)
+        stress_horizontal = horizontal.get_stress(strain)
+
+        # Inclined should have strain hardening
+        assert stress_inclined > stress_horizontal
