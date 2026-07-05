@@ -589,15 +589,16 @@ def test_find_strains_linear_elastic_tension_includes_moderate_bending_guesses(
     assert any(np.allclose(x, target_guess, rtol=0.0, atol=1e-12) for x in x0_seen)
 
 
-def test_linear_elastic_tension_default_allows_local_uncracked_zone(
+def test_linear_elastic_tension_allows_local_uncracked_zone_when_policy_disabled(
     rectangular_beam_with_rebars, concrete_c30
 ) -> None:
-    """Default linear-elastic tension keeps local stresses where |eps| <= eps_cr."""
+    """With crack-to-NA policy disabled, local tension stress is preserved below eps_cr."""
     diag = MNInteractionDiagram(
         section=rectangular_beam_with_rebars,
         concrete=concrete_c30,
         concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
         include_tension=True,
+        crack_to_neutral_axis_on_first_tension_failure=False,
     )
     eps_cr = float(diag.concrete_model.cracking_strain)
     strains = np.array([0.0001, 0.5 * eps_cr, 1.2 * eps_cr], dtype=float)
