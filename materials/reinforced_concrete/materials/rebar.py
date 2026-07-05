@@ -2,6 +2,7 @@
 Rebar (reinforcing bar) with geometry and material properties.
 """
 
+from functools import cached_property
 from typing import Final
 from math import pi, tan, sin, radians
 from pydantic import Field, computed_field, field_validator
@@ -27,7 +28,7 @@ class Rebar(ReinforcingSteel):
         """Cross-sectional area (mm²): A = π d² / 4."""
         return pi * (float(self.diameter) ** 2) / 4.0
 
-    @property
+    @cached_property
     def perimeter(self) -> float:
         """Perimeter (mm): P = π d."""
         return pi * float(self.diameter)
@@ -79,7 +80,7 @@ class ShearRebar(Rebar):
         """A_sw / s (mm²/mm)."""
         return self.total_area_per_spacing / self.spacing
 
-    @property
+    @cached_property
     def a_sw_over_s_sin_alpha(self) -> float:
         """
         A_sw / (s · sin α) in mm²/mm.

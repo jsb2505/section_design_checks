@@ -3,6 +3,7 @@ Base classes for material constitutive (stress-strain) relationships.
 """
 
 from abc import ABC, abstractmethod
+from functools import cached_property
 from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, Field, ConfigDict
 import numpy as np
@@ -49,6 +50,7 @@ class BaseConstitutiveModel(BaseModel, ABC):
         validate_assignment=True,
         arbitrary_types_allowed=True,
         extra="forbid",
+        ignored_types=(cached_property,),  # Allow cached_property in subclasses
     )
 
     name: str = Field(

@@ -6,9 +6,10 @@ and stress-strain parameters for concrete grades C12/15 to C90/105.
 """
 
 from enum import StrEnum
+from functools import cached_property
 from typing import Annotated
 from math import log
-from pydantic import Field, BeforeValidator
+from pydantic import Field, BeforeValidator, ConfigDict
 
 from materials.core.base_material import BaseMaterial
 
@@ -102,6 +103,10 @@ class ConcreteMaterial(BaseMaterial):
         - Strain: dimensionless
     """
 
+    model_config = ConfigDict(
+        ignored_types=(cached_property,),  # Allow cached_property to work
+    )
+
     name: str = Field(default="Concrete", description="Material name")
     grade: ConcreteGrade = Field(..., description="Concrete grade per EC2 Table 3.1")
 
@@ -159,17 +164,17 @@ class ConcreteMaterial(BaseMaterial):
         """Mean cylinder compressive strength (§Table 3.1): f_cm = f_ck + 8 (MPa)."""
         return self.grade.f_cm
 
-    @property
+    @cached_property
     def f_cd(self) -> float:
         """Design compressive strength (§3.1.6): f_cd = α_cc · f_ck / γ_c (MPa)."""
         return self.alpha_cc * self.f_ck / self.gamma_c
 
-    @property
+    @cached_property
     def f_cd_accidental(self) -> float:
         """Accidental design compressive strength: f_cd,acc = α_cc · f_ck / γ_c,acc (MPa)."""
         return self.alpha_cc * self.f_ck / self.gamma_c_accidental
 
-    @property
+    @cached_property
     def f_ctm(self) -> float:
         """
         Mean tensile strength (§Table 3.1), MPa.
@@ -181,27 +186,27 @@ class ConcreteMaterial(BaseMaterial):
             return 0.30 * (self.f_ck ** (2.0 / 3.0))
         return 2.12 * log(1.0 + self.f_cm / 10.0)
 
-    @property
+    @cached_property
     def f_ctk_005(self) -> float:
         """5% fractile characteristic tensile strength (§Table 3.1): 0.7 · f_ctm (MPa)."""
         return 0.7 * self.f_ctm
 
-    @property
+    @cached_property
     def f_ctk_095(self) -> float:
         """95% fractile characteristic tensile strength (§Table 3.1): 1.3 · f_ctm (MPa)."""
         return 1.3 * self.f_ctm
 
-    @property
+    @cached_property
     def f_ctd(self) -> float:
         """Design tensile strength (§3.1.6): f_ctd = α_ct · f_ctk,0.05 / γ_c (MPa)."""
         return self.alpha_ct * self.f_ctk_005 / self.gamma_c
 
-    @property
+    @cached_property
     def f_ctd_accidental(self) -> float:
         """Accidental design tensile strength: f_ctd,acc = α_ct · f_ctk,0.05 / γ_c,acc (MPa)."""
         return self.alpha_ct * self.f_ctk_005 / self.gamma_c_accidental
 
-    @property
+    @cached_property
     def E_cm(self) -> float:
         """
         Secant modulus of elasticity (§Table 3.1), MPa.
@@ -217,7 +222,7 @@ class ConcreteMaterial(BaseMaterial):
         """Implements BaseMaterial abstract method: return E_cm (MPa)."""
         return self.E_cm
 
-    @property
+    @cached_property
     def epsilon_c1(self) -> float:
         """
         Strain at peak stress for parabola-rectangle diagram (§Table 3.1).
@@ -228,47 +233,56 @@ class ConcreteMaterial(BaseMaterial):
         """
         return min(0.7 * (self.f_cm ** 0.31) / 1000.0, 0.0028)
 
-    @property
+    @cached_property
     def epsilon_cu1(self) -> float:
         """Ultimate strain for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0035
         return (2.8 + 27.0 * (((98.0 - self.f_cm) / 100.0) ** 4.0)) / 1000.0
 
-    @property
+    @cached_property
     def epsilon_c2(self) -> float:
         """Strain at reaching f_ck for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0020
         return (2.0 + 0.085 * ((self.f_ck - 50.0) ** 0.53)) / 1000.0
 
-    @property
+    @cached_property
     def epsilon_cu2(self) -> float:
         """Ultimate strain for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0035
         return (2.6 + 35.0 * (((90.0 - self.f_ck) / 100.0) ** 4.0)) / 1000.0
 
-    @property
+    @cached_property
     def n(self) -> float:
         """Exponent for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 2.0
         return 1.4 + 23.4 * (((90.0 - self.f_ck) / 100.0) ** 4.0)
 
-    @property
+    @cached_property
     def epsilon_c3(self) -> float:
         """Strain at reaching f_ck for bilinear (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.00175
         return (1.75 + 0.55 * ((self.f_ck - 50.0) / 40.0)) / 1000.0
 
-    @property
+    @cached_property
     def epsilon_cu3(self) -> float:
         """Ultimate strain for bilinear (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0035
         return (2.6 + 35.0 * (((90.0 - self.f_ck) / 100.0) ** 4.0)) / 1000.0
+    
+    def find_mean_flexural_tensile_strength(self, section_height_mm: float) -> float:
+        '''The return value of this function relies on the section height of the member.
+
+        Ref: EC2 §3.1.8(1)(3.23)
+        '''
+        h = section_height_mm
+        f_ctm_fl = self.f_ctm * max(1.6 - h/1000, 1)
+        return f_ctm_fl
 
     def __str__(self) -> str:
         return f"{self.grade} (f_ck={self.f_ck} MPa, f_cd={self.f_cd:.1f} MPa)"

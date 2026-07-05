@@ -22,6 +22,7 @@ This avoids discontinuities while not creating a post-crushing plateau.
 from __future__ import annotations
 
 from enum import StrEnum
+from functools import cached_property
 
 import numpy as np
 import numpy.typing as npt
@@ -105,7 +106,7 @@ class ConcreteStressStrainSchematic(BaseConstitutiveModel):
     )
 
 
-    @property
+    @cached_property
     def k(self) -> float:
         """k = 1.05 · E_cm · |ε_c1| / f_cm"""
         return 1.05 * self.concrete.E_cm * abs(self.concrete.epsilon_c1) / self.concrete.f_cm
@@ -258,7 +259,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
     )
 
 
-    @property
+    @cached_property
     def f_c(self) -> float:
         """Design, characteristic, or accidental strength depending on flags."""
         if self.use_characteristic:
@@ -266,7 +267,6 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         if self.use_accidental:
             return self.concrete.f_cd_accidental
         return self.concrete.f_cd
-
 
     @model_validator(mode="after")
     def validate_parameters(self) -> "ConcreteStressStrainParabolaRectangle":
@@ -476,7 +476,7 @@ class ConcreteStressStrainBilinear(BaseConstitutiveModel):
         description="Tolerance for ultimate strain clipping (dimensionless strain).",
     )
 
-    @property
+    @cached_property
     def f_c(self) -> float:
         """Design, characteristic, or accidental strength depending on flags."""
         if self.use_characteristic:
