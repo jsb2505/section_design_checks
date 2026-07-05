@@ -8,8 +8,11 @@ from materials.reinforced_concrete.constitutive import (
     ConcreteStressStrainSchematic,
     ConcreteStressStrainParabolaRectangle,
     ConcreteStressStrainBilinear,
+    ConcreteStressStrainLinearElastic,
+    ConcreteModelType,
     create_concrete_stress_strain,
 )
+import materials.reinforced_concrete.constitutive.concrete_stress_strain as css_mod
 
 
 class TestConcreteStressStrainSchematic:
@@ -461,3 +464,212 @@ class TestCreateConcreteStressStrain:
             use_accidental=True
         )
         assert model.f_c == concrete_c30.f_cd_accidental
+
+
+class TestConcreteStressStrainAdditionalBranches:
+    def test_apply_ultimate_tolerance_clip_near_band(self):
+        strains = np.array([0.0035005], dtype=float)
+        clipped, killed = css_mod._apply_ultimate_tolerance_clip(
+            strains=strains, epsilon_cu=0.0035, tol=0.001
+        )
+        assert not bool(killed[0])
+        assert clipped[0] == pytest.approx(0.0035, rel=1e-12)
+
+    def test_apply_ultimate_tolerance_clip_complex_and_zero_tol(self):
+        complex_strains = np.array([0.001 + 1e-30j, 0.004 + 2e-30j], dtype=np.complex128)
+        clipped_c, killed_c = css_mod._apply_ultimate_tolerance_clip(
+            strains=complex_strains, epsilon_cu=0.0035, tol=1e-6
+        )
+        assert np.array_equal(clipped_c, complex_strains)
+        assert not np.any(killed_c)
+
+        real_strains = np.array([0.002, 0.004], dtype=float)
+        clipped_r, killed_r = css_mod._apply_ultimate_tolerance_clip(
+            strains=real_strains, epsilon_cu=0.0035, tol=0.0
+        )
+        assert np.array_equal(clipped_r, real_strains)
+        assert np.array_equal(killed_r, np.array([False, True]))
+
+    def test_schematic_validation_and_scalar_guards(self, concrete_c30, monkeypatch):
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "f_cm", property(lambda self: 0.0))
+            with pytest.raises(ValueError, match="f_cm must be > 0"):
+                ConcreteStressStrainSchematic(concrete=concrete_c30)
+
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "epsilon_c1", property(lambda self: 0.0))
+            with pytest.raises(ValueError, match="epsilon_c1 must be non-zero"):
+                ConcreteStressStrainSchematic(concrete=concrete_c30)
+
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "epsilon_cu1", property(lambda self: 0.0))
+            with pytest.raises(ValueError, match="epsilon_cu1 must be > 0"):
+                ConcreteStressStrainSchematic(concrete=concrete_c30)
+
+        model = ConcreteStressStrainSchematic(concrete=concrete_c30)
+        # Clip to epsilon_cu when in tolerance band.
+        s_clip = model.get_stress(concrete_c30.epsilon_cu1 + 0.5 * model.ultimate_strain_tol)
+        s_ref = model.get_stress(concrete_c30.epsilon_cu1)
+        assert s_clip == pytest.approx(s_ref, rel=1e-12)
+
+        # Denominator singularity guard.
+        with monkeypatch.context() as m:
+            m.setattr(type(model), "k", property(lambda self: 1.0))
+            assert model.get_stress(abs(concrete_c30.epsilon_c1)) == pytest.approx(0.0, rel=1e-12)
+
+    def test_schematic_array_all_killed(self, concrete_c30):
+        model = ConcreteStressStrainSchematic(concrete=concrete_c30, ultimate_strain_tol=0.0)
+        strains = np.array([concrete_c30.epsilon_cu1 + 1e-3, concrete_c30.epsilon_cu1 + 2e-3])
+        stresses = model.get_stress_array(strains)
+        assert np.allclose(stresses, 0.0)
+        assert np.allclose(model.get_stress_array(np.array([-1e-3, 0.0])), 0.0)
+
+    def test_parabola_validation_tangent_and_complex_array(self, concrete_c30, monkeypatch):
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "epsilon_c2", property(lambda self: 0.0))
+            with pytest.raises(ValueError, match="epsilon_c2 must be > 0"):
+                ConcreteStressStrainParabolaRectangle(concrete=concrete_c30)
+
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "epsilon_cu2", property(lambda self: 0.0))
+            with pytest.raises(ValueError, match="epsilon_cu2 must be > 0"):
+                ConcreteStressStrainParabolaRectangle(concrete=concrete_c30)
+
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "epsilon_cu2", property(lambda self: 0.001))
+            m.setattr(type(concrete_c30), "epsilon_c2", property(lambda self: 0.002))
+            with pytest.raises(ValueError, match="epsilon_cu2 must be >= epsilon_c2"):
+                ConcreteStressStrainParabolaRectangle(concrete=concrete_c30)
+
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "f_cd", property(lambda self: -1.0))
+            with pytest.raises(ValueError, match="strength f_c must be > 0"):
+                ConcreteStressStrainParabolaRectangle(concrete=concrete_c30)
+
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "n", property(lambda self: 0.0))
+            with pytest.raises(ValueError, match="exponent n must be > 0"):
+                ConcreteStressStrainParabolaRectangle(concrete=concrete_c30)
+
+        model = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30)
+        # Unconfined property branches.
+        assert model.epsilon_c2_c == pytest.approx(concrete_c30.epsilon_c2, rel=1e-12)
+        assert model.epsilon_cu2_c == pytest.approx(concrete_c30.epsilon_cu2, rel=1e-12)
+        # Clip in scalar path (tolerance band).
+        s_clip = model.get_stress(model.epsilon_cu2_eff + 0.5 * model.ultimate_strain_tol)
+        assert s_clip == pytest.approx(model.f_c, rel=1e-12)
+
+        # Complex array branch reconstruction.
+        strains = np.array([0.0 + 0j, model.epsilon_c2_eff * 0.5 + 1e-30j], dtype=np.complex128)
+        stresses = model.get_stress_array(strains)
+        assert np.iscomplexobj(stresses)
+        assert np.allclose(model.get_stress_array(np.array([-1e-3, 0.0])), 0.0)
+        model_zero_tol = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, ultimate_strain_tol=0.0)
+        killed = model_zero_tol.get_stress_array(
+            np.array([model_zero_tol.epsilon_cu2_eff + 1e-3, model_zero_tol.epsilon_cu2_eff + 2e-3])
+        )
+        assert np.allclose(killed, 0.0)
+
+        # Scalar tangent branches.
+        assert model.get_tangent_modulus(-1e-4) == pytest.approx(0.0, rel=1e-12)
+        assert model.get_tangent_modulus(model.epsilon_cu2_eff + 1e-3) == pytest.approx(0.0, rel=1e-12)
+        assert model.get_tangent_modulus(model.epsilon_c2_eff + 1e-6) == pytest.approx(0.0, rel=1e-12)
+        mid = 0.5 * model.epsilon_c2_eff
+        e_t_mid = model.get_tangent_modulus(mid)
+        assert e_t_mid > 0.0
+
+        # Array tangent branches.
+        et = model.get_tangent_modulus_array(np.array([-1e-4, mid, model.epsilon_c2_eff + 1e-6]))
+        assert et[0] == pytest.approx(0.0, rel=1e-12)
+        assert et[1] > 0.0
+        assert et[2] == pytest.approx(0.0, rel=1e-12)
+
+    def test_bilinear_validation_and_additional_paths(self, concrete_c30, monkeypatch):
+        model_char = ConcreteStressStrainBilinear(concrete=concrete_c30, use_characteristic=True)
+        assert model_char.f_c == pytest.approx(concrete_c30.f_ck, rel=1e-12)
+
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "epsilon_c3", property(lambda self: 0.0))
+            with pytest.raises(ValueError, match="epsilon_c3 must be > 0"):
+                ConcreteStressStrainBilinear(concrete=concrete_c30)
+
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "epsilon_cu3", property(lambda self: 0.0))
+            with pytest.raises(ValueError, match="epsilon_cu3 must be > 0"):
+                ConcreteStressStrainBilinear(concrete=concrete_c30)
+
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "epsilon_cu3", property(lambda self: 0.001))
+            m.setattr(type(concrete_c30), "epsilon_c3", property(lambda self: 0.002))
+            with pytest.raises(ValueError, match="epsilon_cu3 must be >= epsilon_c3"):
+                ConcreteStressStrainBilinear(concrete=concrete_c30)
+
+        with monkeypatch.context() as m:
+            m.setattr(type(concrete_c30), "f_cd", property(lambda self: -1.0))
+            with pytest.raises(ValueError, match="strength f_c must be > 0"):
+                ConcreteStressStrainBilinear(concrete=concrete_c30)
+
+        model = ConcreteStressStrainBilinear(concrete=concrete_c30)
+        s_clip = model.get_stress(concrete_c30.epsilon_cu3 + 0.5 * model.ultimate_strain_tol)
+        assert s_clip == pytest.approx(model.f_c, rel=1e-12)
+
+        # All valid compression strains killed by ultimate limit.
+        model_zero_tol = ConcreteStressStrainBilinear(concrete=concrete_c30, ultimate_strain_tol=0.0)
+        strains = np.array([concrete_c30.epsilon_cu3 + 1e-3, concrete_c30.epsilon_cu3 + 2e-3])
+        stresses = model_zero_tol.get_stress_array(strains)
+        assert np.allclose(stresses, 0.0)
+        assert np.allclose(model.get_stress_array(np.array([-1e-3, 0.0])), 0.0)
+        arr = np.array([0.0, concrete_c30.epsilon_c3 * 0.5, 0.5 * (concrete_c30.epsilon_c3 + concrete_c30.epsilon_cu3)])
+        out = model.get_stress_array(arr)
+        assert out[0] == pytest.approx(0.0, rel=1e-12)
+        assert out[1] == pytest.approx(model.f_c * 0.5, rel=1e-12)
+        assert out[2] == pytest.approx(model.f_c, rel=1e-12)
+
+        assert model.get_yield_stress() == pytest.approx(model.f_c, rel=1e-12)
+
+    def test_linear_elastic_model_branches_and_factory(self, concrete_c30):
+        m_no_tension = ConcreteStressStrainLinearElastic(concrete=concrete_c30, include_tension=False)
+        assert m_no_tension.E_mod == pytest.approx(concrete_c30.E_cm, rel=1e-12)
+        assert m_no_tension.cracking_strain < 0.0
+        assert m_no_tension.get_stress(1e-4) == pytest.approx(m_no_tension.E_mod * 1e-4, rel=1e-12)
+        assert m_no_tension.get_stress(0.0) == pytest.approx(0.0, rel=1e-12)
+        assert m_no_tension.get_stress(-1e-4) == pytest.approx(0.0, rel=1e-12)
+
+        m_tension = ConcreteStressStrainLinearElastic(
+            concrete=concrete_c30,
+            elastic_modulus=20_000.0,
+            include_tension=True,
+        )
+        assert m_tension.E_mod == pytest.approx(20_000.0, rel=1e-12)
+        # In-tension below crack limit -> linear.
+        in_tension = 0.5 * m_tension.cracking_strain
+        assert m_tension.get_stress(in_tension) == pytest.approx(m_tension.E_mod * in_tension, rel=1e-12)
+        # Beyond cracking -> zero.
+        assert m_tension.get_stress(1.1 * m_tension.cracking_strain) == pytest.approx(0.0, rel=1e-12)
+
+        arr = np.array([1e-4, -1e-4, 1.2 * m_tension.cracking_strain, 0.0])
+        stresses = m_tension.get_stress_array(arr)
+        assert stresses[0] > 0.0
+        assert stresses[1] < 0.0
+        assert stresses[2] == pytest.approx(0.0, rel=1e-12)
+        assert stresses[3] == pytest.approx(0.0, rel=1e-12)
+
+        assert m_tension.get_tangent_modulus(1e-4) == pytest.approx(m_tension.E_mod, rel=1e-12)
+        assert m_tension.get_tangent_modulus(in_tension) == pytest.approx(m_tension.E_mod, rel=1e-12)
+        assert m_tension.get_tangent_modulus(1.1 * m_tension.cracking_strain) == pytest.approx(0.0, rel=1e-12)
+
+        et = m_tension.get_tangent_modulus_array(arr)
+        assert et[0] == pytest.approx(m_tension.E_mod, rel=1e-12)
+        assert et[1] == pytest.approx(m_tension.E_mod, rel=1e-12)
+        assert et[2] == pytest.approx(0.0, rel=1e-12)
+        assert m_tension.get_yield_stress() == pytest.approx(concrete_c30.f_ck, rel=1e-12)
+        assert m_tension.get_ultimate_strain() == pytest.approx(0.01, rel=1e-12)
+
+        m_factory = create_concrete_stress_strain(
+            concrete=concrete_c30,
+            model_type=ConcreteModelType.LINEAR_ELASTIC,
+            elastic_modulus=15_000.0,
+            include_tension=True,
+        )
+        assert isinstance(m_factory, ConcreteStressStrainLinearElastic)
+        assert m_factory.E_mod == pytest.approx(15_000.0, rel=1e-12)

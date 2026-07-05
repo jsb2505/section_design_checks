@@ -8,6 +8,7 @@ from materials.reinforced_concrete.constitutive import (
     SteelStressStrainEC2,
     create_steel_stress_strain,
 )
+from materials.reinforced_concrete.materials import ReinforcingSteel
 
 
 class TestSteelStressStrainEC2:
@@ -47,6 +48,16 @@ class TestSteelStressStrainEC2:
         # f_yd_accidental should be higher than f_yd (due to reduced partial factor)
         assert steel_b500b.f_yd_accidental > steel_b500b.f_yd
 
+    def test_characteristic_tensile_strength_selection(self, steel_b500b):
+        """Characteristic mode should use f_t (not design-reduced f_td)."""
+        model_char = SteelStressStrainEC2(steel=steel_b500b, use_characteristic=True)
+        assert model_char.f_t == pytest.approx(steel_b500b.f_t, rel=1e-12)
+
+    def test_accidental_tensile_strength_selection(self, steel_b500b):
+        """Accidental mode should use f_td_accidental for inclined branch top stress."""
+        model_acc = SteelStressStrainEC2(steel=steel_b500b, use_accidental=True)
+        assert model_acc.f_t == pytest.approx(steel_b500b.f_td_accidental, rel=1e-12)
+
     def test_cannot_use_both_characteristic_and_accidental(self, steel_b500b):
         """Test that using both flags raises an error."""
         with pytest.raises(ValueError, match="Cannot set both use_characteristic=True and use_accidental=True"):
@@ -55,6 +66,12 @@ class TestSteelStressStrainEC2:
                 use_characteristic=True,
                 use_accidental=True,
             )
+
+    def test_inclined_branch_requires_epsilon_ud_greater_than_epsilon_y(self):
+        """Validator should reject inclined model when epsilon_ud <= epsilon_y."""
+        pathological = ReinforcingSteel(grade="B500B", gamma_s=0.01)
+        with pytest.raises(ValueError, match="epsilon_ud .* must be > epsilon_y"):
+            SteelStressStrainEC2(steel=pathological, branch_type="inclined")
 
     def test_yield_strain(self, model_inclined, steel_b500b):
         """Test yield strain calculation."""
@@ -143,6 +160,29 @@ class TestSteelStressStrainEC2:
             rtol=1e-5
         )
 
+    def test_stress_array_all_elastic_returns_early(self, model_inclined, steel_b500b):
+        """Cover early return when no plastic strains are present."""
+        strains = np.array([-0.5, 0.0, 0.5]) * model_inclined.epsilon_y
+        stresses = model_inclined.get_stress_array(strains)
+        np.testing.assert_allclose(stresses, steel_b500b.E_s * strains, rtol=1e-12)
+
+    def test_stress_array_horizontal_plastic_branch(self, model_horizontal):
+        """Cover horizontal-branch vectorized plastic path."""
+        strains = np.array([0.0, model_horizontal.epsilon_y * 1.5, -model_horizontal.epsilon_y * 2.0])
+        stresses = model_horizontal.get_stress_array(strains)
+        assert stresses[0] == pytest.approx(0.0, rel=1e-12)
+        assert stresses[1] == pytest.approx(model_horizontal.f_y, rel=1e-12)
+        assert stresses[2] == pytest.approx(-model_horizontal.f_y, rel=1e-12)
+
+    def test_stress_array_complex_step_branch(self, model_inclined):
+        """Complex input should use the complex-step plastic branch (no clipping)."""
+        eps_y = model_inclined.epsilon_y
+        strains = np.array([eps_y * 0.5 + 1e-30j, eps_y * 1.5 + 1e-30j], dtype=np.complex128)
+        stresses = model_inclined.get_stress_array(strains)
+        assert np.iscomplexobj(stresses)
+        # Plastic entry should remain above yield for inclined branch.
+        assert np.real(stresses[1]) > model_inclined.f_y
+
     def test_get_stress_tension_only(self, model_inclined):
         """Test get_stress_tension_only method."""
         # Tension
@@ -170,6 +210,44 @@ class TestSteelStressStrainEC2:
     def test_get_yield_stress(self, model_inclined):
         """Test get_yield_stress method."""
         assert model_inclined.get_yield_stress() == model_inclined.f_y
+
+    def test_get_tangent_modulus_scalar_branches(self, model_inclined, model_horizontal, steel_b500b):
+        """Cover elastic, hardening, and clipped scalar tangent branches."""
+        # Elastic branch
+        assert model_inclined.get_tangent_modulus(model_inclined.epsilon_y * 0.5) == pytest.approx(
+            steel_b500b.E_s, rel=1e-12
+        )
+        # Horizontal post-yield branch
+        assert model_horizontal.get_tangent_modulus(model_horizontal.epsilon_y * 2.0) == pytest.approx(0.0, rel=1e-12)
+        # Inclined hardening branch
+        eps_mid = 0.5 * (model_inclined.epsilon_y + steel_b500b.epsilon_ud)
+        e_hard = (model_inclined.f_t - model_inclined.f_y) / (steel_b500b.epsilon_ud - model_inclined.epsilon_y)
+        assert model_inclined.get_tangent_modulus(eps_mid) == pytest.approx(e_hard, rel=1e-12)
+        # Beyond ultimate (clipped flat)
+        assert model_inclined.get_tangent_modulus(steel_b500b.epsilon_ud + 0.01) == pytest.approx(0.0, rel=1e-12)
+
+    def test_get_tangent_modulus_array_branches(self, model_inclined, model_horizontal, steel_b500b):
+        """Cover vectorized elastic-only, horizontal, and inclined hardening branches."""
+        # Elastic-only input (exits early with no plastic values)
+        elastic = np.array([-0.5, 0.0, 0.5]) * model_inclined.epsilon_y
+        et_elastic = model_inclined.get_tangent_modulus_array(elastic)
+        np.testing.assert_allclose(et_elastic, steel_b500b.E_s, rtol=1e-12)
+
+        # Horizontal branch: plastic values should remain zero tangent
+        horiz_vals = np.array([0.0, model_horizontal.epsilon_y * 1.5, -model_horizontal.epsilon_y * 2.0])
+        et_horizontal = model_horizontal.get_tangent_modulus_array(horiz_vals)
+        assert et_horizontal[0] == pytest.approx(steel_b500b.E_s, rel=1e-12)
+        assert et_horizontal[1] == pytest.approx(0.0, rel=1e-12)
+        assert et_horizontal[2] == pytest.approx(0.0, rel=1e-12)
+
+        # Inclined branch: hardening in plastic-but-below-ultimate, zero beyond ultimate
+        eps_mid = 0.5 * (model_inclined.epsilon_y + steel_b500b.epsilon_ud)
+        vals = np.array([0.0, eps_mid, steel_b500b.epsilon_ud + 0.01])
+        et_inclined = model_inclined.get_tangent_modulus_array(vals)
+        e_hard = (model_inclined.f_t - model_inclined.f_y) / (steel_b500b.epsilon_ud - model_inclined.epsilon_y)
+        assert et_inclined[0] == pytest.approx(steel_b500b.E_s, rel=1e-12)
+        assert et_inclined[1] == pytest.approx(e_hard, rel=1e-12)
+        assert et_inclined[2] == pytest.approx(0.0, rel=1e-12)
 
 
 class TestCreateSteelStressStrain:

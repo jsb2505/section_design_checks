@@ -150,6 +150,8 @@ def make_check(*, diagram: DummyDiagram) -> BendingCheck:
     object.__setattr__(check, 'n_fibres_width', 20)
     object.__setattr__(check, 'n_fibres_height', 30)
     object.__setattr__(check, 'use_accidental', False)
+    object.__setattr__(check, 'concrete_model_override', None)
+    object.__setattr__(check, 'steel_models_override', None)
 
     # Snapshot-based caching: pre-set snapshot so _get_diagram() returns the stub
     snapshot = {

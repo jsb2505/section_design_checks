@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Optional, Tuple, Literal
 from dataclasses import dataclass
 import numpy as np
@@ -88,6 +89,7 @@ class StressStrainViewer:
         M_Ed: float,
         N_Ed: float,
         *,
+        save_path: Optional[str | Path] = None,
         show: bool = True,
         title: Optional[str] = None,
         width: int = 1200,
@@ -108,6 +110,16 @@ class StressStrainViewer:
         Also shows:
         - Neutral axis position
         - Resultant force annotations
+
+        Args:
+            M_Ed: Applied moment (kN·m)
+            N_Ed: Applied axial force (kN, compression positive)
+            save_path: If provided, save plot to this file path (HTML format)
+            show: If True, display plot (fig.show())
+            title: Custom plot title (optional)
+            width: Figure width in pixels
+            height: Figure height in pixels
+            section_render: Concrete rendering mode ('points' or 'filled')
         """
         try:
             import plotly.graph_objects as go
@@ -134,6 +146,8 @@ class StressStrainViewer:
 
         self._apply_stress_strain_layout(fig, state, title=title, width=width, height=height)
 
+        if save_path:
+            fig.write_html(str(save_path))
         if show:
             fig.show()
 
@@ -161,7 +175,7 @@ class StressStrainViewer:
         except ValueError as e:
             raise ValueError(
                 f"Cannot find strain state for M_Ed={M_Ed:.1f} kN·m, N_Ed={N_Ed:.1f} kN. "
-                f"Load point may be outside the M-N diagram envelope. Original error: {e}"
+                f"Solver failed numerically. Original error: {e}"
             ) from e
 
         # 2) Fibre-level data

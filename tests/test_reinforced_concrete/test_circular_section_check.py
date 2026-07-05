@@ -282,3 +282,37 @@ class TestCircularRhoLFromStrains:
             eps_bottom=0.001,
         )
         assert rho_l == pytest.approx(0.0, abs=1e-15)
+
+
+class TestCircularStressLimitsWrapper:
+    def test_wrapper_matches_internal_stress_limits_check(self):
+        section = _make_circular_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        check = CircularSectionCheck(
+            section=section,
+            concrete=concrete,
+            diameter=600.0,
+            cover=50.0,
+            shear_reinforcement=None,
+        )
+
+        M_Ed = 80.0
+        N_Ed = 300.0
+
+        wrapped = check.perform_stress_limits_check(
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            warning_threshold=0.9,
+            ignore_compression_steel=True,
+            suppress_warnings=True,
+        )
+        direct = check.stress_limits.perform_check(
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            warning_threshold=0.9,
+            ignore_compression_steel=True,
+            suppress_warnings=True,
+        )
+
+        assert wrapped.utilization == pytest.approx(direct.utilization, rel=1e-12)
+        assert wrapped.details["governing_check"] == direct.details["governing_check"]

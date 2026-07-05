@@ -238,6 +238,10 @@ class TestShearRebar:
         data = shear_links.model_dump()
         assert "a_sw_over_s_sin_alpha" in data
 
+    def test_max_leg_spacing_invalid_depth(self, shear_links):
+        with pytest.raises(ValueError, match="effective_depth must be > 0"):
+            shear_links.max_leg_spacing(0.0)
+
     def test_str_representation(self, shear_links):
         """Test __str__ method."""
         s = str(shear_links)

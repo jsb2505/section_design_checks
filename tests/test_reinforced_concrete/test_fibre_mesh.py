@@ -2,10 +2,13 @@
 Tests for reinforced_concrete.geometry.fibre_mesh module.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import numpy as np
 from shapely.geometry import Point
 from materials.reinforced_concrete.geometry import FibreMesh, create_linear_rebar_layer
+from materials.reinforced_concrete.geometry.fibre_mesh import Fibre
 from materials.core.geometry import Point2D
 
 
@@ -227,3 +230,141 @@ class TestFibreMesh:
         assert "concrete" in r
         assert "steel" in r
         assert str(mesh_simple.total_fibres) in r
+
+    def test_fibre_repr(self):
+        f = Fibre(
+            x=1.0,
+            y=2.0,
+            area=3.0,
+            material_type="concrete",
+            material_index=0,
+            i=4,
+            j=5,
+        )
+        text = repr(f)
+        assert "Fibre(" in text
+        assert "material_type=concrete" in text
+        assert "i=4" in text
+        assert "j=5" in text
+
+    def test_build_rebar_circles_skips_zero_radius_rebars(self):
+        mesh = FibreMesh.__new__(FibreMesh)
+        mesh.section = SimpleNamespace(
+            rebar_groups=[
+                SimpleNamespace(
+                    rebar=SimpleNamespace(diameter=0.0),
+                    positions=[SimpleNamespace(x=0.0, y=0.0)],
+                )
+            ]
+        )
+
+        circles = FibreMesh._build_rebar_circles(mesh)
+        assert circles == []
+
+    def test_generate_steel_fibres_skips_zero_area_rebars(self):
+        mesh = FibreMesh.__new__(FibreMesh)
+        mesh.section = SimpleNamespace(
+            rebar_groups=[
+                SimpleNamespace(
+                    rebar=SimpleNamespace(area=0.0),
+                    positions=[SimpleNamespace(x=0.0, y=0.0)],
+                )
+            ]
+        )
+        mesh.steel_fibres = []
+
+        FibreMesh._generate_steel_fibres(mesh)
+        assert mesh.steel_fibres == []
+
+    def test_generate_mesh_raises_when_no_concrete_fibres(self, rectangular_beam, monkeypatch):
+        monkeypatch.setattr(FibreMesh, "_generate_concrete_fibres", lambda self: None)
+        monkeypatch.setattr(FibreMesh, "_generate_steel_fibres", lambda self: None)
+
+        with pytest.raises(ValueError, match="produced no concrete fibres"):
+            FibreMesh(section=rectangular_beam, n_fibres_width=2, n_fibres_height=2)
+
+    def test_generate_concrete_fibres_raises_for_degenerate_bounding_box(self):
+        mesh = FibreMesh.__new__(FibreMesh)
+        mesh.section = SimpleNamespace(get_bounding_box=lambda: (0.0, 0.0, 0.0, 1.0))
+        mesh.n_fibres_width = 2
+        mesh.n_fibres_height = 2
+        mesh.concrete_fibres = []
+
+        with pytest.raises(ValueError, match="degenerate"):
+            FibreMesh._generate_concrete_fibres(mesh)
+
+    def test_generate_concrete_fibres_skips_empty_intersections(self):
+        class _Prepared:
+            def intersects(self, _cell):
+                return True
+
+        class _EmptyGeom:
+            is_empty = True
+
+        class _Outline:
+            def intersection(self, _cell):
+                return _EmptyGeom()
+
+        mesh = FibreMesh.__new__(FibreMesh)
+        mesh.section = SimpleNamespace(get_bounding_box=lambda: (0.0, 0.0, 1.0, 1.0))
+        mesh.n_fibres_width = 1
+        mesh.n_fibres_height = 1
+        mesh.exclude_steel_area = False
+        mesh._bar_union = None
+        mesh._bar_union_prepared = None
+        mesh._outline_prepared = _Prepared()
+        mesh._outline = _Outline()
+        mesh.concrete_fibres = []
+
+        FibreMesh._generate_concrete_fibres(mesh)
+        assert mesh.concrete_fibres == []
+
+    def test_generate_concrete_fibres_quick_rejects_non_intersecting_cells(self):
+        class _Prepared:
+            def intersects(self, _cell):
+                return False
+
+        class _Outline:
+            def intersection(self, _cell):  # pragma: no cover - should not be called
+                raise AssertionError("intersection should not be called for quick reject")
+
+        mesh = FibreMesh.__new__(FibreMesh)
+        mesh.section = SimpleNamespace(get_bounding_box=lambda: (0.0, 0.0, 1.0, 1.0))
+        mesh.n_fibres_width = 1
+        mesh.n_fibres_height = 1
+        mesh.exclude_steel_area = False
+        mesh._bar_union = None
+        mesh._bar_union_prepared = None
+        mesh._outline_prepared = _Prepared()
+        mesh._outline = _Outline()
+        mesh.concrete_fibres = []
+
+        FibreMesh._generate_concrete_fibres(mesh)
+        assert mesh.concrete_fibres == []
+
+    def test_generate_concrete_fibres_skips_tiny_area_cells(self):
+        class _Prepared:
+            def intersects(self, _cell):
+                return True
+
+        class _TinyGeom:
+            is_empty = False
+            area = 1e-9
+
+        class _Outline:
+            def intersection(self, _cell):
+                return _TinyGeom()
+
+        mesh = FibreMesh.__new__(FibreMesh)
+        mesh.section = SimpleNamespace(get_bounding_box=lambda: (0.0, 0.0, 1.0, 1.0))
+        mesh.n_fibres_width = 1
+        mesh.n_fibres_height = 1
+        mesh.exclude_steel_area = False
+        mesh._bar_union = None
+        mesh._bar_union_prepared = None
+        mesh._outline_prepared = _Prepared()
+        mesh._outline = _Outline()
+        mesh.concrete_fibres = []
+
+        FibreMesh._generate_concrete_fibres(mesh)
+        assert mesh.concrete_fibres == []

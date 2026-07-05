@@ -125,6 +125,19 @@ class TestCheckResult:
         assert json_data["status"] == "pass"
         assert json_data["utilization"] == pytest.approx(0.75)
 
+    def test_str_vector_summary_fallback_keys_and_missing_components(self):
+        result = CheckResult(
+            check_name="Vector Check",
+            status=CheckStatus.PASS,
+            utilization=0.5,
+            demand_components={"X": 10.0, "Y": 20.0},
+            capacity_components={"X": 50.0},
+            units_components={"X": "kN"},
+        )
+        s = str(result)
+        assert "X: 10.00/50.00 kN" in s
+        assert "Y:" not in s
+
 
 class TestBaseCodeCheck:
     """Tests for BaseCodeCheck abstract class."""
@@ -253,3 +266,18 @@ class TestBaseCodeCheck:
         # Should handle gracefully (infinite utilization)
         assert result.status == CheckStatus.FAIL
         assert result.utilization == float('inf')
+
+    def test_create_result_missing_inputs_raises(self):
+        check = self.ConcreteCheck()
+        with pytest.raises(ValueError, match="Provide either utilization"):
+            check._create_result(
+                check_name="Bad",
+                code_reference="Test",
+                demand=None,
+                capacity=None,
+            )
+
+
+def test_abstract_perform_check_default_body_returns_none():
+    # Call the abstract method body directly to exercise the default no-op branch.
+    assert BaseCodeCheck.perform_check(object()) is None

@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 
@@ -191,6 +192,7 @@ class CrackWidthViewer:
         self,
         load_cases: Sequence[Dict[str, Any]],
         *,
+        save_path: Optional[Union[str, Path]] = None,
         show: bool = True,
         title: Optional[str] = None,
         width: int = 900,
@@ -208,6 +210,7 @@ class CrackWidthViewer:
             load_cases: Sequence of dicts, each with keys:
                 ``M_Ed`` (float, kN·m), ``N_Ed`` (float, kN),
                 and optionally ``name`` (str).
+            save_path: If provided, save plot to this file path (HTML format).
             show: If True, call ``fig.show()``.
             title: Custom plot title.
             width: Figure width in pixels.
@@ -304,6 +307,8 @@ class CrackWidthViewer:
             height=height,
         )
 
+        if save_path:
+            fig.write_html(str(save_path))
         if show:
             fig.show()
         return fig
@@ -319,6 +324,7 @@ class CrackWidthViewer:
         n_grid: int = 20,
         n_boundary_points: int = 40,
         force_cracked: bool = True,
+        save_path: Optional[Union[str, Path]] = None,
         show: bool = True,
         title: Optional[str] = None,
         width: int = 900,
@@ -342,6 +348,7 @@ class CrackWidthViewer:
             force_cracked: If True (default), compute crack widths even when
                 M_Ed < M_cr. Recommended because a section cracked under one
                 load case remains cracked under subsequent cases.
+            save_path: If provided, save plot to this file path (HTML format).
             show: If True, call ``fig.show()``.
             title: Custom plot title.
             width: Figure width in pixels.
@@ -466,6 +473,8 @@ class CrackWidthViewer:
             margin=dict(r=160),
         )
 
+        if save_path:
+            fig.write_html(str(save_path))
         if show:
             fig.show()
         return fig

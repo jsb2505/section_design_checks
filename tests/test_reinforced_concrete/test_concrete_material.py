@@ -5,6 +5,7 @@ Tests for reinforced_concrete.materials.concrete module.
 import pytest
 from pydantic import ValidationError
 from materials.reinforced_concrete.materials import ConcreteMaterial
+from materials.reinforced_concrete.materials.concrete import find_mean_flexural_tensile_strength
 
 
 class TestConcreteMaterial:
@@ -212,3 +213,37 @@ class TestConcreteMaterial:
         assert c55.epsilon_cu2 < 0.0035
         assert c55.epsilon_c3 > 0.00175
         assert c55.n < 2.0
+
+    def test_accidental_tensile_strength_and_high_strength_ultimate_branches(self):
+        c60 = ConcreteMaterial(grade="C60/75")
+        expected_fctd_acc = c60.alpha_ct * c60.f_ctk_005 / c60.gamma_c_accidental
+        assert c60.f_ctd_accidental == pytest.approx(expected_fctd_acc, rel=1e-12)
+        assert c60.epsilon_cu1 < 0.0035
+        assert c60.epsilon_cu3 < 0.0035
+
+    def test_accidental_and_shear_design_strength_properties(self):
+        c30 = ConcreteMaterial(grade="C30/37")
+        assert c30.f_cd_accidental == pytest.approx(c30.alpha_cc * c30.f_ck / c30.gamma_c_accidental, rel=1e-12)
+        assert c30.f_cd_shear == pytest.approx(c30.alpha_cc_shear * c30.f_ck / c30.gamma_c, rel=1e-12)
+        assert c30.f_cd_shear_accidental == pytest.approx(
+            c30.alpha_cc_shear * c30.f_ck / c30.gamma_c_accidental,
+            rel=1e-12,
+        )
+
+    def test_epsilon_c1_and_epsilon_cu1_branches(self):
+        c30 = ConcreteMaterial(grade="C30/37")
+        c90 = ConcreteMaterial(grade="C90/105")
+        assert c30.epsilon_cu1 == pytest.approx(0.0035, rel=1e-12)
+        assert c30.epsilon_c1 < 0.0028
+        # High-grade branch should still be capped at 2.8‰
+        assert c90.epsilon_c1 <= 0.0028 + 1e-12
+
+    def test_mean_flexural_tensile_strength_function_and_method(self, concrete_c30):
+        # h = 100 mm -> 0.1 m, factor = max(1.6 - 0.1, 1.0) = 1.5
+        direct = find_mean_flexural_tensile_strength(concrete_c30.f_ctm, 100.0)
+        assert direct == pytest.approx(concrete_c30.f_ctm * 1.5, rel=1e-12)
+        assert concrete_c30.find_mean_flexural_tensile_strength(100.0) == pytest.approx(direct, rel=1e-12)
+
+        # Large section height should floor factor at 1.0
+        large = find_mean_flexural_tensile_strength(concrete_c30.f_ctm, 3000.0)
+        assert large == pytest.approx(concrete_c30.f_ctm, rel=1e-12)

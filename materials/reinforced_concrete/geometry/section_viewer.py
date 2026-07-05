@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 import numpy as np
 from shapely.geometry import Polygon
@@ -17,6 +18,7 @@ class SectionViewer:
         self,
         *,
         concrete: Optional["ConcreteMaterial"] = None,
+        save_path: Optional[str | Path] = None,
         show: bool = True,
         title: Optional[str] = None,
         width: int = 700,
@@ -38,6 +40,7 @@ class SectionViewer:
 
         Args:
             concrete: Optional ConcreteMaterial for hover info and transformed centroid
+            save_path: If provided, save plot to this file path (HTML format)
             show: If True, display the figure immediately
             title: Optional plot title (defaults to section name or "RC Section")
             width: Figure width in pixels
@@ -295,6 +298,8 @@ class SectionViewer:
             hovermode="closest",
         )
 
+        if save_path:
+            fig.write_html(str(save_path))
         if show:
             fig.show()
 

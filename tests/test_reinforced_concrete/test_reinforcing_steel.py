@@ -64,6 +64,11 @@ class TestReinforcingSteel:
         assert b500a.f_t == pytest.approx(500.0 * 1.05)
         assert b500b.f_t == pytest.approx(500.0 * 1.08)
         assert b500c.f_t == pytest.approx(500.0 * 1.15)
+        assert b500b.f_td == pytest.approx(b500b.f_t / b500b.gamma_s, rel=1e-12)
+        assert b500b.f_td_accidental == pytest.approx(
+            b500b.f_t / b500b.gamma_s_accidental,
+            rel=1e-12,
+        )
 
     def test_characteristic_yield_strain(self, steel_b500b):
         """Test characteristic yield strain."""
@@ -159,3 +164,12 @@ class TestReinforcingSteel:
         # Invalid change
         with pytest.raises(ValidationError):
             steel_b500b.gamma_s = -1.0
+
+    def test_classmethod_strength_helpers(self):
+        assert ReinforcingSteel.f_yk_for() == pytest.approx(500.0, rel=1e-12)
+        assert ReinforcingSteel.f_yk_for("B500C") == pytest.approx(500.0, rel=1e-12)
+        assert ReinforcingSteel.f_yd_for(grade="B500A", gamma_s=1.25) == pytest.approx(400.0, rel=1e-12)
+        assert ReinforcingSteel.f_yd_accidental_for(grade="B500B", gamma_s_accidental=1.0) == pytest.approx(
+            500.0,
+            rel=1e-12,
+        )

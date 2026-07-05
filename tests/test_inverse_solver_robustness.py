@@ -2,7 +2,8 @@
 Robustness tests for the inverse solver (find_strains_for_MN).
 
 Tests cover:
-1. Points outside the interaction envelope (should raise ValueError)
+1. Points outside the interaction envelope (default nearest-feasible behavior)
+   and strict-mode ValueError behavior
 2. Robustness to poor initial guesses
 3. Strain bounds enforcement
 4. Round-trip verification with various initial guesses
@@ -77,6 +78,14 @@ class TestInverseSolverOutsideEnvelope:
         # Result should be at or near maximum moment capacity
         assert abs(point.M) <= max_M * 1.1, \
             f"Solver should find point near max capacity, got M={point.M} (max={max_M})"
+
+    def test_extremely_high_moment_strict_mode_raises(self, test_diagram):
+        """Strict mode should raise for unreachable targets outside the envelope."""
+        points = test_diagram.generate_diagram_points(n_points=20)
+        max_M = max(abs(p.M) for p in points)
+
+        with pytest.raises(ValueError, match="outside section capacity envelope"):
+            test_diagram.find_strains_for_MN(M_target=max_M * 5.0, N_target=0.0, strict=True)
 
     def test_extremely_high_axial_force_finds_boundary(self, test_diagram):
         """Test that extremely high axial force (beyond capacity) finds boundary point."""
