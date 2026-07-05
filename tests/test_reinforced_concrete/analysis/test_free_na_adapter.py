@@ -115,6 +115,18 @@ class TestSolveUncrackedElastic:
         result = adapter._solve_uncracked_elastic(100.0, 0.0, 0.0)
         assert result is None
 
+    def test_near_singular_K_falls_through(self, symmetric_section, concrete_c30, monkeypatch):
+        """A near-singular stiffness matrix must fall through (return None) rather
+        than letting np.linalg.solve return garbage."""
+        import materials.reinforced_concrete.analysis.free_na_adapter as fna
+
+        adapter = _make_adapter(symmetric_section, concrete_c30, 25000.0)
+        # Normal solve works...
+        assert adapter._solve_uncracked_elastic(My=15.0, N=0.0, Mz=0.0) is not None
+        # ...but a near-singular K (huge condition number) is rejected.
+        monkeypatch.setattr(fna.np.linalg, "cond", lambda K: 1e15)
+        assert adapter._solve_uncracked_elastic(My=15.0, N=0.0, Mz=0.0) is None
+
     def test_pure_My_symmetric_gives_zero_kappa_z(self, symmetric_section, concrete_c30):
         """For a symmetric section under pure My, kappa_z should be ≈ 0."""
         E_c = 25000.0

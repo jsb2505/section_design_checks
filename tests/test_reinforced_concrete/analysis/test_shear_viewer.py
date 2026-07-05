@@ -571,3 +571,21 @@ class TestShearViewer:
                 load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
                 show=False,
             )
+
+
+class TestSliderValueAllocation:
+    """_build_slider_values must not allocate an unbounded array for a tiny step."""
+
+    def test_tiny_step_is_capped(self):
+        from materials.reinforced_concrete.analysis.shear_viewer import _build_slider_values
+
+        vals = _build_slider_values(value_min=0.0, value_max=100.0, n_points=10, step=1e-9)
+        assert len(vals) <= 10000
+        assert vals[0] == pytest.approx(0.0)
+        assert vals[-1] == pytest.approx(100.0)
+
+    def test_normal_step_unchanged(self):
+        from materials.reinforced_concrete.analysis.shear_viewer import _build_slider_values
+
+        vals = _build_slider_values(value_min=0.0, value_max=10.0, n_points=5, step=2.0)
+        assert list(vals) == pytest.approx([0.0, 2.0, 4.0, 6.0, 8.0, 10.0])

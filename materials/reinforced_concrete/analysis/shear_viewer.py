@@ -440,6 +440,11 @@ def _build_slider_values(
 
     step_f = float(step)
     n_full = int(np.floor((v_max - v_min) / step_f + 1e-12))
+    # Guard against a pathologically small step (relative to the range) allocating
+    # an unbounded array; fall back to a capped uniform sampling instead.
+    _MAX_SLIDER_POINTS = 10000
+    if n_full + 1 > _MAX_SLIDER_POINTS:
+        return np.linspace(v_min, v_max, _MAX_SLIDER_POINTS)
     vals = v_min + step_f * np.arange(n_full + 1, dtype=float)
     if vals.size == 0:
         vals = np.asarray([v_min], dtype=float)

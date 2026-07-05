@@ -470,11 +470,19 @@ class FreeNADiagramAdapter:
             [A_tr * dcy,     I_xx_g,      I_xy_g    ],
             [A_tr * dcx,     I_xy_g,      I_yy_g    ],
         ])
+        # np.linalg.solve raises only for an EXACTLY singular K; a near-singular K
+        # (degenerate fibre layout) yields garbage silently. Reject it on the
+        # condition number and fall through to the iterative solver.
+        cond = np.linalg.cond(K)
+        if not np.isfinite(cond) or cond > 1e12:
+            return None
         try:
             # Unit conversion: N [kN→N] *1e3, My/Mz [kN·m→N·mm] *1e6
             rhs = np.array([N * 1e3, My * 1e6, Mz * 1e6]) / E_c
             x = np.linalg.solve(K, rhs)
         except np.linalg.LinAlgError:
+            return None
+        if not np.all(np.isfinite(x)):
             return None
 
         eps_0, kappa_y, kappa_z = float(x[0]), float(x[1]), float(x[2])

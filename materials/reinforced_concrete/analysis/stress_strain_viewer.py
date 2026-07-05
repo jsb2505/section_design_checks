@@ -236,9 +236,18 @@ class StressStrainViewer:
         err_N = abs(achieved_N - N_Ed)
         err_My = abs(achieved_My - My_Ed)
         err_Mz = abs(achieved_Mz - Mz_Ed)
-        failed = err_N > max(1.0, 0.01 * abs(N_Ed)) or err_My > max(1.0, 0.01 * abs(My_Ed))
+        # Tolerance = relative (1%) with a per-quantity absolute floor. The floors
+        # are physically distinct (force vs moment) so they are named separately
+        # rather than lumped under one bare "1.0" literal.
+        REL_TOL = 0.01
+        ABS_TOL_FORCE_KN = 1.0      # kN
+        ABS_TOL_MOMENT_KNM = 1.0    # kN·m
+        failed = (
+            err_N > max(ABS_TOL_FORCE_KN, REL_TOL * abs(N_Ed))
+            or err_My > max(ABS_TOL_MOMENT_KNM, REL_TOL * abs(My_Ed))
+        )
         if biaxial:
-            failed = failed or err_Mz > max(1.0, 0.01 * abs(Mz_Ed))
+            failed = failed or err_Mz > max(ABS_TOL_MOMENT_KNM, REL_TOL * abs(Mz_Ed))
         return achieved_N, achieved_My, achieved_Mz, err_N, err_My, err_Mz, failed
 
     # -----------------------------
