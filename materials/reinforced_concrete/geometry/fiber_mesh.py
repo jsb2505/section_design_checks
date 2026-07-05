@@ -8,15 +8,23 @@ Each fiber has:
 - Material type (concrete or steel)
 """
 
-from typing import List, Tuple, Literal
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import Literal, List, Tuple
+
 import numpy as np
 import numpy.typing as npt
-from shapely.geometry import box
+from shapely.geometry import Point, box
+from shapely.ops import unary_union
+from shapely.prepared import prep
+from shapely.geometry.base import BaseGeometry
+
+
 from materials.reinforced_concrete.geometry.section import RCSection
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class Fiber:
     """
     Single fiber element for section analysis.
@@ -26,8 +34,9 @@ class Fiber:
         y: Y-coordinate of fiber centroid (mm)
         area: Fiber area (mm²)
         material_type: 'concrete' or 'steel'
-        material_index: Index into material array (for tracking different steel types)
+        material_index: Index into material array (e.g. rebar group index)
     """
+
     x: float
     y: float
     area: float
@@ -43,7 +52,15 @@ class FiberMesh:
     - Concrete fibers: rectangular grid across section
     - Steel fibers: individual rebars
 
-    Used for fiber-based strain compatibility analysis in M-N diagrams.
+    Notes:
+        If exclude_steel_area=True, concrete fiber areas are reduced by the
+        *geometric overlap* between the concrete region in the cell and the union
+        of rebar discs (Shapely circles). This is more accurate than allocating
+        full bar area to a single cell.
+
+        Derived properties are stored as attributes on the instance:
+            - concrete_fibers
+            - steel_fibers
     """
 
     def __init__(
@@ -52,16 +69,7 @@ class FiberMesh:
         n_fibers_width: int = 20,
         n_fibers_height: int = 20,
         exclude_steel_area: bool = True,
-    ):
-        """
-        Create fiber mesh for a section.
-
-        Args:
-            section: RC section to mesh
-            n_fibers_width: Number of concrete fibers across width
-            n_fibers_height: Number of concrete fibers across height
-            exclude_steel_area: If True, subtract steel area from concrete fibers
-        """
+    ) -> None:
         self.section = section
         self.n_fibers_width = n_fibers_width
         self.n_fibers_height = n_fibers_height
@@ -70,7 +78,29 @@ class FiberMesh:
         self.concrete_fibers: List[Fiber] = []
         self.steel_fibers: List[Fiber] = []
 
+        # Precompute geometry for speed
+        self._outline = self.section.outline
+        self._outline_prepared = prep(self._outline)
+
+        # Precompute rebar circles and union (used for concrete subtraction)
+        self._bar_circles = self._build_rebar_circles()
+        self._bar_union = unary_union(self._bar_circles) if self._bar_circles else None
+        self._bar_union_prepared = prep(self._bar_union) if self._bar_union else None
+
         self._generate_mesh()
+
+    def _build_rebar_circles(self) -> list[BaseGeometry]:
+        circles: list[BaseGeometry] = []
+        for group in self.section.rebar_groups:
+            r = float(group.rebar.diameter) / 2.0
+            if r <= 0:
+                continue
+
+            for pos in group.positions:
+                # buffer() returns a Polygon (which is a BaseGeometry)
+                circles.append(Point(pos.x, pos.y).buffer(r))
+
+        return circles
 
     def _generate_mesh(self) -> None:
         """Generate concrete and steel fibers."""
@@ -79,71 +109,74 @@ class FiberMesh:
 
     def _generate_concrete_fibers(self) -> None:
         """
-        Generate concrete fibers using rectangular grid.
+        Generate concrete fibers using a rectangular grid.
 
-        Divides section bounding box into grid and keeps only fibers
-        that overlap with the section outline.
+        Algorithm:
+            1) Divide section bounding box into a regular grid of cells.
+            2) For each cell, compute concrete region within the cell:
+                   cell_concrete = outline ∩ cell_box
+            3) If exclude_steel_area=True, subtract the *overlap* between
+               cell_concrete and the union of rebar discs.
+            4) Use the centroid of the remaining concrete region as fiber position.
+
+        Notes:
+            - Edge cells produce partial fibers (clipped by outline).
+            - If the remaining area is negligible, the fiber is skipped.
         """
-        # Get bounding box
         min_x, min_y, max_x, max_y = self.section.get_bounding_box()
 
-        # Calculate fiber dimensions
-        fiber_width = (max_x - min_x) / self.n_fibers_width
-        fiber_height = (max_y - min_y) / self.n_fibers_height
-        fiber_area = fiber_width * fiber_height
+        # Guard against degenerate bbox / invalid mesh sizes
+        if self.n_fibers_width <= 0 or self.n_fibers_height <= 0:
+            raise ValueError("n_fibers_width and n_fibers_height must be > 0")
 
-        # Generate grid
+        dx = (max_x - min_x) / self.n_fibers_width
+        dy = (max_y - min_y) / self.n_fibers_height
+
+        if dx <= 0 or dy <= 0:
+            raise ValueError("Section bounding box is degenerate (zero width/height).")
+
+        # Small area threshold (mm²)
+        eps_area = 1e-6
+
         for i in range(self.n_fibers_width):
+            x0 = min_x + i * dx
+            x1 = x0 + dx
+
             for j in range(self.n_fibers_height):
-                # Fiber boundaries
-                x_min = min_x + i * fiber_width
-                x_max = x_min + fiber_width
-                y_min = min_y + j * fiber_height
-                y_max = y_min + fiber_height
+                y0 = min_y + j * dy
+                y1 = y0 + dy
 
-                # Fiber centroid
-                x_center = (x_min + x_max) / 2.0
-                y_center = (y_min + y_max) / 2.0
+                cell = box(x0, y0, x1, y1)
 
-                # Create fiber box
-                fiber_box = box(x_min, y_min, x_max, y_max)
-
-                # Check intersection with section outline
-                intersection = self.section.outline.intersection(fiber_box)
-
-                if intersection.is_empty:
+                # Quick reject: if outline doesn't intersect cell bbox, skip
+                if not self._outline_prepared.intersects(cell):
                     continue
 
-                # Calculate actual fiber area (may be partial for edge fibers)
-                actual_area = intersection.area
-
-                if actual_area < 1e-6:  # Skip negligible fibers
+                cell_concrete = self._outline.intersection(cell)
+                if cell_concrete.is_empty:
                     continue
 
-                # Subtract steel area if requested
-                if self.exclude_steel_area:
-                    # Check for steel in this fiber
-                    for group in self.section.rebar_groups:
-                        for pos in group.positions:
-                            # Check if bar center is in this fiber
-                            if (x_min <= pos.x <= x_max) and (y_min <= pos.y <= y_max):
-                                # Subtract bar area (or fiber area, whichever is smaller)
-                                actual_area -= min(group.rebar.area, actual_area)
-
-                # Skip if area is now negligible
-                if actual_area < 1e-6:
+                area_concrete = cell_concrete.area
+                if area_concrete < eps_area:
                     continue
 
-                # Adjust centroid if fiber was clipped
-                if intersection.area < fiber_area * 0.99:  # Clipped fiber
-                    if hasattr(intersection, 'centroid'):
-                        x_center = intersection.centroid.x
-                        y_center = intersection.centroid.y
+                # Subtract steel overlap geometrically (accurate)
+                if self.exclude_steel_area and self._bar_union is not None:
+                    # Quick reject: if bar union doesn't intersect cell, avoid intersection call
+                    if self._bar_union_prepared is None or self._bar_union_prepared.intersects(cell):
+                        steel_overlap = cell_concrete.intersection(self._bar_union)
+                        if not steel_overlap.is_empty:
+                            area_concrete -= steel_overlap.area
 
+                    if area_concrete < eps_area:
+                        continue
+
+                # Use centroid of remaining concrete region
+                c = cell_concrete.centroid
                 fiber = Fiber(
-                    x=x_center,
-                    y=y_center,
-                    area=actual_area,
+                    x=float(c.x),
+                    y=float(c.y),
+                    area=float(area_concrete),
                     material_type="concrete",
                     material_index=0,
                 )
@@ -154,18 +187,23 @@ class FiberMesh:
         Generate steel fibers (one per rebar).
 
         Each rebar is treated as a discrete fiber at its centroid.
-        Material index tracks which rebar group the fiber belongs to.
+        material_index tracks which rebar group the fiber belongs to.
+
+        Note:
+            Bar areas are taken from the group's rebar definition (group.rebar.area).
+            Groups can have different diameters/areas from each other.
         """
         for group_idx, group in enumerate(self.section.rebar_groups):
             for pos in group.positions:
-                fiber = Fiber(
-                    x=pos.x,
-                    y=pos.y,
-                    area=group.rebar.area,
-                    material_type="steel",
-                    material_index=group_idx,  # Track which group this bar belongs to
+                self.steel_fibers.append(
+                    Fiber(
+                        x=float(pos.x),
+                        y=float(pos.y),
+                        area=float(group.rebar.area),
+                        material_type="steel",
+                        material_index=group_idx,
+                    )
                 )
-                self.steel_fibers.append(fiber)
 
     @property
     def all_fibers(self) -> List[Fiber]:
@@ -174,20 +212,19 @@ class FiberMesh:
 
     @property
     def n_concrete_fibers(self) -> int:
-        """Number of concrete fibers."""
         return len(self.concrete_fibers)
 
     @property
     def n_steel_fibers(self) -> int:
-        """Number of steel fibers."""
         return len(self.steel_fibers)
 
     @property
     def total_fibers(self) -> int:
-        """Total number of fibers."""
         return self.n_concrete_fibers + self.n_steel_fibers
 
-    def get_fiber_arrays(self) -> Tuple[
+    def get_fiber_arrays(
+        self,
+    ) -> Tuple[
         npt.NDArray[np.float64],
         npt.NDArray[np.float64],
         npt.NDArray[np.float64],
@@ -202,46 +239,13 @@ class FiberMesh:
         """
         all_f = self.all_fibers
 
-        x = np.array([f.x for f in all_f])
-        y = np.array([f.y for f in all_f])
-        area = np.array([f.area for f in all_f])
-        material_type = np.array([f.material_type for f in all_f])
+        x = np.array([f.x for f in all_f], dtype=np.float64)
+        y = np.array([f.y for f in all_f], dtype=np.float64)
+        area = np.array([f.area for f in all_f], dtype=np.float64)
+        material_type = np.array([f.material_type for f in all_f], dtype=np.str_)
         material_index = np.array([f.material_index for f in all_f], dtype=np.int32)
 
         return x, y, area, material_type, material_index
-
-    def calculate_section_forces(
-        self,
-        stresses: npt.NDArray[np.float64],
-    ) -> Tuple[float, float]:
-        """
-        Calculate axial force and moment from fiber stresses.
-
-        Args:
-            stresses: Stress at each fiber (must match fiber order)
-
-        Returns:
-            Tuple of (N, M) where:
-                N: Axial force in kN (positive = compression)
-                M: Moment about section centroid in kN·m (positive = hogging)
-        """
-        x, y, area, _, _ = self.get_fiber_arrays()
-
-        # Axial force: N = Σ(σ · A)
-        # Convert from N to kN
-        N = np.sum(stresses * area) / 1000.0
-
-        # Moment about section centroid
-        section_cx, section_cy = self.section.get_centroid()
-
-        # M = Σ(σ · A · y_offset)
-        # Using y-offset from section centroid
-        y_offset = y - section_cy
-
-        # Convert from N·mm to kN·m
-        M = np.sum(stresses * area * y_offset) / 1_000_000.0
-
-        return N, M
 
     def __repr__(self) -> str:
         return (

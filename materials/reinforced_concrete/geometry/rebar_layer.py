@@ -7,11 +7,15 @@ Provides utilities for positioning rebars in common configurations:
 - Custom patterns
 """
 
-from typing import List, Tuple, Optional
+from __future__ import annotations
+
+from typing import List, Optional, Sequence, Tuple
+
 import numpy as np
+
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.materials.rebar import Rebar
 from materials.reinforced_concrete.geometry.section import RebarGroup
+from materials.reinforced_concrete.materials.rebar import Rebar
 
 
 def create_linear_rebar_layer(
@@ -24,9 +28,13 @@ def create_linear_rebar_layer(
     """
     Create a linear layer of evenly-spaced rebars between two points.
 
+    Notes:
+        - If n_bars == 1, a single bar is placed at the midpoint.
+        - If n_bars >= 2, bars are evenly spaced including the endpoints.
+
     Args:
         rebar: Rebar specification
-        n_bars: Number of bars (minimum 2)
+        n_bars: Number of bars (minimum 1)
         start_point: (x, y) coordinates of first bar (mm)
         end_point: (x, y) coordinates of last bar (mm)
         layer_name: Optional layer identifier
@@ -43,22 +51,19 @@ def create_linear_rebar_layer(
     if n_bars < 1:
         raise ValueError("Number of bars must be at least 1")
 
+    x0, y0 = start_point
+    x1, y1 = end_point
+
     if n_bars == 1:
         # Single bar at midpoint
-        x = (start_point[0] + end_point[0]) / 2.0
-        y = (start_point[1] + end_point[1]) / 2.0
-        positions = [Point2D(x=x, y=y)]
+        positions = [Point2D(x=(x0 + x1) / 2.0, y=(y0 + y1) / 2.0)]
     else:
-        # Multiple bars evenly spaced
-        x_coords = np.linspace(start_point[0], end_point[0], n_bars)
-        y_coords = np.linspace(start_point[1], end_point[1], n_bars)
+        # Multiple bars evenly spaced (including endpoints)
+        x_coords = np.linspace(x0, x1, n_bars, dtype=float)
+        y_coords = np.linspace(y0, y1, n_bars, dtype=float)
         positions = [Point2D(x=float(x), y=float(y)) for x, y in zip(x_coords, y_coords)]
 
-    return RebarGroup(
-        rebar=rebar,
-        positions=positions,
-        layer_name=layer_name,
-    )
+    return RebarGroup(rebar=rebar, positions=positions, layer_name=layer_name)
 
 
 def create_rectangular_perimeter_rebars(
@@ -99,66 +104,83 @@ def create_rectangular_perimeter_rebars(
         Cover is measured to the outer surface of the rebar, not the centreline.
         Bar centrelines are positioned at cover + diameter/2 from section edges.
     """
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be > 0")
+    if cover < 0:
+        raise ValueError("cover must be >= 0")
+    if n_bars_width < 0 or n_bars_height < 0:
+        raise ValueError("n_bars_width and n_bars_height must be >= 0")
+
     cx, cy = origin
 
-    # Calculate half-dimensions
     half_width = width / 2.0
     half_height = height / 2.0
 
-    # Calculate distance from edge to bar centreline
     # Cover is to outer surface, so centreline is at cover + radius
     centreline_offset = cover + rebar.diameter / 2.0
 
-    groups = []
+    # Geometry feasibility checks
+    if 2.0 * centreline_offset > width or 2.0 * centreline_offset > height:
+        raise ValueError(
+            "cover + bar radius is too large for the section dimensions "
+            "(bars would lie outside the section)."
+        )
+
+    groups: List[RebarGroup] = []
 
     # Bottom layer
     if n_bars_width >= 1:
-        bottom = create_linear_rebar_layer(
-            rebar=rebar,
-            n_bars=n_bars_width,
-            start_point=(cx - half_width + centreline_offset, cy - half_height + centreline_offset),
-            end_point=(cx + half_width - centreline_offset, cy - half_height + centreline_offset),
-            layer_name="bottom",
+        groups.append(
+            create_linear_rebar_layer(
+                rebar=rebar,
+                n_bars=n_bars_width,
+                start_point=(cx - half_width + centreline_offset, cy - half_height + centreline_offset),
+                end_point=(cx + half_width - centreline_offset, cy - half_height + centreline_offset),
+                layer_name="bottom",
+            )
         )
-        groups.append(bottom)
 
     # Top layer
     if n_bars_width >= 1:
-        top = create_linear_rebar_layer(
-            rebar=rebar,
-            n_bars=n_bars_width,
-            start_point=(cx - half_width + centreline_offset, cy + half_height - centreline_offset),
-            end_point=(cx + half_width - centreline_offset, cy + half_height - centreline_offset),
-            layer_name="top",
+        groups.append(
+            create_linear_rebar_layer(
+                rebar=rebar,
+                n_bars=n_bars_width,
+                start_point=(cx - half_width + centreline_offset, cy + half_height - centreline_offset),
+                end_point=(cx + half_width - centreline_offset, cy + half_height - centreline_offset),
+                layer_name="top",
+            )
         )
-        groups.append(top)
 
     # Side bars (excluding corners - they're in top/bottom)
     if n_bars_height >= 1:
-        # Position between top and bottom bars
-        available_height = height - 2 * centreline_offset
-        y_start = cy - half_height + centreline_offset + available_height / (n_bars_height + 1)
-        y_end = cy + half_height - centreline_offset - available_height / (n_bars_height + 1)
+        available_height = height - 2.0 * centreline_offset
 
-        # Left side
-        left = create_linear_rebar_layer(
-            rebar=rebar,
-            n_bars=n_bars_height,
-            start_point=(cx - half_width + centreline_offset, y_start),
-            end_point=(cx - half_width + centreline_offset, y_end),
-            layer_name="left",
-        )
-        groups.append(left)
+        # Place side bars evenly between the top and bottom corner levels.
+        # For n=1 this yields y_start == y_end (and the single bar lands at mid-height).
+        step = available_height / (n_bars_height + 1)
+        y_start = (cy - half_height + centreline_offset) + step
+        y_end = (cy + half_height - centreline_offset) - step
 
-        # Right side
-        right = create_linear_rebar_layer(
-            rebar=rebar,
-            n_bars=n_bars_height,
-            start_point=(cx + half_width - centreline_offset, y_start),
-            end_point=(cx + half_width - centreline_offset, y_end),
-            layer_name="right",
+        groups.append(
+            create_linear_rebar_layer(
+                rebar=rebar,
+                n_bars=n_bars_height,
+                start_point=(cx - half_width + centreline_offset, y_start),
+                end_point=(cx - half_width + centreline_offset, y_end),
+                layer_name="left",
+            )
         )
-        groups.append(right)
+
+        groups.append(
+            create_linear_rebar_layer(
+                rebar=rebar,
+                n_bars=n_bars_height,
+                start_point=(cx + half_width - centreline_offset, y_start),
+                end_point=(cx + half_width - centreline_offset, y_end),
+                layer_name="right",
+            )
+        )
 
     return groups
 
@@ -195,37 +217,37 @@ def create_circular_perimeter_rebars(
         Cover is measured to the outer surface of the rebar, not the centreline.
         Bar centrelines are positioned at radius = (section_diameter/2) - cover - (bar_diameter/2).
     """
+    if diameter <= 0:
+        raise ValueError("diameter must be > 0")
+    if cover < 0:
+        raise ValueError("cover must be >= 0")
     if n_bars < 3:
         raise ValueError("Circular perimeter requires at least 3 bars")
 
     cx, cy = origin
 
-    # Radius to bar centreline
-    # = section radius - cover to outer surface - bar radius
+    # Radius to bar centreline = section radius - cover - bar radius
     radius = diameter / 2.0 - cover - rebar.diameter / 2.0
+    if radius <= 0:
+        raise ValueError(
+            "cover + bar radius is too large for the section diameter "
+            "(bars would lie on/inside the centre)."
+        )
 
-    angles = np.linspace(
-        np.radians(start_angle),
-        np.radians(start_angle) + 2 * np.pi,
-        n_bars,
-        endpoint=False
-    )
+    start = np.radians(start_angle)
+    angles = np.linspace(start, start + 2.0 * np.pi, n_bars, endpoint=False, dtype=float)
 
     positions = [
-        Point2D(x=cx + radius * np.cos(angle), y=cy + radius * np.sin(angle))
-        for angle in angles
+        Point2D(x=float(cx + radius * np.cos(a)), y=float(cy + radius * np.sin(a)))
+        for a in angles
     ]
 
-    return RebarGroup(
-        rebar=rebar,
-        positions=positions,
-        layer_name="perimeter",
-    )
+    return RebarGroup(rebar=rebar, positions=positions, layer_name="perimeter")
 
 
 def create_custom_rebar_layer(
     rebar: Rebar,
-    positions: List[Tuple[float, float]],
+    positions: Sequence[Tuple[float, float]],
     layer_name: Optional[str] = None,
 ) -> RebarGroup:
     """
@@ -233,7 +255,7 @@ def create_custom_rebar_layer(
 
     Args:
         rebar: Rebar specification
-        positions: List of (x, y) coordinates (mm)
+        positions: Sequence of (x, y) coordinates (mm)
         layer_name: Optional layer identifier
 
     Returns:
@@ -246,10 +268,5 @@ def create_custom_rebar_layer(
         ...     [(50, 50), (150, 50), (250, 50), (125, 100)]
         ... )
     """
-    point_positions = [Point2D(x=x, y=y) for x, y in positions]
-
-    return RebarGroup(
-        rebar=rebar,
-        positions=point_positions,
-        layer_name=layer_name,
-    )
+    point_positions = [Point2D(x=float(x), y=float(y)) for x, y in positions]
+    return RebarGroup(rebar=rebar, positions=point_positions, layer_name=layer_name)

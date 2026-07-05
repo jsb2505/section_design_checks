@@ -343,7 +343,7 @@ class MNInteractionDiagram:
         stresses[steel_mask] = steel_stresses
 
         # Calculate resultant forces
-        N, M = self.mesh.calculate_section_forces(stresses)
+        N, M = self.calculate_section_forces(stresses)
 
         # Get maximum strains for reporting
         max_conc_strain = np.max(strains[concrete_mask]) if np.any(concrete_mask) else 0.0
@@ -356,6 +356,38 @@ class MNInteractionDiagram:
             max_concrete_strain=max_conc_strain,
             max_steel_strain=max_steel_strain,
         )
+    
+    def calculate_section_forces(
+        self,
+        stresses: npt.NDArray[np.float64]
+    ) -> Tuple[float, float]:
+        """ Calculate axial force and moment from fiber stresses.
+        
+        Args:
+            stresses: Stress at each fiber (must match fiber order)
+                
+        Returns:
+            Tuple of (N, M) where: 
+                N: Axial force in kN (positive = compression)
+                M: Moment about section centroid in kN·m (positive = hogging)
+        """
+        x, y, area, _, _ = self.mesh.get_fiber_arrays()
+        
+        # Axial force: N = Σ(σ · A)
+        # Convert from N to kN
+        N = np.sum(stresses * area) / 1000.0
+
+        # Moment about section centroid
+        section_cx, section_cy = self.section.get_centroid()
+        
+        # M = Σ(σ · A · y_offset)
+        # Using y-offset from section centroid
+        y_offset = y - section_cy
+        
+        # Convert from N·mm to kN·m
+        M = np.sum(stresses * area * y_offset) / 1_000_000.0
+        
+        return N, M
 
     def generate_diagram(
         self,
