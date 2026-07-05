@@ -21,6 +21,7 @@ from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
 from materials.reinforced_concrete.analysis import create_interaction_diagram
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import (
+    EffectiveDepthFallback,
     calculate_section_breadth,
     find_area_of_steel_maximum,
     find_area_of_steel_minimum,
@@ -131,6 +132,27 @@ class BendingCheck(BaseCodeCheck):
             "(UK NA §6.2.3(2): cot θ ≤ 1.25). Default True (conservative). "
             "Set to False when tension arises from restraint, not external loading."
         ),
+    )
+
+    d_fallback: EffectiveDepthFallback = Field(
+        default="ratio_of_h",
+        description=(
+            "Policy for effective depth when strain state is ambiguous "
+            "(net compression, net tension, pure axial). "
+            "'ratio_of_h': d = d_ratio * h (default 0.9h). "
+            "'centroid': min(d_top, d_bot) from rebar centroids, "
+            "falls back to ratio_of_h if rebar missing on one face."
+        ),
+    )
+
+    d_ratio: float = Field(
+        default=0.9,
+        description=(
+            "Ratio of section depth h used when d_fallback='ratio_of_h' "
+            "or as ultimate fallback for 'centroid' policy."
+        ),
+        gt=0.0,
+        le=1.0,
     )
 
 
@@ -462,6 +484,8 @@ class BendingCheck(BaseCodeCheck):
                             eps_top=eps_top,
                             eps_bottom=eps_bottom,
                             warn_on_fallback=False,
+                            d_fallback=self.d_fallback,
+                            d_ratio=self.d_ratio,
                         )
                         b_flexure = calculate_section_breadth(self.section)
                         A_s_min_f_ctm = float(self.concrete.f_ctm)

@@ -445,65 +445,31 @@ EN1992_1_1_2004 = {
 
 # =============================================================================
 # EN 1992-2:2005 (Bridges)
+#
+# This is an OVERLAY on EN 1992-1-1:2004. The "EU" dict contains only
+# parameters that differ from the 1992-1-1 EU base. All other parameters
+# are inherited automatically via the merge logic in __init__.py.
+#
+# Country annexes (EU_UK, EU_DE, etc.) are independently published and do
+# NOT inherit from the corresponding 1992-1-1 country annex. They are
+# standalone overrides on the resolved base (1-1 EU + 2 EU overlay).
 # =============================================================================
 
 EN1992_2_2005 = {
     # -------------------------------------------------------------------------
-    # EU (Base Eurocode) - All parameters must be defined here
+    # EU — Only differences from EN1992_1_1_2004 EU base
     # -------------------------------------------------------------------------
     "EU": {
-        "gamma_c": 1.5,
-        "gamma_s": 1.15,
-        "gamma_c_accidental": 1.2,
-        "gamma_s_accidental": 1.0,
-        "k_f": 1.1,
         "f_ck_min": 30,
         "f_ck_cube_min": 37,
         "f_ck_max": 70,
         "f_ck_cube_max": 85,
-        "alpha_cc": 1.0,
-        "alpha_ct": 1.0,
-        "alpha_cc_shear": 1.0,
-        "k_strain": 0.9,
-        "c_rd_c_coefficient": 0.18,
-        "k_1_shear": 0.15,
-        "v_min_coefficient": 0.035,
-        "cot_theta_lower_lim": 1.0,
-        "cot_theta_upper_lim": 2.5,
-        "cot_theta_upper_lim_tension": None,  # No tension-specific restriction in base EC2
-        "nu_shear": lambda f_ck: 0.6 * (1 - f_ck / 250),
-        "nu_1": lambda f_ck, angle_deg: 0.6 * (1 - f_ck / 250),
-        "nu_1_note_2": lambda f_ck, angle_deg: (
-            0.6 if f_ck <= 60
-            else max(0.9 - f_ck / 200, 0.5)
-        ),
-        "alpha_cw": lambda f_cd, sigma_cp: (
-            1.0 if sigma_cp == 0
-            else (1.0 + sigma_cp / f_cd) if sigma_cp <= 0.25 * f_cd
-            else 1.25 if sigma_cp <= 0.5 * f_cd
-            else 2.5 * (1 - sigma_cp / f_cd)
-        ),
-        "nu_torsion": lambda f_ck: 0.6 * (1 - f_ck / 250),
-        "z_cap": None,  # No additional z cap in base EC2
-        "k_1_stress": 0.6,
-        "k_2_stress": 0.45,
-        "k_3_stress": 0.8,
-        "k_4_stress": 1.0,
-        "f_ct_eff_min": 2.9, # (7.1)
-        "k_1_crack": lambda is_high_bond_bar, k_2: 0.8 if is_high_bond_bar else 1.6,
-        "k_3_crack": 3.4,
-        "k_4_crack": 0.425,
-        "s_r_max_lim": None,  # No additional limit in base EC2
-        "h_c_ef_multiplier": None,  # Standard 2.5 factor
-        "h_c_ef_relaxed_na_factor": None,  # Drop (h-x)/3 term on relaxation
-        "max_link_spacing": _max_link_spacing_ec2,
-        "max_leg_spacing": _max_leg_spacing_ec2,
-        "as_min_flexural_ratio": lambda f_ctm, f_yk: max(0.0013, 0.26 * (f_ctm / f_yk)),
-        "as_max_flexural_ratio": 0.04,
+        "f_ct_eff_min": 2.9,  # (7.1)
     },
 
     # -------------------------------------------------------------------------
-    # EU_UK (UK National Annex) - Only parameters that differ from EU
+    # EU_UK (UK National Annex) - Overrides on resolved base (1-1 EU + 2 EU)
+    # Independent of EN1992_1_1_2004 EU_UK annex
     # -------------------------------------------------------------------------
     "EU_UK": {
         "f_ck_min": 25,
@@ -524,7 +490,8 @@ EN1992_2_2005 = {
     },
 
     # -------------------------------------------------------------------------
-    # EU_DE (German National Annex) - Only parameters that differ from EU
+    # EU_DE (German National Annex) - Overrides on resolved base (1-1 EU + 2 EU)
+    # Independent of EN1992_1_1_2004 EU_DE annex
     # -------------------------------------------------------------------------
     "EU_DE": {
         "gamma_c_accidental": 1.3,

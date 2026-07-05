@@ -1356,12 +1356,8 @@ class MNInteractionDiagram:
         """
         Get effective depth from compression face for a given load case.
 
-        Uses strain solver to determine compression face when M_Ed is non-zero.
-        This accounts for M-N interaction (e.g., large N_Ed affects strain distribution).
-
-        Special cases:
-        - If M_Ed ≈ 0 (pure shear/axial): Returns min(d_top, d_bot) for conservatism
-          (smaller d = lower shear capacity, safer for cases with no clear compression face)
+        Delegates to ``find_effective_depth_for_flexure`` (the single source of truth).
+        Uses default fallback policy (d = 0.9h) for ambiguous strain states.
 
         Args:
             M_Ed: Design moment in kN·m
@@ -1372,24 +1368,18 @@ class MNInteractionDiagram:
         Returns:
             Effective depth in mm
         """
-        # If M_Ed is negligible (pure shear or pure axial), use conservative approach
-        # For shear checks, smaller d is more conservative (lower capacity)
-        if abs(M_Ed) < 1e-6:
-            # Use the smaller effective depth (more conservative for shear)
-            d_top = self.section.get_effective_depth(compression_face="top")
-            d_bot = self.section.get_effective_depth(compression_face="bottom")
-            return min(d_top, d_bot)
-
-        # Use strain solver to determine compression face
-        if eps_top is None or eps_bottom is None:
-            eps_top, eps_bottom = self.find_strains_for_MN(M_Ed, N_Ed)
-
-        # Compression strain is POSITIVE in interaction diagram sign convention
-        # Larger positive strain = more compressed
-        # Use >= to handle pure axial case (eps_top == eps_bottom) deterministically
-        compression_face = "top" if eps_top >= eps_bottom else "bottom"
-
-        return self.section.get_effective_depth(compression_face=compression_face)
+        from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import (
+            find_effective_depth_for_flexure,
+        )
+        return find_effective_depth_for_flexure(
+            section=self.section,
+            diagram=self,
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+            warn_on_fallback=False,
+        )
 
     def get_lever_arm(
         self,

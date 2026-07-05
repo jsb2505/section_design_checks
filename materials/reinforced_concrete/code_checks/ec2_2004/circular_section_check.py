@@ -204,6 +204,27 @@ class CircularSectionCheck(BaseModel):
         ),
     )
 
+    d_fallback: Literal["ratio_of_h", "centroid"] = Field(
+        default="ratio_of_h",
+        description=(
+            "Policy for effective depth when strain state is ambiguous "
+            "(net compression, net tension, pure axial). "
+            "'ratio_of_h': d = d_ratio * h (default 0.9h). "
+            "'centroid': min(d_top, d_bot) from rebar centroids, "
+            "falls back to ratio_of_h if rebar missing on one face."
+        ),
+    )
+
+    d_ratio: float = Field(
+        default=0.9,
+        description=(
+            "Ratio of section depth h used when d_fallback='ratio_of_h' "
+            "or as ultimate fallback for 'centroid' policy."
+        ),
+        gt=0.0,
+        le=1.0,
+    )
+
     # ===========================
     # Pile / foundation
     # ===========================
@@ -381,6 +402,8 @@ class CircularSectionCheck(BaseModel):
             n_fibres_height=self.n_fibres_height,
             use_accidental=self.use_accidental,
             apply_tension_cot_theta_limit=self.apply_tension_cot_theta_limit,
+            d_fallback=self.d_fallback,
+            d_ratio=self.d_ratio,
         )
 
         self._shear_check = ShearCheck(
@@ -393,6 +416,8 @@ class CircularSectionCheck(BaseModel):
             use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
             concrete_model_type=self.concrete_model_type,
             steel_model_type=self.steel_model_type,
+            d_fallback=self.d_fallback,
+            d_ratio=self.d_ratio,
         )
 
         self._cracking_check = CrackingCheck(

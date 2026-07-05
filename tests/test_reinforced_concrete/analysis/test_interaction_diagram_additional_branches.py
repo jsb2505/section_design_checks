@@ -534,15 +534,23 @@ def test_get_effective_depth_branches(diagram: MNInteractionDiagram, monkeypatch
     monkeypatch.setattr(type(diagram.section), "get_effective_depth", _fake_section_depth)
     d_top = diagram.section.get_effective_depth(compression_face="top")
     d_bottom = diagram.section.get_effective_depth(compression_face="bottom")
-    assert diagram.get_effective_depth(M_Ed=0.0, N_Ed=123.0) == pytest.approx(min(d_top, d_bottom))
 
+    # M_Ed=0 → fallback policy (default ratio_of_h: 0.9 * h)
+    _, min_y, _, max_y = diagram.section.get_bounding_box()
+    h = max_y - min_y
+    assert diagram.get_effective_depth(M_Ed=0.0, N_Ed=123.0) == pytest.approx(0.9 * h)
+
+    # Both strains positive (net compression) → fallback (no compression/tension split)
     monkeypatch.setattr(diagram, "find_strains_for_MN", lambda *_args, **_kwargs: (0.002, 0.001))
     auto_depth = diagram.get_effective_depth(M_Ed=20.0, N_Ed=100.0)
-    assert auto_depth == pytest.approx(d_top)
+    assert auto_depth == pytest.approx(0.9 * h)
 
-    d_from_top = diagram.get_effective_depth(M_Ed=20.0, N_Ed=0.0, eps_top=0.002, eps_bottom=0.001)
-    d_from_bottom = diagram.get_effective_depth(M_Ed=20.0, N_Ed=0.0, eps_top=0.001, eps_bottom=0.002)
+    # Clear compression/tension split: eps_top > 0, eps_bottom < 0 → top compression → d_top
+    d_from_top = diagram.get_effective_depth(M_Ed=20.0, N_Ed=0.0, eps_top=0.002, eps_bottom=-0.001)
     assert d_from_top == pytest.approx(d_top)
+
+    # Clear split: eps_bottom > 0, eps_top < 0 → bottom compression → d_bottom
+    d_from_bottom = diagram.get_effective_depth(M_Ed=20.0, N_Ed=0.0, eps_top=-0.001, eps_bottom=0.002)
     assert d_from_bottom == pytest.approx(d_bottom)
 
 

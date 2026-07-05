@@ -44,6 +44,10 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
 from materials.reinforced_concrete.analysis.interaction_diagram import (
     MNInteractionDiagram,
 )
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import (
+    EffectiveDepthFallback,
+    find_effective_depth_for_flexure,
+)
 
 
 class ShearLoadCase(BaseModel):
@@ -241,6 +245,27 @@ class ShearCheck(BaseCodeCheck):
         ),
     )
 
+    d_fallback: EffectiveDepthFallback = Field(
+        default="ratio_of_h",
+        description=(
+            "Policy for effective depth when strain state is ambiguous "
+            "(net compression, net tension, pure axial). "
+            "'ratio_of_h': d = d_ratio * h (default 0.9h). "
+            "'centroid': min(d_top, d_bot) from rebar centroids, "
+            "falls back to ratio_of_h if rebar missing on one face."
+        ),
+    )
+
+    d_ratio: float = Field(
+        default=0.9,
+        description=(
+            "Ratio of section depth h used when d_fallback='ratio_of_h' "
+            "or as ultimate fallback for 'centroid' policy."
+        ),
+        gt=0.0,
+        le=1.0,
+    )
+
 
     # ==================================
     # Material models for rigorous mode
@@ -415,100 +440,28 @@ class ShearCheck(BaseCodeCheck):
         """
         Effective depth d (mm) measured from the governing compression face.
 
-        If strains are provided, compression face is taken as the face with the larger
-        (more positive) strain (compression is positive in this codebase).
+        Delegates to ``find_effective_depth_for_flexure`` (the single source of truth).
 
-        If strains are not provided:
-        - If a diagram/solver is available and |M_Ed| is significant, strains are solved.
-        - Otherwise, fallback returns min(d_top, d_bottom) for conservatism (useful for shear).
-
-        Notes:
-        - If both faces are in tension (eps_top<=0 and eps_bottom<=0), compression face is
-            physically undefined; fallback is used.
+        When the strain state is ambiguous (net compression, net tension, pure axial),
+        the ``d_fallback`` policy on this check instance controls the result.
         """
-        # Get effective depths for each compression face assumption
-        # Handle case where no rebar exists in the tension zone for one face
-        d_top: Optional[float] = None
-        d_bot: Optional[float] = None
-
-        try:
-            d_top = float(self.section.get_effective_depth(compression_face="top"))
-        except ValueError:
-            pass  # No rebar in bottom tension zone
-
-        try:
-            d_bot = float(self.section.get_effective_depth(compression_face="bottom"))
-        except ValueError:
-            pass  # No rebar in top tension zone
-
-        # If neither worked, we have a problem
-        if d_top is None and d_bot is None:
-            raise ValueError("Cannot compute effective depth: no rebars found in either tension zone")
-
-        # Helper to get conservative depth (handles one being None)
-        def _get_conservative_d() -> float:
-            if d_top is not None and d_bot is not None:
-                return min(d_top, d_bot)
-            elif d_top is not None:
-                return d_top
-            else:
-                assert d_bot is not None  # Can't be None, checked above
-                return d_bot
-
-        # Pure shear / pure axial / no clear bending => conservative depth
-        if abs(M_Ed) <= m_tol:
-            return _get_conservative_d()
-
-        # If strains missing, try to solve if you can (robust helper)
-        if eps_top is None or eps_bottom is None:
-            try:
-                eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(M_Ed, N_Ed)
-            except Exception:
-                eps_top, eps_bottom = None, None
-
-        # Still missing -> fallback conservative
-        if eps_top is None or eps_bottom is None:
-            if warn_on_fallback:
-                warnings.warn(
-                    "Effective depth fallback used (strain state unavailable). "
-                    "Returning conservative min(d_top, d_bottom).",
-                    stacklevel=2,
-                )
-            return _get_conservative_d()
-
-        # If there is no compression anywhere, compression face is undefined -> fallback
-        if eps_top <= strain_tol and eps_bottom <= strain_tol:
-            if warn_on_fallback:
-                warnings.warn(
-                    "Effective depth fallback used (both faces in tension; compression face undefined). "
-                    "Returning conservative min(d_top, d_bottom).",
-                    stacklevel=2,
-                )
-            return _get_conservative_d()
-
-        # Otherwise: choose the more compressive face (bigger + strain)
-        compression_face = "top" if eps_top >= eps_bottom else "bottom"
-
-        if compression_face == "top":
-            if d_top is not None:
-                return d_top
-            # Compression at top but no rebar in bottom (tension) zone - use fallback
-            if warn_on_fallback:
-                warnings.warn(
-                    "Effective depth fallback used (no rebar in tension zone for this compression face).",
-                    stacklevel=2,
-                )
-            return _get_conservative_d()
-        else:
-            if d_bot is not None:
-                return d_bot
-            # Compression at bottom but no rebar in top (tension) zone - use fallback
-            if warn_on_fallback:
-                warnings.warn(
-                    "Effective depth fallback used (no rebar in tension zone for this compression face).",
-                    stacklevel=2,
-                )
-            return _get_conservative_d()
+        # Only build diagram if needed (strains not provided and M_Ed non-zero)
+        need_diagram = (eps_top is None or eps_bottom is None) and abs(M_Ed) > m_tol
+        diagram = self._get_diagram(ignore_compression_steel) if need_diagram else None
+        return find_effective_depth_for_flexure(
+            section=self.section,
+            diagram=diagram,
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+            m_tol=m_tol,
+            strain_tol=strain_tol,
+            warn_on_fallback=warn_on_fallback,
+            d_fallback=self.d_fallback,
+            d_ratio=self.d_ratio,
+            _stacklevel=3,
+        )
 
 
     def find_lever_arm(

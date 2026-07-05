@@ -81,29 +81,28 @@ class TestBasicGeometryAndStrainHelpers:
 
 class TestEffectiveDepthHelpers:
     """Tests for TestEffectiveDepthHelpers."""
-    def test_find_effective_depth_requires_rebar(self):
-        """Test find effective depth requires rebar."""
+    def test_find_effective_depth_no_rebar_uses_fallback(self):
+        """No rebar section uses ratio_of_h fallback (default 0.9h)."""
         section = create_rectangular_section(width=300.0, height=500.0)
-        with pytest.raises(ValueError, match="no rebars found"):
-            flexure_utils.find_effective_depth_for_flexure(
-                section=section,
-                diagram=None,
-                M_Ed=100.0,
-                N_Ed=0.0,
-            )
+        d = flexure_utils.find_effective_depth_for_flexure(
+            section=section,
+            diagram=None,
+            M_Ed=100.0,
+            N_Ed=0.0,
+        )
+        assert d == pytest.approx(0.9 * 500.0)
 
-    def test_find_effective_depth_pure_moment_zero_returns_conservative(self):
-        """Test find effective depth pure moment zero returns conservative."""
+    def test_find_effective_depth_pure_moment_zero_returns_fallback(self):
+        """M_Ed=0 → fallback policy (default 0.9h)."""
         section = _make_section(include_top=True, include_bottom=True)
-        d_top = section.get_effective_depth(compression_face="top")
-        d_bottom = section.get_effective_depth(compression_face="bottom")
+        h = flexure_utils.calculate_section_height(section)
         d = flexure_utils.find_effective_depth_for_flexure(
             section=section,
             diagram=None,
             M_Ed=0.0,
             N_Ed=0.0,
         )
-        assert d == pytest.approx(min(d_top, d_bottom), rel=1e-12)
+        assert d == pytest.approx(0.9 * h, rel=1e-12)
 
     def test_find_effective_depth_uses_strain_based_compression_face(self):
         """Test find effective depth uses strain based compression face."""
@@ -134,9 +133,10 @@ class TestEffectiveDepthHelpers:
     def test_find_effective_depth_fallback_branches(self):
         """Test find effective depth fallback branches."""
         section = _make_section(include_top=False, include_bottom=True)
-        d_top = section.get_effective_depth(compression_face="top")
+        h = flexure_utils.calculate_section_height(section)
+        expected_fallback = 0.9 * h
 
-        # Missing strain state from failing solver -> conservative fallback + warning.
+        # Missing strain state from failing solver -> fallback + warning.
         with pytest.warns(UserWarning, match="strain state unavailable"):
             d_fail_solver = flexure_utils.find_effective_depth_for_flexure(
                 section=section,
@@ -144,10 +144,10 @@ class TestEffectiveDepthHelpers:
                 M_Ed=100.0,
                 N_Ed=0.0,
             )
-        assert d_fail_solver == pytest.approx(d_top, rel=1e-12)
+        assert d_fail_solver == pytest.approx(expected_fallback, rel=1e-12)
 
         # Both faces in tension -> fallback warning.
-        with pytest.warns(UserWarning, match="both faces in tension"):
+        with pytest.warns(UserWarning, match="no compression/tension split"):
             d_tension = flexure_utils.find_effective_depth_for_flexure(
                 section=section,
                 diagram=None,
@@ -156,7 +156,7 @@ class TestEffectiveDepthHelpers:
                 eps_top=-0.001,
                 eps_bottom=-0.002,
             )
-        assert d_tension == pytest.approx(d_top, rel=1e-12)
+        assert d_tension == pytest.approx(expected_fallback, rel=1e-12)
 
         # Compression face selected as bottom but no top bars => fallback warning.
         with pytest.warns(UserWarning, match="no rebar in tension zone"):
@@ -168,12 +168,12 @@ class TestEffectiveDepthHelpers:
                 eps_top=-0.001,
                 eps_bottom=0.001,
             )
-        assert d_missing_face == pytest.approx(d_top, rel=1e-12)
+        assert d_missing_face == pytest.approx(expected_fallback, rel=1e-12)
 
     def test_find_effective_depth_top_compression_fallback_when_d_top_missing(self):
-        """Test find effective depth top compression fallback when d top missing."""
+        """Compression at top but no bottom rebar → fallback (0.9h)."""
         section = _make_section(include_top=True, include_bottom=False)
-        d_bottom = section.get_effective_depth(compression_face="bottom")
+        h = flexure_utils.calculate_section_height(section)
 
         with pytest.warns(UserWarning, match="no rebar in tension zone"):
             d = flexure_utils.find_effective_depth_for_flexure(
@@ -184,7 +184,7 @@ class TestEffectiveDepthHelpers:
                 eps_top=0.001,
                 eps_bottom=-0.001,
             )
-        assert d == pytest.approx(d_bottom, rel=1e-12)
+        assert d == pytest.approx(0.9 * h, rel=1e-12)
 
     def test_find_effective_depth_can_suppress_fallback_warning(self):
         """Test find effective depth can suppress fallback warning."""

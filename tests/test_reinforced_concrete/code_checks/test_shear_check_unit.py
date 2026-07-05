@@ -69,6 +69,8 @@ def _make_stub_shear_check() -> ShearCheck:
     object.__setattr__(check, "breadth_override", None)
     object.__setattr__(check, "use_increased_nu_1", False)
     object.__setattr__(check, "apply_tension_cot_theta_limit", True)
+    object.__setattr__(check, "d_fallback", "ratio_of_h")
+    object.__setattr__(check, "d_ratio", 0.9)
     object.__setattr__(check, "concrete_model_type", "parabola")
     object.__setattr__(check, "steel_model_type", "inclined")
     object.__setattr__(check, "concrete_model_override", None)
@@ -207,17 +209,17 @@ class TestPropertiesAndDepths:
         """Test find effective depth and lever arm branches."""
         check = _make_stub_shear_check()
 
-        # Pure shear -> conservative min(d_top,d_bottom).
+        # Pure shear -> fallback (0.9 * h = 0.9 * 500 = 450).
         d = check.find_effective_depth(M_Ed=0.0, N_Ed=100.0)
-        assert d == pytest.approx(430.0, rel=1e-12)
+        assert d == pytest.approx(450.0, rel=1e-12)
 
-        # Strain-defined compression face.
+        # Clear compression/tension split → compression at top → d_top=450.
         d2 = check.find_effective_depth(M_Ed=10.0, N_Ed=0.0, eps_top=0.001, eps_bottom=-0.001)
         assert d2 == pytest.approx(450.0, rel=1e-12)
 
-        # Both faces in tension -> fallback.
+        # Both faces in tension -> fallback (0.9 * h = 450).
         d3 = check.find_effective_depth(M_Ed=10.0, N_Ed=0.0, eps_top=-1e-4, eps_bottom=-2e-4, warn_on_fallback=False)
-        assert d3 == pytest.approx(430.0, rel=1e-12)
+        assert d3 == pytest.approx(450.0, rel=1e-12)
 
         # Non-rigorous lever arm.
         object.__setattr__(check, "use_rigorous", False)
@@ -237,44 +239,49 @@ class TestPropertiesAndDepths:
     def test_find_effective_depth_fallback_and_warning_branches(self):
         """Test find effective depth fallback and warning branches."""
         check = _make_stub_shear_check()
+        _bbox = lambda: (0.0, 0.0, 300.0, 500.0)  # h=500, 0.9h=450
 
-        # Neither face has tension reinforcement -> explicit error.
+        # Neither face has rebar → with ratio_of_h policy, still returns 0.9h (no error).
         object.__setattr__(
             check,
             "section",
             SimpleNamespace(
                 get_effective_depth=lambda compression_face="top": (_ for _ in ()).throw(ValueError("none")),
+                get_bounding_box=_bbox,
             ),
         )
-        with pytest.raises(ValueError, match="no rebars found in either tension zone"):
-            check.find_effective_depth(M_Ed=10.0, N_Ed=0.0)
+        d_no_rebar = check.find_effective_depth(M_Ed=10.0, N_Ed=0.0, eps_top=0.001, eps_bottom=-0.001, warn_on_fallback=False)
+        assert d_no_rebar == pytest.approx(450.0, rel=1e-12)
 
-        # Only top available -> conservative helper returns d_top.
+        # M_Ed=0 → fallback (0.9h = 450).
         object.__setattr__(
             check,
             "section",
             SimpleNamespace(
                 get_effective_depth=lambda compression_face="top": 450.0 if compression_face == "top" else (_ for _ in ()).throw(ValueError("no")),
+                get_bounding_box=_bbox,
             ),
         )
         assert check.find_effective_depth(M_Ed=0.0, N_Ed=0.0) == pytest.approx(450.0, rel=1e-12)
 
-        # Only bottom available -> conservative helper returns d_bot.
+        # M_Ed=0 with only bottom rebar → still fallback (0.9h = 450).
         object.__setattr__(
             check,
             "section",
             SimpleNamespace(
                 get_effective_depth=lambda compression_face="top": (_ for _ in ()).throw(ValueError("no")) if compression_face == "top" else 430.0,
+                get_bounding_box=_bbox,
             ),
         )
-        assert check.find_effective_depth(M_Ed=0.0, N_Ed=0.0) == pytest.approx(430.0, rel=1e-12)
+        assert check.find_effective_depth(M_Ed=0.0, N_Ed=0.0) == pytest.approx(450.0, rel=1e-12)
 
-        # Strain solve fails -> warning fallback to conservative depth.
+        # Strain solve fails -> warning fallback to 0.9h.
         object.__setattr__(
             check,
             "section",
             SimpleNamespace(
                 get_effective_depth=lambda compression_face="top": 450.0 if compression_face == "top" else 430.0,
+                get_bounding_box=_bbox,
             ),
         )
         object.__setattr__(
@@ -286,10 +293,10 @@ class TestPropertiesAndDepths:
         )
         with pytest.warns(UserWarning, match="strain state unavailable"):
             out = check.find_effective_depth(M_Ed=10.0, N_Ed=0.0, eps_top=None, eps_bottom=None, warn_on_fallback=True)
-        assert out == pytest.approx(430.0, rel=1e-12)
+        assert out == pytest.approx(450.0, rel=1e-12)
 
-        # Both faces in tension -> warning branch.
-        with pytest.warns(UserWarning, match="both faces in tension"):
+        # Both faces in tension -> fallback warning.
+        with pytest.warns(UserWarning, match="no compression/tension split"):
             out2 = check.find_effective_depth(
                 M_Ed=10.0,
                 N_Ed=0.0,
@@ -297,7 +304,7 @@ class TestPropertiesAndDepths:
                 eps_bottom=-2e-4,
                 warn_on_fallback=True,
             )
-        assert out2 == pytest.approx(430.0, rel=1e-12)
+        assert out2 == pytest.approx(450.0, rel=1e-12)
 
         # Compression top, but no bottom tension rebar depth -> fallback warning.
         object.__setattr__(
@@ -305,6 +312,7 @@ class TestPropertiesAndDepths:
             "section",
             SimpleNamespace(
                 get_effective_depth=lambda compression_face="top": 450.0 if compression_face == "bottom" else (_ for _ in ()).throw(ValueError("no")),
+                get_bounding_box=_bbox,
             ),
         )
         with pytest.warns(UserWarning, match="no rebar in tension zone"):
@@ -323,6 +331,7 @@ class TestPropertiesAndDepths:
             "section",
             SimpleNamespace(
                 get_effective_depth=lambda compression_face="top": 450.0 if compression_face == "top" else (_ for _ in ()).throw(ValueError("no")),
+                get_bounding_box=_bbox,
             ),
         )
         with pytest.warns(UserWarning, match="no rebar in tension zone"):

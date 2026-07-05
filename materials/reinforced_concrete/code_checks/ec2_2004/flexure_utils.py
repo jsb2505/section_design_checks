@@ -6,6 +6,9 @@ BendingCheck and CrackingCheck.
 """
 
 from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
+
+# Public type alias for the fallback policy
+EffectiveDepthFallback = Literal["ratio_of_h", "centroid"]
 import warnings
 
 from materials.reinforced_concrete.constitutive import SteelModelType
@@ -117,22 +120,92 @@ def calculate_compression_face_from_strains(
 
     Sign convention: compression positive, tension negative.
 
+    Returns a compression face only when the section has a clear
+    compression/tension split (one face positive, one negative).
+    Returns None for net tension (both ≤ 0) and net compression (both ≥ 0),
+    since effective depth is physically undefined in those cases.
+
     Args:
         eps_top: Strain at top fibre
         eps_bottom: Strain at bottom fibre
         strain_tol: Tolerance for considering strains as zero
 
     Returns:
-        "top" if top face is more compressive
-        "bottom" if bottom face is more compressive
-        None if both faces are in tension (no compression face)
+        "top" if top face is in compression and bottom is in tension
+        "bottom" if bottom face is in compression and top is in tension
+        None if both faces have the same sign (no compression/tension split)
     """
-    # If both in tension, no compression face
+    # Both in tension → no compression face
     if eps_top <= strain_tol and eps_bottom <= strain_tol:
         return None
 
-    # Return the face with higher (more positive/compressive) strain
+    # Both in compression → no tension face, d is undefined
+    if eps_top >= -strain_tol and eps_bottom >= -strain_tol:
+        return None
+
+    # Clear split: return the more compressive face
     return "top" if eps_top >= eps_bottom else "bottom"
+
+
+def _get_section_height(section: "RCSection") -> float:
+    """Section height from bounding box (mm)."""
+    _, min_y, _, max_y = section.get_bounding_box()
+    return max_y - min_y
+
+
+def _try_centroid_depth(
+    section: "RCSection",
+    compression_face: Literal["top", "bottom"],
+) -> Optional[float]:
+    """Try to get effective depth for a given compression face, return None on failure."""
+    try:
+        return float(section.get_effective_depth(compression_face=compression_face))
+    except ValueError:
+        return None
+
+
+def _apply_d_fallback(
+    section: "RCSection",
+    d_fallback: EffectiveDepthFallback,
+    d_ratio: float,
+    reason: str,
+    warn_on_fallback: bool,
+    _stacklevel: int,
+) -> float:
+    """
+    Return a fallback effective depth when strain-based derivation is not possible.
+
+    Triggered when the section is in net compression, net tension, pure axial,
+    or when the strain solver fails — i.e. whenever there is no clear
+    compression/tension split.
+
+    Policies:
+        "ratio_of_h": d = d_ratio * h  (default 0.9h). Always available.
+        "centroid":   min(d_top, d_bot) from rebar centroids.
+                      Falls back to ratio_of_h if rebar is missing on a face.
+    """
+    if d_fallback == "centroid":
+        d_top = _try_centroid_depth(section, "top")
+        d_bot = _try_centroid_depth(section, "bottom")
+        if d_top is not None and d_bot is not None:
+            d = min(d_top, d_bot)
+        elif d_top is not None:
+            d = d_top
+        elif d_bot is not None:
+            d = d_bot
+        else:
+            # No rebar on either face — ultimate fallback to ratio_of_h
+            d = d_ratio * _get_section_height(section)
+    else:
+        # "ratio_of_h" (default)
+        d = d_ratio * _get_section_height(section)
+
+    if warn_on_fallback:
+        warnings.warn(
+            f"Effective depth fallback ({reason}): d = {d:.1f} mm",
+            stacklevel=_stacklevel,
+        )
+    return d
 
 
 def find_effective_depth_for_flexure(
@@ -146,113 +219,85 @@ def find_effective_depth_for_flexure(
     m_tol: float = 1e-6,
     strain_tol: float = 1e-15,
     warn_on_fallback: bool = True,
+    d_fallback: EffectiveDepthFallback = "ratio_of_h",
+    d_ratio: float = 0.9,
+    _stacklevel: int = 2,
 ) -> float:
     """
     Effective depth d (mm) measured from the governing compression face.
 
-    This is a shared implementation used by multiple check classes.
+    This is the single source of truth used by ShearCheck, BendingCheck,
+    MNInteractionDiagram, and CircularSectionCheck.
 
-    If strains are provided, compression face is taken as the face with the larger
-    (more positive) strain (compression is positive in this codebase).
+    When the strain state allows (clear compression/tension split), d is
+    computed from rebar centroid geometry via ``section.get_effective_depth()``.
 
-    If strains are not provided:
-    - If a diagram/solver is available and |M_Ed| is significant, strains are solved.
-    - Otherwise, fallback returns min(d_top, d_bottom) for conservatism.
+    When the strain state is ambiguous (net compression, net tension, pure
+    axial, solver failure), the ``d_fallback`` policy is applied:
+        - ``"ratio_of_h"``: d = d_ratio * h  (default 0.9h, always available)
+        - ``"centroid"``:   min(d_top, d_bot) from rebar centroids, with
+          ultimate fallback to ratio_of_h if rebar missing on a face.
 
     Args:
-        section: RCSection object
-        diagram: MNInteractionDiagram for strain solving (optional)
-        M_Ed: Design moment in kN·m
-        N_Ed: Design axial force in kN
-        eps_top: Pre-computed top strain (optional)
-        eps_bottom: Pre-computed bottom strain (optional)
-        m_tol: Tolerance for considering moment as zero
-        strain_tol: Tolerance for strain comparisons
-        warn_on_fallback: Whether to emit warnings when using fallback
+        section: RCSection object.
+        diagram: MNInteractionDiagram for strain solving (optional).
+        M_Ed: Design moment in kN·m.
+        N_Ed: Design axial force in kN (compression positive).
+        eps_top: Pre-computed top strain (optional).
+        eps_bottom: Pre-computed bottom strain (optional).
+        m_tol: Tolerance for considering moment as zero.
+        strain_tol: Tolerance for strain comparisons.
+        warn_on_fallback: Whether to emit warnings when using fallback.
+        d_fallback: Fallback policy — ``"ratio_of_h"`` or ``"centroid"``.
+        d_ratio: Ratio of section height h used for ``"ratio_of_h"`` policy.
+        _stacklevel: Warning stacklevel (internal, for wrapper call depth).
 
     Returns:
-        Effective depth d in mm
+        Effective depth d in mm.
     """
-    # Get effective depths for each compression face assumption
-    d_top: Optional[float] = None
-    d_bot: Optional[float] = None
+    sl = _stacklevel + 1  # adjust for this frame
 
-    try:
-        d_top = float(section.get_effective_depth(compression_face="top"))
-    except ValueError:
-        pass  # No rebar in bottom tension zone
+    def _fallback(reason: str) -> float:
+        return _apply_d_fallback(
+            section=section,
+            d_fallback=d_fallback,
+            d_ratio=d_ratio,
+            reason=reason,
+            warn_on_fallback=warn_on_fallback,
+            _stacklevel=sl + 1,
+        )
 
-    try:
-        d_bot = float(section.get_effective_depth(compression_face="bottom"))
-    except ValueError:
-        pass  # No rebar in top tension zone
-
-    # If neither worked, we have a problem
-    if d_top is None and d_bot is None:
-        raise ValueError("Cannot compute effective depth: no rebars found in either tension zone")
-
-    # Helper to get conservative depth (handles one being None)
-    def _get_conservative_d() -> float:
-        if d_top is not None and d_bot is not None:
-            return min(d_top, d_bot)
-        elif d_top is not None:
-            return d_top
-        else:
-            assert d_bot is not None
-            return d_bot
-
-    # Pure shear / pure axial / no clear bending => conservative depth
+    # Pure shear / pure axial / no clear bending → fallback
     if abs(M_Ed) <= m_tol:
-        return _get_conservative_d()
+        return _fallback("no bending (|M_Ed| ≈ 0)")
 
-    # If strains missing, try to solve if we have a diagram
+    # If strains missing, try to solve via diagram
     if (eps_top is None or eps_bottom is None) and diagram is not None:
         try:
             eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed)
         except Exception:
             eps_top, eps_bottom = None, None
 
-    # Still missing -> fallback conservative
+    # Still missing → fallback
     if eps_top is None or eps_bottom is None:
-        if warn_on_fallback:
-            warnings.warn(
-                "Effective depth fallback used (strain state unavailable). "
-                "Returning conservative min(d_top, d_bottom).",
-                stacklevel=3,
-            )
-        return _get_conservative_d()
+        return _fallback("strain state unavailable")
 
-    # If there is no compression anywhere, compression face is undefined -> fallback
-    if eps_top <= strain_tol and eps_bottom <= strain_tol:
-        if warn_on_fallback:
-            warnings.warn(
-                "Effective depth fallback used (both faces in tension; compression face undefined). "
-                "Returning conservative min(d_top, d_bottom).",
-                stacklevel=3,
-            )
-        return _get_conservative_d()
+    # Determine compression face from strains
+    compression_face = calculate_compression_face_from_strains(
+        eps_top, eps_bottom, strain_tol=strain_tol,
+    )
 
-    # Otherwise: choose the more compressive face (bigger + strain)
-    compression_face = "top" if eps_top >= eps_bottom else "bottom"
+    # No compression face (both in tension or both in compression) → fallback
+    if compression_face is None:
+        return _fallback("no compression/tension split")
 
-    if compression_face == "top":
-        if d_top is not None:
-            return d_top
-        if warn_on_fallback:
-            warnings.warn(
-                "Effective depth fallback used (no rebar in tension zone for this compression face).",
-                stacklevel=3,
-            )
-        return _get_conservative_d()
-    else:
-        if d_bot is not None:
-            return d_bot
-        if warn_on_fallback:
-            warnings.warn(
-                "Effective depth fallback used (no rebar in tension zone for this compression face).",
-                stacklevel=3,
-            )
-        return _get_conservative_d()
+    # Have a compression face — try to get d from rebar geometry
+    d = _try_centroid_depth(section, compression_face)
+    if d is not None:
+        return d
+
+    # Compression face known but no rebar in the corresponding tension zone → fallback
+    return _fallback("no rebar in tension zone for this compression face")
 
 
 def find_mean_effective_depth(

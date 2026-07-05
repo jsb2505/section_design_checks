@@ -52,6 +52,14 @@ _NDP_DATA: dict[str, dict[str, dict[str, NDPValue]]] = {
     EurocodeVersion.EN1992_2_2005: EN1992_2_2005,
 }
 
+# Overlay relationships: overlay code -> base code.
+# An overlay code inherits the base code's EU parameters, then applies its own
+# EU overlay and country overlays on top. Country annexes are independent
+# (they do NOT inherit from the base code's country annexes).
+_CODE_OVERLAY_BASE: dict[str, str] = {
+    EurocodeVersion.EN1992_2_2005: EurocodeVersion.EN1992_1_1_2004,
+}
+
 
 class NDPRegistry:
     """
@@ -149,10 +157,18 @@ class NDPRegistry:
 
     def _get_country_data(self) -> dict[str, dict[str, Any]]:
         """
-        Build merged NDP data: EU base + country overrides + metadata.
+        Build merged NDP data with overlay support.
 
-        Supports both built-in country codes (EU, EU_UK, EU_DE) and
-        custom annexes registered via register_custom_annex().
+        For standalone codes (e.g. EN1992_1_1_2004):
+            EU base → country overrides
+
+        For overlay codes (e.g. EN1992_2_2005 overlaying EN1992_1_1_2004):
+            base code EU → overlay code EU → overlay code country
+
+        Country annexes for overlay codes are independent — they do NOT
+        inherit from the base code's country annexes.
+
+        Supports custom annexes registered via register_custom_annex().
 
         Returns dict of {param: {"value": ..., "description": ..., "ref": ...}}
         """
@@ -163,36 +179,69 @@ class NDPRegistry:
                 f"Available: {sorted(_NDP_DATA.keys())}"
             )
 
-        # Get EU base values (must exist)
-        eu_base = code_data.get(CountryCode.EU)
-        if eu_base is None:
-            raise KeyError(
-                f"EU base data not found for {self._code}. "
-                f"Available country codes: {sorted(code_data.keys())}"
-            )
+        # Build the flat merged values dict (param -> value)
+        base_code_version = _CODE_OVERLAY_BASE.get(self._code)
 
-        # Get country-specific overrides
-        # Check custom annexes first, then built-in country codes
-        if self._country in self._custom_annexes:
-            country_overrides = self._custom_annexes[self._country]
-        elif self._country in code_data:
-            country_overrides = code_data[self._country]
-        elif self._country == CountryCode.EU:
-            country_overrides = {}
+        if base_code_version is not None:
+            # Overlay code: 3-layer merge
+            base_code_data = _NDP_DATA.get(base_code_version)
+            if base_code_data is None:
+                raise KeyError(
+                    f"Base code '{base_code_version}' for overlay "
+                    f"'{self._code}' not found."
+                )
+
+            # Layer 1: base code EU (full parameter set)
+            base_eu = base_code_data.get(CountryCode.EU)
+            if base_eu is None:
+                raise KeyError(
+                    f"EU base data not found for base code "
+                    f"{base_code_version}."
+                )
+            merged_values: dict[str, Any] = dict(base_eu)
+
+            # Layer 2: overlay code EU (only differences)
+            overlay_eu = code_data.get(CountryCode.EU, {})
+            merged_values.update(overlay_eu)
+
+            # Layer 3: country overrides (custom annexes first, then built-in)
+            if self._country in self._custom_annexes:
+                merged_values.update(self._custom_annexes[self._country])
+            elif self._country != CountryCode.EU:
+                if self._country in code_data:
+                    merged_values.update(code_data[self._country])
+                else:
+                    raise KeyError(
+                        f"Country '{self._country}' not found for "
+                        f"{self._code}. "
+                        f"Built-in: {sorted(code_data.keys())}. "
+                        f"Custom: {sorted(self._custom_annexes.keys())}"
+                    )
         else:
-            raise KeyError(
-                f"Country '{self._country}' not found. "
-                f"Built-in: {sorted(code_data.keys())}. "
-                f"Custom: {sorted(self._custom_annexes.keys())}"
-            )
+            # Standalone code: 2-layer merge (existing logic)
+            eu_base = code_data.get(CountryCode.EU)
+            if eu_base is None:
+                raise KeyError(
+                    f"EU base data not found for {self._code}. "
+                    f"Available country codes: {sorted(code_data.keys())}"
+                )
+            merged_values = dict(eu_base)
 
-        # Merge: start with EU base, override with country-specific values
+            # Country overrides
+            if self._country in self._custom_annexes:
+                merged_values.update(self._custom_annexes[self._country])
+            elif self._country in code_data:
+                merged_values.update(code_data[self._country])
+            elif self._country != CountryCode.EU:
+                raise KeyError(
+                    f"Country '{self._country}' not found. "
+                    f"Built-in: {sorted(code_data.keys())}. "
+                    f"Custom: {sorted(self._custom_annexes.keys())}"
+                )
+
+        # Combine values with metadata
         merged: dict[str, dict[str, Any]] = {}
-        for param, base_value in eu_base.items():
-            # Use country override if it exists, otherwise use EU base
-            value = country_overrides.get(param, base_value)
-
-            # Combine value with metadata
+        for param, value in merged_values.items():
             metadata = _NDP_METADATA.get(param, {})
             merged[param] = {
                 "value": value,
