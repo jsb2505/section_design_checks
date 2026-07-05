@@ -9,7 +9,8 @@ face already accounted for.
 """
 
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
 
@@ -49,7 +50,7 @@ def test_lever_arm_fallback_respects_compression_face():
 
     # Test sagging moment
     print("\nCase 1: Sagging (M > 0)")
-    load_case_sagging = ShearLoadCase(V_Ed=100, M_Ed=80, N_Ed=0)
+    load_case_sagging = LoadCase(V_Ed=100, M_Ed=80, N_Ed=0)
     result_sagging = check.perform_check(load_case=load_case_sagging)
 
     d_sagging = result_sagging.details['d']
@@ -61,7 +62,7 @@ def test_lever_arm_fallback_respects_compression_face():
 
     # Test hogging moment
     print("\nCase 2: Hogging (M < 0)")
-    load_case_hogging = ShearLoadCase(V_Ed=100, M_Ed=-80, N_Ed=0)
+    load_case_hogging = LoadCase(V_Ed=100, M_Ed=-80, N_Ed=0)
     result_hogging = check.perform_check(load_case=load_case_hogging)
 
     d_hogging = result_hogging.details['d']
@@ -119,7 +120,7 @@ def test_pure_axial_fallback():
     print("\n=== Test: Pure Axial Edge Case ===")
 
     # Pure axial compression (might trigger fallback in lever arm)
-    load_case = ShearLoadCase(V_Ed=50, M_Ed=0, N_Ed=1000)
+    load_case = LoadCase(V_Ed=50, M_Ed=0, N_Ed=1000)
     result = check.perform_check(load_case=load_case)
 
     d = result.details['d']

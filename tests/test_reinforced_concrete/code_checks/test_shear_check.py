@@ -5,7 +5,8 @@ Tests for ShearCheck with accidental limit state support.
 import warnings
 import pytest
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
 from materials.reinforced_concrete.ndp import CountryCode, get_ndp_context, set_ndp_context
@@ -334,7 +335,7 @@ class TestShearSpacingNDP:
             shear_reinforcement=shear_rebar,
             use_increased_nu_1=False,
         )
-        load_case = ShearLoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
+        load_case = LoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
 
         old_code, old_country = get_ndp_context()
         try:
@@ -360,7 +361,7 @@ class TestShearSpacingNDP:
             shear_reinforcement=shear_rebar,
             use_increased_nu_1=False,
         )
-        load_case = ShearLoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
+        load_case = LoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
 
         old_code, old_country = get_ndp_context()
         try:
@@ -385,7 +386,7 @@ class TestShearSpacingNDP:
             shear_reinforcement=shear_rebar,
             use_increased_nu_1=False,
         )
-        load_case = ShearLoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
+        load_case = LoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
 
         old_code, old_country = get_ndp_context()
         try:
@@ -415,7 +416,7 @@ class TestShearSpacingNDP:
             shear_reinforcement=shear_rebar,
             use_increased_nu_1=False,
         )
-        load_case = ShearLoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
+        load_case = LoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
 
         old_code, old_country = get_ndp_context()
         try:
@@ -444,7 +445,7 @@ class TestShearUncrackedVrdc:
         section = create_test_section()
         concrete = ConcreteMaterial(grade="C30/37")
         check = ShearCheck(section=section, concrete=concrete)
-        load_case = ShearLoadCase(V_Ed=80, M_Ed=40, N_Ed=100)
+        load_case = LoadCase(V_Ed=80, M_Ed=40, N_Ed=100)
 
         result = check.perform_check(load_case=load_case, suppress_warnings=True)
 
@@ -457,7 +458,7 @@ class TestShearUncrackedVrdc:
         section = create_test_section()
         concrete = ConcreteMaterial(grade="C30/37")
         check = ShearCheck(section=section, concrete=concrete)
-        load_case = ShearLoadCase(V_Ed=80, M_Ed=40, N_Ed=100)
+        load_case = LoadCase(V_Ed=80, M_Ed=40, N_Ed=100)
 
         result = check.perform_check(
             load_case=load_case,
@@ -479,7 +480,7 @@ class TestShearUncrackedVrdc:
             shear_reinforcement=shear_rebar,
             use_increased_nu_1=False,
         )
-        load_case = ShearLoadCase(V_Ed=300, M_Ed=50, N_Ed=100)
+        load_case = LoadCase(V_Ed=300, M_Ed=50, N_Ed=100)
 
         result = check.perform_check(
             load_case=load_case,
@@ -519,7 +520,7 @@ class TestTensionCotThetaLimit:
         """With EU_UK + tensile N_Ed, cot(θ) should be ≤ 1.25."""
         check = self._make_check(apply_limit=True)
         # Use tensile N_Ed (negative = tension)
-        load_case = ShearLoadCase(V_Ed=150, N_Ed=-200)
+        load_case = LoadCase(V_Ed=150, N_Ed=-200)
         result = check.perform_check(load_case=load_case, suppress_warnings=True)
 
         cot_theta = result.details["cot_theta"]
@@ -529,7 +530,7 @@ class TestTensionCotThetaLimit:
     def test_tension_cot_theta_not_limited_when_opt_out(self):
         """With apply_tension_cot_theta_limit=False, standard limit applies."""
         check = self._make_check(apply_limit=False)
-        load_case = ShearLoadCase(V_Ed=150, N_Ed=-200)
+        load_case = LoadCase(V_Ed=150, N_Ed=-200)
         result = check.perform_check(load_case=load_case, suppress_warnings=True)
 
         cot_theta = result.details["cot_theta"]
@@ -543,7 +544,7 @@ class TestTensionCotThetaLimit:
     def test_compression_not_affected_by_tension_limit(self):
         """With compressive N_Ed, cot(θ) should NOT be clamped to 1.25."""
         check = self._make_check(apply_limit=True)
-        load_case = ShearLoadCase(V_Ed=150, N_Ed=200)
+        load_case = LoadCase(V_Ed=150, N_Ed=200)
         result = check.perform_check(load_case=load_case, suppress_warnings=True)
 
         cot_theta = result.details["cot_theta"]

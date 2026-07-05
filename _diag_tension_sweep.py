@@ -7,7 +7,9 @@ sys.path.insert(0, r"C:\Users\user\Repo\Scripts\section_design_checks")
 from materials.reinforced_concrete.sections import create_rectangular_section, create_linear_rebar_layer
 from materials.reinforced_concrete.rebar import Rebar
 from materials.reinforced_concrete.concrete import ConcreteMaterial
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearRebar, ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+from materials.reinforced_concrete.materials import ShearRebar
 
 concrete = ConcreteMaterial(grade="C30/37")
 section = create_rectangular_section(width=300, height=500)
@@ -31,7 +33,7 @@ viewer = ShearViewer(check)
 
 n_vals = np.linspace(-1000, 200, 121)
 for N_Ed_val in n_vals:
-    lc = ShearLoadCase(V_Ed=V_Ed, M_Ed=M_Ed, N_Ed=float(N_Ed_val))
+    lc = LoadCase(V_Ed=V_Ed, M_Ed=M_Ed, N_Ed=float(N_Ed_val))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         ctx = viewer._build_context(load_case=lc)

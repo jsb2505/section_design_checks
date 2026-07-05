@@ -27,11 +27,9 @@ from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
 )
 from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import (
     EffectiveDepthFallback,
+    LoadCase,
 )
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import (
-    ShearCheck,
-    ShearLoadCase,
-)
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
 from materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check import (
     StressLimitsCheck,
 )
@@ -427,7 +425,7 @@ class BeamCheck(BaseModel):
     def perform_shear_check(
         self,
         *,
-        load_case: ShearLoadCase,
+        load_case: LoadCase,
         cot_theta_override: Optional[float] = None,
         use_v_rd_s_for_cot_theta: bool = False,
         use_uncracked_V_Rd_c: bool = False,

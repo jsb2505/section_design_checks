@@ -7,7 +7,8 @@ Key scenario: Large axial compression + small hogging moment
 """
 
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.code_checks.base_check import CheckStatus
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
@@ -50,7 +51,7 @@ def test_mn_interaction_overrides_moment_sign():
 
     # Large compression + small hogging moment
     # The compression should dominate!
-    load_case = ShearLoadCase(V_Ed=100, M_Ed=-5.0, N_Ed=800)
+    load_case = LoadCase(V_Ed=100, M_Ed=-5.0, N_Ed=800)
     print(f"\nLoad case: V={load_case.V_Ed} kN, M={load_case.M_Ed} kN.m, N={load_case.N_Ed} kN")
     print("Expectation: Large N_Ed should dominate small hogging M_Ed -> top compressed")
 
@@ -80,7 +81,7 @@ def test_mn_interaction_overrides_moment_sign():
 
     # For reference: check pure hogging (no N_Ed) to see the difference
     print("\n=== Reference: Pure Hogging (no N_Ed) ===")
-    load_case_pure_hogging = ShearLoadCase(V_Ed=100, M_Ed=-50.0, N_Ed=0)
+    load_case_pure_hogging = LoadCase(V_Ed=100, M_Ed=-50.0, N_Ed=0)
     print(f"Load case: V={load_case_pure_hogging.V_Ed} kN, M={load_case_pure_hogging.M_Ed} kN.m, N={load_case_pure_hogging.N_Ed} kN")
 
     result_pure = check_approx.perform_check(load_case=load_case_pure_hogging)
@@ -131,7 +132,7 @@ def test_approximate_vs_simple_sign_check():
     ]
 
     for V, M, N, desc in test_cases:
-        load_case = ShearLoadCase(V_Ed=V, M_Ed=M, N_Ed=N)
+        load_case = LoadCase(V_Ed=V, M_Ed=M, N_Ed=N)
         result = check.perform_check(load_case=load_case)
 
         # Naive approach would just use sign(M)
@@ -190,7 +191,7 @@ def test_lever_arm_difference():
         use_mechanical_lever_arm=True,
     )
 
-    load_case = ShearLoadCase(V_Ed=150, M_Ed=50, N_Ed=100)
+    load_case = LoadCase(V_Ed=150, M_Ed=50, N_Ed=100)
     print(f"Load case: V={load_case.V_Ed} kN, M={load_case.M_Ed} kN.m, N={load_case.N_Ed} kN")
 
     result_approx = check_approx.perform_check(load_case=load_case)

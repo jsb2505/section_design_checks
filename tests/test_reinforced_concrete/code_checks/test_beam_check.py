@@ -12,7 +12,7 @@ import materials.reinforced_concrete.code_checks.ec2_2004 as ec2_mod
 import materials.reinforced_concrete.code_checks.ec2_2004.beam_check as beam_mod
 from materials.reinforced_concrete.code_checks.base_check import CheckResult, CheckStatus
 from materials.reinforced_concrete.code_checks.ec2_2004 import BeamCheck
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.constitutive import ConcreteModelType
 from materials.reinforced_concrete.ndp import get_ndp_context
 
@@ -102,7 +102,7 @@ def test_wrapper_methods_forward_to_sub_checks():
     assert bending_rec.calls[-1]["shear_reinforcement"] is default_shear_reinf
     assert bending_rec.calls[-1]["cot_theta_override"] == pytest.approx(1.4, rel=1e-12)
 
-    load_case = ShearLoadCase(V_Ed=200.0, M_Ed=80.0, N_Ed=50.0)
+    load_case = LoadCase(V_Ed=200.0, M_Ed=80.0, N_Ed=50.0)
     shear_result = check.perform_shear_check(
         load_case=load_case,
         use_uncracked_V_Rd_c=True,

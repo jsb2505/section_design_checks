@@ -61,7 +61,7 @@ from materials.reinforced_concrete.analysis import (
 from materials.reinforced_concrete.code_checks.ec2_2004 import (
     BendingCheck,
     ShearCheck,
-    ShearLoadCase,
+    LoadCase,
     CrackingCheck,
     LoadDuration,
 )
@@ -109,7 +109,7 @@ __all__ = [
     # Code checks – EC2 2004
     "BendingCheck",
     "ShearCheck",
-    "ShearLoadCase",
+    "LoadCase",
     "CrackingCheck",
     "LoadDuration",
 ]

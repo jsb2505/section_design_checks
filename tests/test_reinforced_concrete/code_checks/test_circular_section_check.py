@@ -10,7 +10,7 @@ from materials.core.geometry import Point2D
 from materials.reinforced_concrete.code_checks.ec2_2004.circular_section_check import (
     CircularSectionCheck,
 )
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.geometry import (
     RebarGroup,
     create_circular_perimeter_rebars,
@@ -165,7 +165,7 @@ class TestCircularShearCapacityPolicy:
             shear_reinforcement=None,
         )
 
-        load = ShearLoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
+        load = LoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
 
         with pytest.raises(ValueError, match="requires shear_reinforcement"):
             check.perform_shear_check(load_case=load, suppress_warnings=True)
@@ -184,7 +184,7 @@ class TestCircularShearCapacityPolicy:
             shear_reinforcement=shear_rebar,
         )
 
-        load = ShearLoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
+        load = LoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
         result = check.perform_shear_check(load_case=load, suppress_warnings=True)
 
         assert result.details["use_uncracked_V_Rd_c"] is False
@@ -207,7 +207,7 @@ class TestCircularShearCapacityPolicy:
             shear_reinforcement=shear_rebar,
         )
 
-        load = ShearLoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
+        load = LoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=1000.0)
 
         result_default = check.perform_shear_check(
             load_case=load,
@@ -247,7 +247,7 @@ class TestCircularRhoLFromStrains:
 
         # Sagging-like strain state: bottom bar in tension
         rho_sagging = check._find_rho_l(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=0.0,
             b_w=b_w,
             d=d,
@@ -257,7 +257,7 @@ class TestCircularRhoLFromStrains:
 
         # Hogging-like strain state: top bar in tension (larger bar area)
         rho_hogging = check._find_rho_l(
-            M_Ed=-100.0,
+            My_Ed=-100.0,
             N_Ed=0.0,
             b_w=b_w,
             d=d,
@@ -285,7 +285,7 @@ class TestCircularRhoLFromStrains:
         )
 
         rho_l = check._find_rho_l(
-            M_Ed=0.0,
+            My_Ed=0.0,
             N_Ed=1000.0,
             b_w=300.0,
             d=500.0,
@@ -313,7 +313,7 @@ class TestCircularStressLimitsWrapper:
         N_Ed = 300.0
 
         wrapped = check.perform_stress_limits_check(
-            M_Ed=M_Ed,
+            My_Ed=M_Ed,
             N_Ed=N_Ed,
             warning_threshold=0.9,
             ignore_compression_steel=True,

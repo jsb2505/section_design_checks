@@ -139,7 +139,7 @@ class _FakeCircularCheck:
 
     def _find_rho_l(
         self,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         b_w: float,
         d: float,

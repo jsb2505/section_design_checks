@@ -14,7 +14,7 @@ from materials.reinforced_concrete.code_checks.base_check import CheckResult, Ch
 from materials.reinforced_concrete.code_checks.ec2_2004.circular_section_check import (
     CircularSectionCheck,
 )
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.geometry import create_circular_section
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
 from materials.reinforced_concrete.ndp import ndp_override
@@ -279,7 +279,7 @@ class TestHelpers:
         """Test shear details and theta conversion."""
         d = CircularSectionCheck._shear_details(
             V_Ed=100.0,
-            M_Ed=50.0,
+            My_Ed=50.0,
             N_Ed=20.0,
             V_Rd=200.0,
             d=500.0,
@@ -369,7 +369,7 @@ class TestHelpers:
 
         # Direct strains path
         out1 = check._find_rho_l(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=0.0,
             b_w=300.0,
             d=500.0,
@@ -382,7 +382,7 @@ class TestHelpers:
 
         # Diagram strains path
         out2 = check._find_rho_l(
-            M_Ed=120.0,
+            My_Ed=120.0,
             N_Ed=20.0,
             b_w=300.0,
             d=500.0,
@@ -392,7 +392,7 @@ class TestHelpers:
         assert called["args"]["eps_top"] == pytest.approx(0.002, rel=1e-12)
 
         # Invalid geometry path
-        assert check._find_rho_l(M_Ed=0.0, N_Ed=0.0, b_w=0.0, d=500.0) == pytest.approx(0.0, rel=1e-12)
+        assert check._find_rho_l(My_Ed=0.0, N_Ed=0.0, b_w=0.0, d=500.0) == pytest.approx(0.0, rel=1e-12)
 
     def test_uncracked_vrdc_negative_inner_returns_zero(self):
         """Test uncracked vrdc negative inner returns zero."""
@@ -425,7 +425,7 @@ class TestIterativeAndRoutingHelpers:
 
         with pytest.warns(UserWarning, match="maximum allowable spacing"):
             result = check.perform_shear_check(
-                load_case=ShearLoadCase(V_Ed=200.0, M_Ed=100.0, N_Ed=300.0),
+                load_case=LoadCase(V_Ed=200.0, M_Ed=100.0, N_Ed=300.0),
                 cot_theta_override=2.2,
                 suppress_warnings=False,
             )
@@ -455,7 +455,7 @@ class TestIterativeAndRoutingHelpers:
 
         # Standard Note 1 but cot(theta) from V_Rd,s equation (covers 987-988 path).
         result_vrds = check.perform_shear_check(
-            load_case=ShearLoadCase(V_Ed=200.0, M_Ed=100.0, N_Ed=300.0),
+            load_case=LoadCase(V_Ed=200.0, M_Ed=100.0, N_Ed=300.0),
             use_v_rd_s_for_cot_theta=True,
             suppress_warnings=True,
         )
@@ -469,7 +469,7 @@ class TestIterativeAndRoutingHelpers:
             lambda self, *args, **kwargs: (500.0, 400.0, 1.8, 0.75, True),
         )
         result_note_2 = check.perform_shear_check(
-            load_case=ShearLoadCase(V_Ed=200.0, M_Ed=100.0, N_Ed=300.0),
+            load_case=LoadCase(V_Ed=200.0, M_Ed=100.0, N_Ed=300.0),
             suppress_warnings=True,
         )
         assert result_note_2.details["used_note_2"] is True
@@ -626,7 +626,7 @@ class TestIterativeAndRoutingHelpers:
         monkeypatch.setattr(csc_mod, "find_cot_theta_for_V_Ed_from_V_Rd_s", lambda **kwargs: 1.4)
 
         out_vrdmax = check._compute_cot_theta_for_tension_shift(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=200.0,
             V_Ed=300.0,
             use_v_rd_s_for_cot_theta=False,
@@ -634,7 +634,7 @@ class TestIterativeAndRoutingHelpers:
         assert out_vrdmax == pytest.approx(1.9, rel=1e-12)
 
         out_vrds = check._compute_cot_theta_for_tension_shift(
-            M_Ed=100.0,
+            My_Ed=100.0,
             N_Ed=200.0,
             V_Ed=300.0,
             use_v_rd_s_for_cot_theta=True,
@@ -655,7 +655,7 @@ class TestIterativeAndRoutingHelpers:
 
         # Auto cot(theta) branch
         b = check.perform_bending_check(
-            M_Ed=120.0,
+            My_Ed=120.0,
             N_Ed=30.0,
             V_Ed=100.0,
             M_cap=150.0,
@@ -666,7 +666,7 @@ class TestIterativeAndRoutingHelpers:
 
         # User override branch (should pass through user value)
         b2 = check.perform_bending_check(
-            M_Ed=120.0,
+            My_Ed=120.0,
             N_Ed=30.0,
             V_Ed=100.0,
             M_cap=150.0,
@@ -675,11 +675,11 @@ class TestIterativeAndRoutingHelpers:
         assert b2.check_name == "bending"
         assert bend_rec.calls[-1]["cot_theta_override"] == pytest.approx(1.2, rel=1e-12)
 
-        c = check.perform_cracking_check(M_Ed=50.0, N_Ed=10.0, force_cracked=True)
+        c = check.perform_cracking_check(My_Ed=50.0, N_Ed=10.0, force_cracked=True)
         assert c.check_name == "cracking"
         assert crack_rec.calls[-1]["force_cracked"] is True
 
-        s = check.perform_stress_limits_check(M_Ed=50.0, N_Ed=10.0, suppress_warnings=True, check_k1_stress=True)
+        s = check.perform_stress_limits_check(My_Ed=50.0, N_Ed=10.0, suppress_warnings=True, check_k1_stress=True)
         assert s.check_name == "stress"
         assert stress_rec.calls[-1]["suppress_warnings"] is True
         assert stress_rec.calls[-1]["check_k1_stress"] is True
@@ -714,7 +714,7 @@ class TestIterativeAndRoutingHelpers:
         monkeypatch.setattr(csc_mod, "find_max_allowable_leg_spacing", lambda **kwargs: 300.0)
 
         result = check.perform_shear_check(
-            load_case=ShearLoadCase(V_Ed=200.0, M_Ed=100.0, N_Ed=300.0),
+            load_case=LoadCase(V_Ed=200.0, M_Ed=100.0, N_Ed=300.0),
             suppress_warnings=True,
         )
 

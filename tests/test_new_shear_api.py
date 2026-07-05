@@ -3,7 +3,8 @@ Quick test to verify the new ShearCheck API works.
 """
 
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.code_checks.base_check import CheckStatus
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
@@ -36,7 +37,7 @@ def test_new_api_single_case():
 
     # Single load case
     print("\n=== Checking single load case ===")
-    load_case = ShearLoadCase(V_Ed=150, M_Ed=50, N_Ed=100)
+    load_case = LoadCase(V_Ed=150, M_Ed=50, N_Ed=100)
     print(f"Load case: V={load_case.V_Ed} kN, M={load_case.M_Ed} kN.m, N={load_case.N_Ed} kN")
 
     result = check.perform_check(load_case=load_case)
@@ -83,9 +84,9 @@ def test_new_api_multiple_cases():
     # Multiple load cases - use list comprehension
     print("\n=== Checking multiple load cases ===")
     load_cases = [
-        ShearLoadCase(V_Ed=150, M_Ed=50, N_Ed=100),   # Sagging
-        ShearLoadCase(V_Ed=120, M_Ed=-30, N_Ed=80),   # Hogging
-        ShearLoadCase(V_Ed=100, M_Ed=0, N_Ed=0),      # Pure shear
+        LoadCase(V_Ed=150, M_Ed=50, N_Ed=100),   # Sagging
+        LoadCase(V_Ed=120, M_Ed=-30, N_Ed=80),   # Hogging
+        LoadCase(V_Ed=100, M_Ed=0, N_Ed=0),      # Pure shear
     ]
 
     results = [check.perform_check(load_case=case) for case in load_cases]
@@ -120,7 +121,7 @@ def test_approximate_mode():
     )
     print("Initialization complete (should be instant)!")
 
-    load_case = ShearLoadCase(V_Ed=150, M_Ed=50, N_Ed=100)
+    load_case = LoadCase(V_Ed=150, M_Ed=50, N_Ed=100)
     result = check.perform_check(load_case=load_case)
 
     print(f"\nResult: {result.status}")

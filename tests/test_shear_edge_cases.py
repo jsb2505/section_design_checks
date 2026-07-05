@@ -3,7 +3,8 @@ Test edge cases for ShearCheck, particularly compression face detection.
 """
 
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.code_checks.base_check import CheckStatus
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
@@ -38,7 +39,7 @@ def test_pure_axial_compression_face():
     )
 
     # Pure axial load: M_Ed = 0, N_Ed > 0, small V_Ed
-    load_case = ShearLoadCase(V_Ed=50, M_Ed=0.0, N_Ed=500)
+    load_case = LoadCase(V_Ed=50, M_Ed=0.0, N_Ed=500)
     print(f"Load case: V={load_case.V_Ed} kN, M={load_case.M_Ed} kN.m, N={load_case.N_Ed} kN")
 
     result = check_rigorous.perform_check(load_case=load_case)
@@ -101,7 +102,7 @@ def test_very_small_moment():
 
     print("\n=== Testing Very Small Moment ===")
     # Very small moment (0.1 kN.m) with large axial load
-    load_case = ShearLoadCase(V_Ed=50, M_Ed=0.1, N_Ed=500)
+    load_case = LoadCase(V_Ed=50, M_Ed=0.1, N_Ed=500)
 
     result = check.perform_check(load_case=load_case)
 

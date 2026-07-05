@@ -447,7 +447,7 @@ class BendingCheck(BaseCodeCheck):
         M_Ed_original = float(M_Ed)
 
         # Build keyword dict for Mz_target (only passed when non-zero)
-        _mz_kw = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
+        _mz_kw: dict[str, Any] = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
 
         # --- Step 1: tension shift (only if M_cap is provided) ---
         if M_cap is not None:
@@ -501,7 +501,7 @@ class BendingCheck(BaseCodeCheck):
         # --- Step 2: capacity check against diagram ---
         diagram = self._get_diagram(ignore_compression_steel)
         if abs(Mz_Ed) > 1e-9 and hasattr(diagram, "get_capacity_biaxial"):
-            capacity = diagram.get_capacity_biaxial(N_Ed=N_Ed, My_Ed=M_design, Mz_Ed=Mz_Ed)
+            capacity = diagram.get_capacity_biaxial(N_Ed=N_Ed, My_Ed=M_design, Mz_Ed=Mz_Ed)  # type: ignore[attr-defined]
         else:
             capacity = diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_design, return_details=False)
         N_Rd, M_Rd, utilization = capacity.N_Rd, capacity.M_Rd, capacity.utilization

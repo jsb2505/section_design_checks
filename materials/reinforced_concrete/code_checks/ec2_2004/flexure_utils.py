@@ -5,7 +5,8 @@ Contains geometry helpers and EC2 formula implementations used by both
 BendingCheck and CrackingCheck.
 """
 
-from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
+from math import hypot
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple
 
 # Public type alias for the fallback policy
 EffectiveDepthFallback = Literal["ratio_of_h", "centroid"]
@@ -13,6 +14,7 @@ BiaxialEffectiveDepthPolicy = Literal["centroid_normal", "extreme_fibre"]
 import warnings
 
 import numpy as np
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from materials.reinforced_concrete.constitutive import SteelModelType
 from materials.reinforced_concrete.ndp import get_ndp_callable
@@ -21,6 +23,60 @@ if TYPE_CHECKING:
     from materials.reinforced_concrete.geometry import RCSection
     from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
     from materials.reinforced_concrete.analysis.strain_state import StrainState
+
+
+class LoadCase(BaseModel):
+    """
+    Single load case for design checks.
+
+    Attributes:
+        Vy_Ed: Major axis shear force (kN). For pure vertical shear, set this
+               and leave Vz_Ed as 0. The resultant V_Ed is computed automatically.
+        Vz_Ed: Minor axis shear force (kN, default 0).
+        My_Ed: Major axis design moment (kN·m, default 0).
+        Mz_Ed: Minor axis design moment (kN·m, default 0).
+        N_Ed: Design axial force (kN, compression positive, default 0).
+    """
+    Vy_Ed: float = Field(default=0.0, description="Major axis shear force in kN")
+    Vz_Ed: float = Field(default=0.0, description="Minor axis shear force in kN")
+    My_Ed: float = Field(default=0.0, description="Major axis design moment in kN·m")
+    Mz_Ed: float = Field(default=0.0, description="Minor axis design moment in kN·m")
+    N_Ed: float = Field(default=0.0, description="Design axial force in kN (compression positive)")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def V_Ed(self) -> float:
+        """Resultant shear force (kN)."""
+        return hypot(self.Vy_Ed, self.Vz_Ed)
+
+    @property
+    def M_Ed(self) -> float:
+        """Deprecated alias for My_Ed — for backward compatibility."""
+        return self.My_Ed
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compat_legacy_fields(cls, values: Any) -> Any:
+        """Accept legacy V_Ed and M_Ed keyword arguments."""
+        if not isinstance(values, dict):
+            return values
+        # Legacy V_Ed → Vy_Ed (assume major axis shear)
+        if "V_Ed" in values and "Vy_Ed" not in values:
+            warnings.warn(
+                "LoadCase: V_Ed is deprecated, use Vy_Ed (and Vz_Ed for minor axis shear)",
+                DeprecationWarning,
+                stacklevel=4,
+            )
+            values["Vy_Ed"] = values.pop("V_Ed")
+        # Legacy M_Ed → My_Ed
+        if "M_Ed" in values and "My_Ed" not in values:
+            warnings.warn(
+                "LoadCase: M_Ed is deprecated, use My_Ed",
+                DeprecationWarning,
+                stacklevel=4,
+            )
+            values["My_Ed"] = values.pop("M_Ed")
+        return values
 
 
 def calculate_section_height(section: "RCSection") -> float:
@@ -305,13 +361,13 @@ def _compute_biaxial_effective_depth(
         return abs(proj_comp_extreme - proj_T)
 
     # Find the intersection point furthest along compression direction
-    from shapely.geometry import MultiPoint, Point as ShapelyPoint
+    from shapely.geometry import GeometryCollection, MultiPoint, Point as ShapelyPoint
 
     if isinstance(intersection, ShapelyPoint):
         pts = [intersection]
     elif isinstance(intersection, MultiPoint):
         pts = list(intersection.geoms)
-    elif hasattr(intersection, "geoms"):
+    elif isinstance(intersection, GeometryCollection):
         pts = [g for g in intersection.geoms if isinstance(g, ShapelyPoint)]
     else:
         pts = []

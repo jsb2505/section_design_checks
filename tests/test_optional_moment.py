@@ -1,5 +1,5 @@
 """
-Test optional M_Ed parameter in ShearLoadCase.
+Test optional M_Ed parameter in LoadCase.
 
 Verifies:
 1. M_Ed can be omitted (defaults to 0.0)
@@ -10,7 +10,8 @@ Verifies:
 """
 
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.code_checks.base_check import CheckStatus
 from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
@@ -37,7 +38,7 @@ def test_optional_M_Ed():
     )
 
     # Create load case without M_Ed (should default to 0.0)
-    load_case = ShearLoadCase(V_Ed=100)  # M_Ed and N_Ed default to 0.0
+    load_case = LoadCase(V_Ed=100)  # M_Ed and N_Ed default to 0.0
     print(f"Load case: V={load_case.V_Ed} kN, M={load_case.M_Ed} kN.m, N={load_case.N_Ed} kN")
 
     result = check.perform_check(load_case=load_case)
@@ -79,7 +80,7 @@ def test_approximate_mode_compression_face():
 
     # Test Case 1: M_Ed = 0 (should default to top compression)
     print("\n=== Test 2a: M_Ed = 0 (default top compression) ===")
-    load_case_1 = ShearLoadCase(V_Ed=100, M_Ed=0.0, N_Ed=0.0)
+    load_case_1 = LoadCase(V_Ed=100, M_Ed=0.0, N_Ed=0.0)
     result_1 = check.perform_check(load_case=load_case_1)
     d_1 = result_1.details['d']
     z_1 = result_1.details['z']
@@ -91,7 +92,7 @@ def test_approximate_mode_compression_face():
 
     # Test Case 2: M_Ed > 0 (sagging, top compression)
     print("\n=== Test 2b: M_Ed > 0 (sagging, top compression) ===")
-    load_case_2 = ShearLoadCase(V_Ed=100, M_Ed=50.0, N_Ed=0.0)
+    load_case_2 = LoadCase(V_Ed=100, M_Ed=50.0, N_Ed=0.0)
     result_2 = check.perform_check(load_case=load_case_2)
     d_2 = result_2.details['d']
     z_2 = result_2.details['z']
@@ -102,7 +103,7 @@ def test_approximate_mode_compression_face():
 
     # Test Case 3: M_Ed < 0 (hogging, bottom compression)
     print("\n=== Test 2c: M_Ed < 0 (hogging, bottom compression) ===")
-    load_case_3 = ShearLoadCase(V_Ed=100, M_Ed=-50.0, N_Ed=0.0)
+    load_case_3 = LoadCase(V_Ed=100, M_Ed=-50.0, N_Ed=0.0)
     result_3 = check.perform_check(load_case=load_case_3)
     d_3 = result_3.details['d']
     z_3 = result_3.details['z']
@@ -147,7 +148,7 @@ def test_rigorous_mode_with_optional_M():
     )
 
     # Test with M_Ed omitted (defaults to 0.0)
-    load_case = ShearLoadCase(V_Ed=100)  # M_Ed=0, N_Ed=0 by default
+    load_case = LoadCase(V_Ed=100)  # M_Ed=0, N_Ed=0 by default
     print(f"Load case: V={load_case.V_Ed} kN, M={load_case.M_Ed} kN.m, N={load_case.N_Ed} kN")
 
     result = check.perform_check(load_case=load_case)
@@ -185,7 +186,7 @@ def test_simple_use_case():
     )
 
     # Simplest possible load case - just V_Ed!
-    result = check.perform_check(load_case=ShearLoadCase(V_Ed=150))
+    result = check.perform_check(load_case=LoadCase(V_Ed=150))
 
     print(f"V_Ed=150 kN -> Status: {result.status}, Util: {result.utilization:.1%}")
     print(f"d={result.details['d']:.1f} mm, z={result.details['z']:.1f} mm")

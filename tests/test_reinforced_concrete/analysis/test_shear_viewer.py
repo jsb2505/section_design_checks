@@ -85,7 +85,7 @@ class _FakeCheck:
 
     def find_effective_depth(
         self,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         eps_top=None,
         eps_bottom=None,
@@ -98,7 +98,7 @@ class _FakeCheck:
 
     def _find_rho_l(
         self,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         d: float,
         eps_top=None,
@@ -115,7 +115,7 @@ class _FakeCheck:
 
     def find_lever_arm(
         self,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         d: float,
         eps_top=None,

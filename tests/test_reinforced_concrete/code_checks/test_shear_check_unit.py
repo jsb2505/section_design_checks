@@ -15,7 +15,7 @@ import materials.reinforced_concrete.code_checks.ec2_2004.shear_check as sc_mod
 from materials.reinforced_concrete.code_checks.base_check import CheckResult, CheckStatus
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import (
     ShearCheck,
-    ShearLoadCase,
+    LoadCase,
 )
 from materials.reinforced_concrete.constitutive import ConcreteModelType
 from materials.reinforced_concrete.materials import ShearRebar
@@ -282,20 +282,20 @@ class TestPropertiesAndDepths:
         check = _make_stub_shear_check()
 
         # Pure shear -> fallback (0.9 * h = 0.9 * 500 = 450).
-        d = check.find_effective_depth(M_Ed=0.0, N_Ed=100.0)
+        d = check.find_effective_depth(My_Ed=0.0, N_Ed=100.0)
         assert d == pytest.approx(450.0, rel=1e-12)
 
         # Clear compression/tension split → compression at top → d_top=450.
-        d2 = check.find_effective_depth(M_Ed=10.0, N_Ed=0.0, eps_top=0.001, eps_bottom=-0.001)
+        d2 = check.find_effective_depth(My_Ed=10.0, N_Ed=0.0, eps_top=0.001, eps_bottom=-0.001)
         assert d2 == pytest.approx(450.0, rel=1e-12)
 
         # Both faces in tension -> fallback (0.9 * h = 450).
-        d3 = check.find_effective_depth(M_Ed=10.0, N_Ed=0.0, eps_top=-1e-4, eps_bottom=-2e-4, warn_on_fallback=False)
+        d3 = check.find_effective_depth(My_Ed=10.0, N_Ed=0.0, eps_top=-1e-4, eps_bottom=-2e-4, warn_on_fallback=False)
         assert d3 == pytest.approx(450.0, rel=1e-12)
 
         # Non-rigorous lever arm.
         object.__setattr__(check, "use_mechanical_lever_arm", False)
-        assert check.find_lever_arm(M_Ed=10.0, N_Ed=0.0, d=400.0) == (360.0, None)
+        assert check.find_lever_arm(My_Ed=10.0, N_Ed=0.0, d=400.0) == (360.0, None)
 
         # Rigorous lever arm path delegates to diagram.
         object.__setattr__(check, "use_mechanical_lever_arm", True)
@@ -306,7 +306,7 @@ class TestPropertiesAndDepths:
                 get_lever_arm=lambda **kwargs: (355.0, 340.0)
             ),
         )
-        assert check.find_lever_arm(M_Ed=10.0, N_Ed=0.0, d=400.0) == (355.0, 340.0)
+        assert check.find_lever_arm(My_Ed=10.0, N_Ed=0.0, d=400.0) == (355.0, 340.0)
 
     def test_find_effective_depth_fallback_and_warning_branches(self):
         """Test find effective depth fallback and warning branches."""
@@ -322,7 +322,7 @@ class TestPropertiesAndDepths:
                 get_bounding_box=_bbox,
             ),
         )
-        d_no_rebar = check.find_effective_depth(M_Ed=10.0, N_Ed=0.0, eps_top=0.001, eps_bottom=-0.001, warn_on_fallback=False)
+        d_no_rebar = check.find_effective_depth(My_Ed=10.0, N_Ed=0.0, eps_top=0.001, eps_bottom=-0.001, warn_on_fallback=False)
         assert d_no_rebar == pytest.approx(450.0, rel=1e-12)
 
         # M_Ed=0 → fallback (0.9h = 450).
@@ -334,7 +334,7 @@ class TestPropertiesAndDepths:
                 get_bounding_box=_bbox,
             ),
         )
-        assert check.find_effective_depth(M_Ed=0.0, N_Ed=0.0) == pytest.approx(450.0, rel=1e-12)
+        assert check.find_effective_depth(My_Ed=0.0, N_Ed=0.0) == pytest.approx(450.0, rel=1e-12)
 
         # M_Ed=0 with only bottom rebar → still fallback (0.9h = 450).
         object.__setattr__(
@@ -345,7 +345,7 @@ class TestPropertiesAndDepths:
                 get_bounding_box=_bbox,
             ),
         )
-        assert check.find_effective_depth(M_Ed=0.0, N_Ed=0.0) == pytest.approx(450.0, rel=1e-12)
+        assert check.find_effective_depth(My_Ed=0.0, N_Ed=0.0) == pytest.approx(450.0, rel=1e-12)
 
         # Strain solve fails -> warning fallback to 0.9h.
         object.__setattr__(
@@ -364,13 +364,13 @@ class TestPropertiesAndDepths:
             ),
         )
         with pytest.warns(UserWarning, match="strain state unavailable"):
-            out = check.find_effective_depth(M_Ed=10.0, N_Ed=0.0, eps_top=None, eps_bottom=None, warn_on_fallback=True)
+            out = check.find_effective_depth(My_Ed=10.0, N_Ed=0.0, eps_top=None, eps_bottom=None, warn_on_fallback=True)
         assert out == pytest.approx(450.0, rel=1e-12)
 
         # Both faces in tension -> fallback warning.
         with pytest.warns(UserWarning, match="no compression/tension split"):
             out2 = check.find_effective_depth(
-                M_Ed=10.0,
+                My_Ed=10.0,
                 N_Ed=0.0,
                 eps_top=-1e-4,
                 eps_bottom=-2e-4,
@@ -389,7 +389,7 @@ class TestPropertiesAndDepths:
         )
         with pytest.warns(UserWarning, match="no rebar in tension zone"):
             out3 = check.find_effective_depth(
-                M_Ed=10.0,
+                My_Ed=10.0,
                 N_Ed=0.0,
                 eps_top=0.001,
                 eps_bottom=-0.001,
@@ -408,7 +408,7 @@ class TestPropertiesAndDepths:
         )
         with pytest.warns(UserWarning, match="no rebar in tension zone"):
             out4 = check.find_effective_depth(
-                M_Ed=10.0,
+                My_Ed=10.0,
                 N_Ed=0.0,
                 eps_top=-0.001,
                 eps_bottom=0.001,
@@ -423,11 +423,11 @@ class TestPropertiesAndDepths:
         # Approximate mode with strain input delegates to strain helper method.
         object.__setattr__(check, "use_mechanical_lever_arm", False)
         monkeypatch.setattr(ShearCheck, "_compute_rho_l_from_strains", lambda self, eps_top, eps_bottom, d, **kw: 0.011)
-        assert check._find_rho_l(M_Ed=10.0, N_Ed=0.0, d=400.0, eps_top=0.001, eps_bottom=-0.001) == pytest.approx(0.011, rel=1e-12)
+        assert check._find_rho_l(My_Ed=10.0, N_Ed=0.0, d=400.0, eps_top=0.001, eps_bottom=-0.001) == pytest.approx(0.011, rel=1e-12)
 
         # Approximate centroid fallback with no tension bars.
         check.section.rebar_groups = [SimpleNamespace(rebar=SimpleNamespace(area=100.0), positions=[SimpleNamespace(y=300.0)])]
-        assert check._find_rho_l(M_Ed=10.0, N_Ed=0.0, d=400.0) == pytest.approx(0.0, rel=1e-12)
+        assert check._find_rho_l(My_Ed=10.0, N_Ed=0.0, d=400.0) == pytest.approx(0.0, rel=1e-12)
 
         # Rigorous mode pulls strains from diagram when missing.
         object.__setattr__(check, "use_mechanical_lever_arm", True)
@@ -437,7 +437,7 @@ class TestPropertiesAndDepths:
             lambda ignore_compression_steel=False: SimpleNamespace(find_strains_for_MN=lambda M, N: (0.002, -0.001)),
         )
         monkeypatch.setattr(ShearCheck, "_compute_rho_l_from_strains", lambda self, eps_top, eps_bottom, d, **kw: 0.015)
-        assert check._find_rho_l(M_Ed=10.0, N_Ed=0.0, d=400.0) == pytest.approx(0.015, rel=1e-12)
+        assert check._find_rho_l(My_Ed=10.0, N_Ed=0.0, d=400.0) == pytest.approx(0.015, rel=1e-12)
 
         # Approximate centroid fallback with tension bars -> clamp to 0.02.
         object.__setattr__(check, "use_mechanical_lever_arm", False)
@@ -447,7 +447,7 @@ class TestPropertiesAndDepths:
                 positions=[SimpleNamespace(y=100.0), SimpleNamespace(y=120.0)],
             )
         ]
-        rho = check._find_rho_l(M_Ed=10.0, N_Ed=0.0, d=200.0)
+        rho = check._find_rho_l(My_Ed=10.0, N_Ed=0.0, d=200.0)
         assert rho == pytest.approx(0.02, rel=1e-12)
 
 
@@ -667,23 +667,23 @@ class TestRemainingPublicHelpers:
             "_check_single_case",
             lambda self, **kwargs: _ok_result("shear-wrapper"),
         )
-        out = check.perform_check(load_case=ShearLoadCase(V_Ed=10.0, M_Ed=2.0, N_Ed=1.0))
+        out = check.perform_check(load_case=LoadCase(V_Ed=10.0, M_Ed=2.0, N_Ed=1.0))
         assert out.check_name == "shear-wrapper"
 
         # Required reinforcement: no need branch.
         monkeypatch.setattr(ShearCheck, "find_effective_depth", lambda self, M_Ed, N_Ed: 400.0)
         monkeypatch.setattr(ShearCheck, "_find_sigma_cp", lambda self, N_Ed: 1.0)
-        monkeypatch.setattr(ShearCheck, "_find_rho_l", lambda self, M_Ed, N_Ed, d: 0.01)
+        monkeypatch.setattr(ShearCheck, "_find_rho_l", lambda self, My_Ed, N_Ed, d: 0.01)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 200.0)
-        assert check.get_required_shear_reinforcement(V_Ed=150.0, M_Ed=10.0, N_Ed=0.0) == pytest.approx(0.0, rel=1e-12)
+        assert check.get_required_shear_reinforcement(V_Ed=150.0, My_Ed=10.0, N_Ed=0.0) == pytest.approx(0.0, rel=1e-12)
 
         # Required reinforcement: needed branch with clamping + min reinforcement.
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 50.0)
-        monkeypatch.setattr(ShearCheck, "find_lever_arm", lambda self, M_Ed, N_Ed, d: (360.0, None))
+        monkeypatch.setattr(ShearCheck, "find_lever_arm", lambda self, My_Ed, N_Ed, d: (360.0, None))
         monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed, **kw: (1.0, 2.0))
         monkeypatch.setattr(sc_mod, "clamp_cot_theta", lambda cot_theta, cot_min, cot_max: 2.0)
         monkeypatch.setattr(ShearCheck, "_find_min_a_sw_over_s", lambda self, use_defaults=False: 0.2)
-        req = check.get_required_shear_reinforcement(V_Ed=100.0, M_Ed=10.0, N_Ed=0.0, cot_theta=3.0)
+        req = check.get_required_shear_reinforcement(V_Ed=100.0, My_Ed=10.0, N_Ed=0.0, cot_theta=3.0)
         assert req >= 0.2
 
     def test_min_shear_reinforcement_helper(self, monkeypatch):
@@ -709,16 +709,16 @@ class TestRemainingPublicHelpers:
 
         monkeypatch.setattr(ShearCheck, "find_effective_depth", lambda self, M_Ed, N_Ed: 400.0)
         monkeypatch.setattr(ShearCheck, "_find_sigma_cp", lambda self, N_Ed: 1.0)
-        monkeypatch.setattr(ShearCheck, "_find_rho_l", lambda self, M_Ed, N_Ed, d: 0.01)
+        monkeypatch.setattr(ShearCheck, "_find_rho_l", lambda self, My_Ed, N_Ed, d: 0.01)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 10.0)
-        monkeypatch.setattr(ShearCheck, "find_lever_arm", lambda self, M_Ed, N_Ed, d: (360.0, None))
+        monkeypatch.setattr(ShearCheck, "find_lever_arm", lambda self, My_Ed, N_Ed, d: (360.0, None))
         monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed, **kw: (1.0, 2.0))
         monkeypatch.setattr(sc_mod, "clamp_cot_theta", lambda cot_theta, cot_min, cot_max: 1.5)
         monkeypatch.setattr(ShearCheck, "_find_min_a_sw_over_s", lambda self, use_defaults=False: 0.0)
 
         req_persistent = check.get_required_shear_reinforcement(
             V_Ed=100.0,
-            M_Ed=10.0,
+            My_Ed=10.0,
             N_Ed=0.0,
             cot_theta=1.5,
             f_ywd=None,
@@ -728,7 +728,7 @@ class TestRemainingPublicHelpers:
         object.__setattr__(check, "use_accidental", True)
         req_accidental = check.get_required_shear_reinforcement(
             V_Ed=100.0,
-            M_Ed=10.0,
+            My_Ed=10.0,
             N_Ed=0.0,
             cot_theta=1.5,
             f_ywd=None,
@@ -742,7 +742,7 @@ class TestCheckSingleCaseBranching:
         monkeypatch.setattr(
             ShearCheck,
             "find_effective_depth",
-            lambda self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 400.0,
+            lambda self, My_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 400.0,
         )
         monkeypatch.setattr(
             ShearCheck,
@@ -755,14 +755,14 @@ class TestCheckSingleCaseBranching:
         monkeypatch.setattr(
             ShearCheck,
             "_find_rho_l",
-            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
+            lambda self, My_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: vrd_c)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp, **kw: vrd_c_un)
         monkeypatch.setattr(
             ShearCheck,
             "find_lever_arm",
-            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: (360.0, None),
+            lambda self, My_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: (360.0, None),
         )
         monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed, **kw: (1.0, 2.0))
         monkeypatch.setattr(ShearCheck, "_find_cot_theta_for_V_Ed", lambda self, **kwargs: 1.5)
@@ -776,7 +776,7 @@ class TestCheckSingleCaseBranching:
         object.__setattr__(check, "shear_reinforcement", None)
         captured = {}
 
-        def _find_d(self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw):
+        def _find_d(self, My_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw):
             captured["eps"] = (eps_top, eps_bottom)
             return 400.0
 
@@ -785,7 +785,7 @@ class TestCheckSingleCaseBranching:
         monkeypatch.setattr(
             ShearCheck,
             "_find_rho_l",
-            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
+            lambda self, My_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 100.0)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp, **kw: 90.0)
@@ -798,7 +798,7 @@ class TestCheckSingleCaseBranching:
 
         check._check_single_case(
             V_Ed=50.0,
-            M_Ed=0.0,
+            My_Ed=0.0,
             N_Ed=0.0,
             cot_theta_override=None,
             use_v_rd_s_for_cot_theta=False,
@@ -816,13 +816,13 @@ class TestCheckSingleCaseBranching:
         monkeypatch.setattr(
             ShearCheck,
             "find_effective_depth",
-            lambda self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 400.0,
+            lambda self, My_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 400.0,
         )
         monkeypatch.setattr(ShearCheck, "_find_sigma_cp", lambda self, N_Ed: 1.0)
         monkeypatch.setattr(
             ShearCheck,
             "_find_rho_l",
-            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
+            lambda self, My_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 200.0)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp, **kw: 150.0)
@@ -830,7 +830,7 @@ class TestCheckSingleCaseBranching:
 
         out = check._check_single_case(
             V_Ed=150.0,
-            M_Ed=0.0,
+            My_Ed=0.0,
             N_Ed=0.0,
             cot_theta_override=None,
             use_v_rd_s_for_cot_theta=False,
@@ -849,7 +849,7 @@ class TestCheckSingleCaseBranching:
 
         out = check._check_single_case(
             V_Ed=120.0,
-            M_Ed=0.0,
+            My_Ed=0.0,
             N_Ed=0.0,
             cot_theta_override=None,
             use_v_rd_s_for_cot_theta=True,
@@ -869,7 +869,7 @@ class TestCheckSingleCaseBranching:
         with pytest.warns(UserWarning, match="greater than max value"):
             check._check_single_case(
                 V_Ed=120.0,
-                M_Ed=10.0,
+                My_Ed=10.0,
                 N_Ed=0.0,
                 cot_theta_override=3.0,
                 use_v_rd_s_for_cot_theta=False,
@@ -881,7 +881,7 @@ class TestCheckSingleCaseBranching:
         with pytest.warns(UserWarning, match="smaller than min value"):
             check._check_single_case(
                 V_Ed=120.0,
-                M_Ed=10.0,
+                My_Ed=10.0,
                 N_Ed=0.0,
                 cot_theta_override=0.5,
                 use_v_rd_s_for_cot_theta=False,
@@ -904,7 +904,7 @@ class TestCheckSingleCaseBranching:
 
         out_a = check._check_single_case(
             V_Ed=160.0,
-            M_Ed=10.0,
+            My_Ed=10.0,
             N_Ed=0.0,
             cot_theta_override=None,
             use_v_rd_s_for_cot_theta=False,
@@ -921,7 +921,7 @@ class TestCheckSingleCaseBranching:
         object.__setattr__(check, "use_increased_nu_1", False)
         out_cr = check._check_single_case(
             V_Ed=0.0,
-            M_Ed=10.0,
+            My_Ed=10.0,
             N_Ed=0.0,
             cot_theta_override=None,
             use_v_rd_s_for_cot_theta=False,
@@ -934,7 +934,7 @@ class TestCheckSingleCaseBranching:
 
         out_un = check._check_single_case(
             V_Ed=0.0,
-            M_Ed=10.0,
+            My_Ed=10.0,
             N_Ed=0.0,
             cot_theta_override=None,
             use_v_rd_s_for_cot_theta=False,
@@ -953,7 +953,7 @@ class TestCheckSingleCaseBranching:
 
         out = check._check_single_case(
             V_Ed=60.0,
-            M_Ed=10.0,
+            My_Ed=10.0,
             N_Ed=0.0,
             cot_theta_override=None,
             use_v_rd_s_for_cot_theta=False,
@@ -972,12 +972,12 @@ class TestCheckSingleCaseBranching:
         monkeypatch.setattr(
             ShearCheck,
             "find_effective_depth",
-            lambda self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 400.0,
+            lambda self, My_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 400.0,
         )
         monkeypatch.setattr(
             ShearCheck,
             "_find_rho_l",
-            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
+            lambda self, My_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
         monkeypatch.setattr(ShearCheck, "_find_sigma_cp", lambda self, N_Ed: 1.0)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp, **kw: 50.0)
@@ -986,7 +986,7 @@ class TestCheckSingleCaseBranching:
 
         out = check._check_single_case(
             V_Ed=60.0,
-            M_Ed=0.0,
+            My_Ed=0.0,
             N_Ed=0.0,
             cot_theta_override=None,
             use_v_rd_s_for_cot_theta=False,
@@ -1005,7 +1005,7 @@ class TestCheckSingleCaseBranching:
 
         out = check._check_single_case(
             V_Ed=150.0,
-            M_Ed=10.0,
+            My_Ed=10.0,
             N_Ed=0.0,
             cot_theta_override=None,
             use_v_rd_s_for_cot_theta=False,
@@ -1052,7 +1052,7 @@ class TestPlotWrappers:
             fake_module,
         )
 
-        load_case = ShearLoadCase(V_Ed=100.0, M_Ed=20.0, N_Ed=30.0)
+        load_case = LoadCase(V_Ed=100.0, M_Ed=20.0, N_Ed=30.0)
 
         out1 = check.plot_cot_theta_study(load_case=load_case, show=False)
         out2 = check.plot_cot_theta_moment_shift_study(load_case=load_case, show=False)

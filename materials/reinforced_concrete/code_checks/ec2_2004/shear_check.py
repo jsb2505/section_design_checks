@@ -10,9 +10,9 @@ This enables checking multiple load cases against the same section efficiently.
 from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union, Dict, TYPE_CHECKING
-from math import atan, degrees, hypot, radians, sin, sqrt
+from math import atan, degrees, radians, sin, sqrt
 import warnings
-from pydantic import BaseModel, Field, PrivateAttr, computed_field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
 from materials.core.units import ForceUnit, to_kn, from_kn
 from materials.reinforced_concrete.ndp import get_ndp
@@ -47,66 +47,13 @@ from materials.reinforced_concrete.analysis.interaction_diagram import (
 )
 from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import (
     EffectiveDepthFallback,
+    LoadCase,
     find_effective_depth_for_flexure,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
     from materials.reinforced_concrete.analysis.strain_state import StrainState
-
-class ShearLoadCase(BaseModel):
-    """
-    Single shear load case for checking.
-
-    Attributes:
-        Vy_Ed: Major axis shear force (kN). For pure vertical shear, set this
-               and leave Vz_Ed as 0. The resultant V_Ed is computed automatically.
-        Vz_Ed: Minor axis shear force (kN, default 0).
-        My_Ed: Major axis design moment (kN·m, default 0).
-        Mz_Ed: Minor axis design moment (kN·m, default 0).
-        N_Ed: Design axial force (kN, compression positive, default 0).
-    """
-    Vy_Ed: float = Field(default=0.0, description="Major axis shear force in kN")
-    Vz_Ed: float = Field(default=0.0, description="Minor axis shear force in kN")
-    My_Ed: float = Field(default=0.0, description="Major axis design moment in kN·m")
-    Mz_Ed: float = Field(default=0.0, description="Minor axis design moment in kN·m")
-    N_Ed: float = Field(default=0.0, description="Design axial force in kN (compression positive)")
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def V_Ed(self) -> float:
-        """Resultant shear force (kN)."""
-        return hypot(self.Vy_Ed, self.Vz_Ed)
-
-    @property
-    def M_Ed(self) -> float:
-        """Deprecated alias for My_Ed — for backward compatibility."""
-        return self.My_Ed
-
-    @model_validator(mode="before")
-    @classmethod
-    def _compat_legacy_fields(cls, values: Any) -> Any:
-        """Accept legacy V_Ed and M_Ed keyword arguments."""
-        if not isinstance(values, dict):
-            return values
-        # Legacy V_Ed → Vy_Ed (assume major axis shear)
-        if "V_Ed" in values and "Vy_Ed" not in values:
-            warnings.warn(
-                "ShearLoadCase: V_Ed is deprecated, use Vy_Ed (and Vz_Ed for minor axis shear)",
-                DeprecationWarning,
-                stacklevel=4,
-            )
-            values["Vy_Ed"] = values.pop("V_Ed")
-        # Legacy M_Ed → My_Ed
-        if "M_Ed" in values and "My_Ed" not in values:
-            warnings.warn(
-                "ShearLoadCase: M_Ed is deprecated, use My_Ed",
-                DeprecationWarning,
-                stacklevel=4,
-            )
-            values["My_Ed"] = values.pop("M_Ed")
-        return values
-
 
 class ShearCheck(BaseCodeCheck):
     """
@@ -166,7 +113,8 @@ class ShearCheck(BaseCodeCheck):
     Example:
         >>> from materials.reinforced_concrete.geometry import create_rectangular_section
         >>> from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
-        >>> from materials.reinforced_concrete.code_checks.ec2.shear_check import ShearCheck, ShearLoadCase
+        >>> from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+        >>> from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
         >>>
         >>> section = create_rectangular_section(width=300, height=500)
         >>> # ... add tension reinforcement ...
@@ -182,19 +130,19 @@ class ShearCheck(BaseCodeCheck):
         ...     use_mechanical_lever_arm=True,  # Default - accurate NA and lever arm
         ... )
         >>>
-        >>> # Simple check - just shear force (M_Ed and N_Ed default to 0)
-        >>> result = check.perform_check(load_case=ShearLoadCase(V_Ed=150))
+        >>> # Simple check - just shear force (My_Ed and N_Ed default to 0)
+        >>> result = check.perform_check(load_case=LoadCase(Vy_Ed=150))
         >>>
         >>> # With moment and axial force
         >>> result = check.perform_check(
-        ...     load_case=ShearLoadCase(V_Ed=150, M_Ed=50, N_Ed=100)
+        ...     load_case=LoadCase(Vy_Ed=150, My_Ed=50, N_Ed=100)
         ... )
         >>>
         >>> # Check multiple load cases (use list comprehension)
         >>> load_cases = [
-        ...     ShearLoadCase(V_Ed=150, M_Ed=50, N_Ed=100),   # Sagging
-        ...     ShearLoadCase(V_Ed=120, M_Ed=-30, N_Ed=80),   # Hogging
-        ...     ShearLoadCase(V_Ed=100),                       # Pure shear
+        ...     LoadCase(Vy_Ed=150, My_Ed=50, N_Ed=100),   # Sagging
+        ...     LoadCase(Vy_Ed=120, My_Ed=-30, N_Ed=80),   # Hogging
+        ...     LoadCase(Vy_Ed=100),                        # Pure shear
         ... ]
         >>> results = [check.perform_check(load_case=case) for case in load_cases]
     """
@@ -647,7 +595,7 @@ class ShearCheck(BaseCodeCheck):
 
     def find_effective_depth(
         self,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
@@ -666,16 +614,16 @@ class ShearCheck(BaseCodeCheck):
         When the strain state is ambiguous (net compression, net tension, pure axial),
         the ``d_fallback`` policy on this check instance controls the result.
         """
-        # Only build diagram if needed (strains not provided and M_Ed non-zero)
+        # Only build diagram if needed (strains not provided and My_Ed non-zero)
         need_diagram = (
             (eps_top is None or eps_bottom is None)
-            and abs(M_Ed) > m_tol
+            and abs(My_Ed) > m_tol
         ) or (strain_state is not None and strain_state.is_biaxial)
         diagram = self._get_diagram(ignore_compression_steel) if need_diagram else None
         return find_effective_depth_for_flexure(
             section=self.section,
             diagram=diagram,
-            M_Ed=M_Ed,
+            M_Ed=My_Ed,
             N_Ed=N_Ed,
             eps_top=eps_top,
             eps_bottom=eps_bottom,
@@ -691,7 +639,7 @@ class ShearCheck(BaseCodeCheck):
 
     def find_lever_arm(
         self,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         d: float,
         eps_top: Optional[float] = None,
@@ -718,7 +666,7 @@ class ShearCheck(BaseCodeCheck):
 
         # Delegate to MNInteractionDiagram with configured bounds
         return self._get_diagram(ignore_compression_steel).get_lever_arm(
-            M_Ed=M_Ed,
+            M_Ed=My_Ed,
             N_Ed=N_Ed,
             d=d,
             eps_top=eps_top,
@@ -734,7 +682,7 @@ class ShearCheck(BaseCodeCheck):
 
     def _find_rho_l(
         self,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         d: float,
         eps_top: Optional[float] = None,
@@ -753,7 +701,7 @@ class ShearCheck(BaseCodeCheck):
         If approximate: uses centroid approximation
 
         Args:
-            M_Ed: Design moment in kN·m
+            My_Ed: Design major axis moment in kN·m
             N_Ed: Design axial force in kN
             d: Effective depth in mm
             eps_top: Pre-computed top strain (optional, avoids re-solving)
@@ -794,7 +742,7 @@ class ShearCheck(BaseCodeCheck):
 
         # Rigorous: use actual NA from strain state
         if eps_top is None or eps_bottom is None:
-            eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(M_Ed, N_Ed)
+            eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(My_Ed, N_Ed)
         return self._compute_rho_l_from_strains(
             eps_top, eps_bottom, d, strain_state=strain_state, b_w=b_w,
         )
@@ -1316,7 +1264,7 @@ class ShearCheck(BaseCodeCheck):
     def perform_check(
         self,
         *,
-        load_case: ShearLoadCase,
+        load_case: LoadCase,
         cot_theta_override: Optional[float] = None,
         use_v_rd_s_for_cot_theta: bool = False,
         use_uncracked_V_Rd_c: bool = False,
@@ -1328,7 +1276,7 @@ class ShearCheck(BaseCodeCheck):
         """
         Perform shear check per EC2 §6.2 for a single load case.
 
-        Forces (V_Ed, M_Ed, N_Ed) are parameters via ShearLoadCase, not fields.
+        Forces (V_Ed, M_Ed, N_Ed) are parameters via LoadCase, not fields.
         This enables efficient checking of multiple load cases against
         the same section.
 
@@ -1356,7 +1304,7 @@ class ShearCheck(BaseCodeCheck):
         Examples:
             >>> # Single load case
             >>> result = check.perform_check(
-            ...     load_case=ShearLoadCase(V_Ed=150, M_Ed=50, N_Ed=100)
+            ...     load_case=LoadCase(Vy_Ed=150, My_Ed=50, N_Ed=100)
             ... )
             >>>
             >>> # Multiple load cases - use list comprehension
@@ -1367,7 +1315,7 @@ class ShearCheck(BaseCodeCheck):
         """
         return self._check_single_case(
             V_Ed=load_case.V_Ed,
-            M_Ed=load_case.My_Ed,
+            My_Ed=load_case.My_Ed,
             N_Ed=load_case.N_Ed,
             Mz_Ed=load_case.Mz_Ed,
             Vy_Ed=load_case.Vy_Ed,
@@ -1384,7 +1332,7 @@ class ShearCheck(BaseCodeCheck):
     def _check_single_case(
         self,
         V_Ed: float,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         cot_theta_override: Optional[float],
         use_v_rd_s_for_cot_theta: bool,
@@ -1417,9 +1365,9 @@ class ShearCheck(BaseCodeCheck):
 
         # Solve for strains once (both modes need for compression face detection)
         # This avoids redundant solves and ensures consistency
-        # Only solve if M_Ed is non-zero (moment determines compression face, not axial load)
+        # Only solve if My_Ed is non-zero (moment determines compression face, not axial load)
         strain_state_local: Optional["StrainState"] = None
-        if abs(M_Ed) > 1e-6 or abs(Mz_Ed) > 1e-6:
+        if abs(My_Ed) > 1e-6 or abs(Mz_Ed) > 1e-6:
             diagram = self._get_diagram(ignore_compression_steel)
             # Build kwargs for minor axis moment (only FreeNADiagramAdapter supports Mz_target)
             _mz_kw: dict = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
@@ -1428,9 +1376,9 @@ class ShearCheck(BaseCodeCheck):
                     f"Mz_Ed={Mz_Ed:.1f} kN·m but the diagram does not support biaxial solving. "
                     "Set free_neutral_axis=True to enable biaxial bending."
                 )
-            eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed, **_mz_kw)
+            eps_top, eps_bottom = diagram.find_strains_for_MN(My_Ed, N_Ed, **_mz_kw)
             try:
-                strain_state_local = diagram.find_strain_state_for_MN(M_Ed, N_Ed, **_mz_kw)
+                strain_state_local = diagram.find_strain_state_for_MN(My_Ed, N_Ed, **_mz_kw)
             except Exception:
                 pass
         else:
@@ -1438,13 +1386,13 @@ class ShearCheck(BaseCodeCheck):
 
         # Compute load-dependent geometric parameters (pass strains to avoid re-solving)
         d = self.find_effective_depth(
-            M_Ed, N_Ed, eps_top, eps_bottom,
+            My_Ed, N_Ed, eps_top, eps_bottom,
             strain_state=strain_state_local,
             ignore_compression_steel=ignore_compression_steel,
         )
         sigma_cp = self._find_sigma_cp(N_Ed)
         rho_l = self._find_rho_l(
-            M_Ed, N_Ed, d, eps_top, eps_bottom,
+            My_Ed, N_Ed, d, eps_top, eps_bottom,
             strain_state=strain_state_local,
             ignore_compression_steel=ignore_compression_steel,
             b_w=b_w,
@@ -1496,7 +1444,7 @@ class ShearCheck(BaseCodeCheck):
                 code_ref = "EC2 §6.2.2 (Eq. 6.5)"
         else:
             z_ec2, z_mech = self.find_lever_arm(
-                M_Ed=M_Ed,
+                My_Ed=My_Ed,
                 N_Ed=N_Ed,
                 d=d,
                 eps_top=eps_top,
@@ -1689,7 +1637,7 @@ class ShearCheck(BaseCodeCheck):
             "V_Ed": V_Ed,
             "Vy_Ed": Vy_Ed,
             "Vz_Ed": Vz_Ed,
-            "My_Ed": M_Ed,
+            "My_Ed": My_Ed,
             "Mz_Ed": Mz_Ed,
             "N_Ed": N_Ed,
             "V_Rd": V_Rd,
@@ -1772,7 +1720,7 @@ class ShearCheck(BaseCodeCheck):
     def plot_cot_theta_study(
         self,
         *,
-        load_case: Union[ShearLoadCase, Dict[str, Any]],
+        load_case: Union[LoadCase, Dict[str, Any]],
         n_points: int = 60,
         cot_theta_min: Optional[float] = None,
         cot_theta_max: Optional[float] = None,
@@ -1792,7 +1740,7 @@ class ShearCheck(BaseCodeCheck):
         at the governing code limits for cot(theta).
 
         Args:
-            load_case: Shear demand definition as either ``ShearLoadCase`` or a
+            load_case: Shear demand definition as either ``LoadCase`` or a
                 ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN·m).
             n_points: Number of cot(theta) samples in the sweep.
             cot_theta_min: Optional lower bound for cot(theta). If ``None``,
@@ -1815,7 +1763,7 @@ class ShearCheck(BaseCodeCheck):
 
         Raises:
             ValueError: If the ``ShearCheck`` has no shear reinforcement.
-            TypeError: If ``load_case`` is not a ``ShearLoadCase`` or compatible dict.
+            TypeError: If ``load_case`` is not a ``LoadCase`` or compatible dict.
             ImportError: If Plotly is not installed.
         """
         from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
@@ -1836,7 +1784,7 @@ class ShearCheck(BaseCodeCheck):
     def plot_cot_theta_moment_shift_study(
         self,
         *,
-        load_case: ShearLoadCase,
+        load_case: LoadCase,
         **kwargs,
     ) -> Any:
         """
@@ -1868,7 +1816,7 @@ class ShearCheck(BaseCodeCheck):
     def plot_link_angle_study(
         self,
         *,
-        load_case: ShearLoadCase,
+        load_case: LoadCase,
         **kwargs,
     ) -> Any:
         """
@@ -1901,7 +1849,7 @@ class ShearCheck(BaseCodeCheck):
     def plot_link_angle_moment_shift_study(
         self,
         *,
-        load_case: ShearLoadCase,
+        load_case: LoadCase,
         **kwargs,
     ) -> Any:
         """
@@ -1934,7 +1882,7 @@ class ShearCheck(BaseCodeCheck):
     def plot_cot_theta_link_angle_heatmap(
         self,
         *,
-        load_case: ShearLoadCase,
+        load_case: LoadCase,
         **kwargs,
     ) -> Any:
         """
@@ -1970,7 +1918,7 @@ class ShearCheck(BaseCodeCheck):
     def plot_force_cot_theta_contour(
         self,
         *,
-        load_case: ShearLoadCase,
+        load_case: LoadCase,
         **kwargs,
     ) -> Any:
         """
@@ -1981,7 +1929,7 @@ class ShearCheck(BaseCodeCheck):
 
         Args:
             load_case: Base shear load case (``V_Ed`` is kept fixed). Can be
-                ``ShearLoadCase`` or a ``dict`` with keys ``V_Ed`` and optional
+                ``LoadCase`` or a ``dict`` with keys ``V_Ed`` and optional
                 ``M_Ed``/``N_Ed``.
             The axial-force and moment plotting bounds are taken automatically
                 from the cached M-N interaction diagram.
@@ -2021,7 +1969,7 @@ class ShearCheck(BaseCodeCheck):
     def get_required_shear_reinforcement(
         self,
         V_Ed: float,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         cot_theta: float = 2.5,
         f_ywd: Optional[float] = None,
@@ -2031,7 +1979,7 @@ class ShearCheck(BaseCodeCheck):
 
         Args:
             V_Ed: Design shear force in kN
-            M_Ed: Design moment in kN·m
+            My_Ed: Design major axis moment in kN·m
             N_Ed: Design axial force in kN
             cot_theta: Cotangent of strut angle
             f_ywd: Design yield strength (uses rebar f_yd if None)
@@ -2043,16 +1991,16 @@ class ShearCheck(BaseCodeCheck):
         # Negative shear from FEA sign conventions should not give negative reinforcement
         V_Ed = abs(V_Ed)
 
-        d = self.find_effective_depth(M_Ed, N_Ed)
+        d = self.find_effective_depth(My_Ed, N_Ed)
         sigma_cp = self._find_sigma_cp(N_Ed)
-        rho_l = self._find_rho_l(M_Ed, N_Ed, d)
+        rho_l = self._find_rho_l(My_Ed, N_Ed, d)
 
         V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
 
         if V_Ed <= V_Rd_c:
             return 0.0
 
-        z_ec2, _ = self.find_lever_arm(M_Ed, N_Ed, d)
+        z_ec2, _ = self.find_lever_arm(My_Ed, N_Ed, d)
 
         if f_ywd is None and self.shear_reinforcement is not None:
             f_ywd = self.f_ywd_design

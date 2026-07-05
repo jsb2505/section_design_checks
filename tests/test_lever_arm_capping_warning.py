@@ -8,7 +8,8 @@ by using a section with extreme loading conditions.
 import warnings
 from materials.reinforced_concrete.geometry import create_rectangular_section
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar, Rebar
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.geometry import RebarGroup
 
@@ -56,9 +57,9 @@ def test_lever_arm_clamping_warning():
     # Try low moments to maximize lever arm
     # Lower moment → shallow neutral axis → larger distance between force centroids
     load_cases = [
-        ShearLoadCase(V_Ed=100, M_Ed=1.0, N_Ed=500),    # Very low moment + compression (max lever arm)
-        ShearLoadCase(V_Ed=100, M_Ed=5.0, N_Ed=300),    # Low moment + moderate compression
-        ShearLoadCase(V_Ed=100, M_Ed=-2.0, N_Ed=400),   # Very low hogging moment
+        LoadCase(V_Ed=100, M_Ed=1.0, N_Ed=500),    # Very low moment + compression (max lever arm)
+        LoadCase(V_Ed=100, M_Ed=5.0, N_Ed=300),    # Low moment + moderate compression
+        LoadCase(V_Ed=100, M_Ed=-2.0, N_Ed=400),   # Very low hogging moment
     ]
 
     for i, load_case in enumerate(load_cases, 1):

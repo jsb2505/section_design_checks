@@ -776,9 +776,10 @@ class CrackingCheck(BaseCodeCheck):
         # Biaxial: project all concrete fibres along compression_direction
         # to find extreme fibre strains
         diag = self._get_diagram()
-        fibre_x = diag._concrete_fibre_x
-        fibre_y = diag._concrete_fibre_y
-        cx, cy = diag._centroid_x, diag._centroid_y
+        conc_mask = diag._fibre_mat == "concrete"
+        fibre_x = diag._fibre_x[conc_mask]
+        fibre_y = diag._fibre_y[conc_mask]
+        cx, cy = diag._section_cx, diag._section_cy
 
         min_proj, max_proj = strain_state.perpendicular_extent(
             fibre_x, fibre_y, cx, cy,
@@ -1107,8 +1108,7 @@ class CrackingCheck(BaseCodeCheck):
             - bar_sizes: List of (diameter, count) for equivalent diameter calc
         """
         use_biaxial = strain_state is not None and strain_state.is_biaxial
-        if use_biaxial:
-            cx, cy = self.section.get_centroid()
+        cx, cy = self.section.get_centroid() if use_biaxial else (0.0, 0.0)
 
         bounds = self.section.outline.bounds
         h = bounds[3] - bounds[1]
@@ -1207,8 +1207,7 @@ class CrackingCheck(BaseCodeCheck):
             Maximum tensile stress in reinforcement (MPa, always positive)
         """
         use_biaxial = strain_state is not None and strain_state.is_biaxial
-        if use_biaxial:
-            cx, cy = self.section.get_centroid()
+        cx, cy = self.section.get_centroid() if use_biaxial else (0.0, 0.0)
 
         bounds = self.section.outline.bounds
         h = bounds[3] - bounds[1]
@@ -1302,8 +1301,7 @@ class CrackingCheck(BaseCodeCheck):
 
         # Different E_s values - find outermost tension bar
         use_biaxial = strain_state is not None and strain_state.is_biaxial
-        if use_biaxial:
-            cx, cy = self.section.get_centroid()
+        cx, cy = self.section.get_centroid() if use_biaxial else (0.0, 0.0)
 
         bounds = self.section.outline.bounds
         h = bounds[3] - bounds[1]
@@ -1381,8 +1379,7 @@ class CrackingCheck(BaseCodeCheck):
             cover_ref = "bottom" if comp_face == "top" else "top"
 
         use_biaxial = strain_state is not None and strain_state.is_biaxial
-        if use_biaxial:
-            cx, cy = self.section.get_centroid()
+        cx, cy = self.section.get_centroid() if use_biaxial else (0.0, 0.0)
 
         qualifying: List[Point2D] = []
 
@@ -1477,8 +1474,7 @@ class CrackingCheck(BaseCodeCheck):
 
         # --- Collect qualifying bars with per-bar properties ---
         use_biaxial = strain_state is not None and strain_state.is_biaxial
-        if use_biaxial:
-            cx, cy = self.section.get_centroid()
+        cx, cy = self.section.get_centroid() if use_biaxial else (0.0, 0.0)
 
         bounds = self.section.outline.bounds
         x_min = bounds[0]
@@ -1964,6 +1960,7 @@ class CrackingCheck(BaseCodeCheck):
         # Compute initial d
         if is_net_tension:
             # For net tension: d from the face to the bar centroid
+            #TODO update this for sides faces too now sing minor axis strain
             comp_face_for_d = "bottom" if face == "top" else "top"
             d = self.section.get_effective_depth(
                 compression_face=comp_face_for_d, zone_fraction=0.5,
@@ -2278,7 +2275,7 @@ class CrackingCheck(BaseCodeCheck):
         M_Ed = My_Ed
 
         # Build keyword dict for Mz_target (only passed when non-zero)
-        _mz_kw = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
+        _mz_kw: Dict[str, Any] = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
 
         if (
             not self.section.rebar_groups
@@ -2789,7 +2786,7 @@ class CrackingCheck(BaseCodeCheck):
 
         # Local alias
         M_Ed = My_Ed
-        _mz_kw = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
+        _mz_kw: Dict[str, Any] = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
 
         # Determine cracked state using an uncracked solver probe.
         if force_cracked:

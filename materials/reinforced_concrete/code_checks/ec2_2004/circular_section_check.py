@@ -35,7 +35,8 @@ from materials.reinforced_concrete.code_checks.base_check import (
     CheckStatus,
 )
 from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck, ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
     CrackingCheck,
     LoadDuration,
@@ -109,12 +110,12 @@ class CircularSectionCheck(BaseModel):
         ...     cover=50, shear_reinforcement=links,
         ... )
         >>>
-        >>> bending_result = check.perform_bending_check(M_Ed=150, N_Ed=500)
+        >>> bending_result = check.perform_bending_check(My_Ed=150, N_Ed=500)
         >>> shear_result = check.perform_shear_check(
-        ...     load_case=ShearLoadCase(V_Ed=200, M_Ed=150, N_Ed=500)
+        ...     load_case=LoadCase(Vy_Ed=200, My_Ed=150, N_Ed=500)
         ... )
-        >>> cracking_result = check.perform_cracking_check(M_Ed=80, N_Ed=300)
-        >>> stress_result = check.perform_stress_limits_check(M_Ed=80, N_Ed=300)
+        >>> cracking_result = check.perform_cracking_check(My_Ed=80, N_Ed=300)
+        >>> stress_result = check.perform_stress_limits_check(My_Ed=80, N_Ed=300)
     """
 
     model_config = ConfigDict(frozen=True)
@@ -680,7 +681,7 @@ class CircularSectionCheck(BaseModel):
     def _find_rho_l(
         self,
         *,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         b_w: float,
         d: float,
@@ -695,7 +696,7 @@ class CircularSectionCheck(BaseModel):
         Capped at 0.02 per EC2 §6.2.2(1).
 
         Args:
-            M_Ed: Design bending moment (kN·m)
+            My_Ed: Design major axis bending moment (kN·m)
             N_Ed: Design axial force (kN)
             b_w: Equivalent web width (mm)
             d: Effective depth (mm)
@@ -714,7 +715,7 @@ class CircularSectionCheck(BaseModel):
             assert self._shear_check is not None
             eps_top, eps_bottom = self._shear_check._get_diagram(
                 ignore_compression_steel
-            ).find_strains_for_MN(M_Ed, N_Ed)
+            ).find_strains_for_MN(My_Ed, N_Ed)
 
         return find_rho_l_from_strains(
             section=self.section,
@@ -835,7 +836,7 @@ class CircularSectionCheck(BaseModel):
             and shear_reinf is not None
         ):
             effective_cot_theta = self._compute_cot_theta_for_tension_shift(
-                M_Ed=My_Ed,
+                My_Ed=My_Ed,
                 N_Ed=N_Ed,
                 V_Ed=V_Ed,
                 use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
@@ -977,7 +978,7 @@ class CircularSectionCheck(BaseModel):
     def perform_shear_check(
         self,
         *,
-        load_case: ShearLoadCase,
+        load_case: LoadCase,
         cot_theta_override: Optional[float] = None,
         use_v_rd_s_for_cot_theta: bool = False,
         use_uncracked_V_Rd_c: bool = False,
@@ -995,7 +996,7 @@ class CircularSectionCheck(BaseModel):
         - Solver-based d and z from the interaction diagram
 
         Args:
-            load_case: ShearLoadCase with V_Ed, M_Ed, N_Ed
+            load_case: LoadCase with V_Ed, M_Ed, N_Ed
             cot_theta_override: User-supplied cot(θ). If None, computed from
                 V_Rd_max equation with circular b_w. When provided, this
                 bypasses the Note 2 iteration logic and uses Note 1 values.
@@ -1020,7 +1021,8 @@ class CircularSectionCheck(BaseModel):
         assert self._concrete_uls is not None
 
         V_Ed = abs(load_case.V_Ed)
-        M_Ed = load_case.M_Ed
+        My_Ed = load_case.My_Ed
+        Mz_Ed = load_case.Mz_Ed
         N_Ed = load_case.N_Ed
 
         if self.shear_reinforcement is None:
@@ -1033,17 +1035,23 @@ class CircularSectionCheck(BaseModel):
         eps_top: Optional[float]
         eps_bottom: Optional[float]
         strain_state_local: Optional["StrainState"] = None
-        if abs(M_Ed) > 1e-6:
-            diagram = self._shear_check._get_diagram(ignore_compression_steel)
-            eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed)
+        diagram = self._shear_check._get_diagram(ignore_compression_steel)
+        # Pass Mz_target only when the diagram is biaxial-capable (free NA adapter).
+        _mz_kw: dict[str, Any] = (
+            {"Mz_target": Mz_Ed}
+            if abs(Mz_Ed) > 1e-9 and hasattr(diagram, "get_capacity_biaxial")
+            else {}
+        )
+        if abs(My_Ed) > 1e-6 or _mz_kw:
+            eps_top, eps_bottom = diagram.find_strains_for_MN(My_Ed, N_Ed, **_mz_kw)
             strain_state_local = diagram.find_strain_state_for_MN(
-                My_target=M_Ed, N_target=N_Ed,
+                My_target=My_Ed, N_target=N_Ed, **_mz_kw
             )
         else:
             eps_top, eps_bottom = None, None
 
         d = self._shear_check.find_effective_depth(
-            M_Ed,
+            My_Ed,
             N_Ed,
             eps_top=eps_top,
             eps_bottom=eps_bottom,
@@ -1051,7 +1059,7 @@ class CircularSectionCheck(BaseModel):
             strain_state=strain_state_local,
         )
         z_ec2, z_mech = self._shear_check.find_lever_arm(
-            M_Ed,
+            My_Ed,
             N_Ed,
             d,
             eps_top=eps_top,
@@ -1076,7 +1084,7 @@ class CircularSectionCheck(BaseModel):
         b_w, b_wc, b_wt = self.calculate_equivalent_web_width(d, z)
 
         rho_l = self._find_rho_l(
-            M_Ed=M_Ed,
+            My_Ed=My_Ed,
             N_Ed=N_Ed,
             b_w=b_w,
             d=d,
@@ -1217,7 +1225,7 @@ class CircularSectionCheck(BaseModel):
             units="kN",
             warning_threshold=warning_threshold,
             details=self._shear_details(
-                V_Ed=V_Ed, M_Ed=M_Ed, N_Ed=N_Ed, V_Rd=V_Rd,
+                V_Ed=V_Ed, My_Ed=My_Ed, N_Ed=N_Ed, V_Rd=V_Rd,
                 d=d, z=z, sigma_cp=sigma_cp_capped,
                 V_Rd_c=V_Rd_c,
                 V_Rd_c_cracked=V_Rd_c_cracked, V_Rd_c_uncracked=V_Rd_c_uncracked,
@@ -1378,7 +1386,7 @@ class CircularSectionCheck(BaseModel):
 
     def _compute_cot_theta_for_tension_shift(
         self,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         V_Ed: float,
         use_v_rd_s_for_cot_theta: bool = False,
@@ -1399,17 +1407,17 @@ class CircularSectionCheck(BaseModel):
         _eps_top: Optional[float]
         _eps_bottom: Optional[float]
         _strain_state: Optional["StrainState"] = None
-        if abs(M_Ed) > 1e-6:
+        if abs(My_Ed) > 1e-6:
             _diagram = self._shear_check._get_diagram(ignore_compression_steel)
-            _eps_top, _eps_bottom = _diagram.find_strains_for_MN(M_Ed, N_Ed)
+            _eps_top, _eps_bottom = _diagram.find_strains_for_MN(My_Ed, N_Ed)
             _strain_state = _diagram.find_strain_state_for_MN(
-                My_target=M_Ed, N_target=N_Ed,
+                My_target=My_Ed, N_target=N_Ed,
             )
         else:
             _eps_top, _eps_bottom = None, None
 
         d = self._shear_check.find_effective_depth(
-            M_Ed,
+            My_Ed,
             N_Ed,
             eps_top=_eps_top,
             eps_bottom=_eps_bottom,
@@ -1417,7 +1425,7 @@ class CircularSectionCheck(BaseModel):
             strain_state=_strain_state,
         )
         _, z_mech = self._shear_check.find_lever_arm(
-            M_Ed,
+            My_Ed,
             N_Ed,
             d,
             eps_top=_eps_top,
@@ -1510,7 +1518,7 @@ class CircularSectionCheck(BaseModel):
     def _shear_details(
         *,
         V_Ed: float,
-        M_Ed: float,
+        My_Ed: float,
         N_Ed: float,
         V_Rd: float,
         d: float,
@@ -1554,7 +1562,7 @@ class CircularSectionCheck(BaseModel):
         # Common fields — same names and order as ShearCheck
         details: Dict[str, Any] = {
             "V_Ed": V_Ed,
-            "M_Ed": M_Ed,
+            "My_Ed": My_Ed,
             "N_Ed": N_Ed,
             "V_Rd": V_Rd,
             "V_Rd_c": V_Rd_c,

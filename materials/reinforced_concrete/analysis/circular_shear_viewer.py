@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 import numpy as np
 
 from materials.core.units import ForceUnit, to_kn
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearLoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     calculate_tension_shift,
     find_alpha_cw,
@@ -115,7 +115,7 @@ class CircularShearViewer:
     def _build_context(
         self,
         *,
-        load_case: ShearLoadCase,
+        load_case: LoadCase,
         use_uncracked_V_Rd_c: bool = False,
         ignore_compression_steel: bool = False,
         diagram: Optional["MNInteractionDiagram"] = None,
@@ -169,7 +169,7 @@ class CircularShearViewer:
         b_w, b_wc, b_wt = self.check.calculate_equivalent_web_width(d, z)
 
         rho_l = self.check._find_rho_l(
-            M_Ed=M_Ed,
+            My_Ed=M_Ed,
             N_Ed=N_Ed,
             b_w=b_w,
             d=d,
@@ -273,7 +273,7 @@ class CircularShearViewer:
     def _compute_cot_theta_study_series(
         self,
         *,
-        load_case: Union[ShearLoadCase, Dict[str, Any]],
+        load_case: Union[LoadCase, Dict[str, Any]],
         n_points: int,
         cot_theta_min: Optional[float],
         cot_theta_max: Optional[float],
@@ -347,7 +347,7 @@ class CircularShearViewer:
     def plot_cot_theta_study(
         self,
         *,
-        load_case: Union[ShearLoadCase, Dict[str, Any]],
+        load_case: Union[LoadCase, Dict[str, Any]],
         n_points: int = 60,
         cot_theta_min: Optional[float] = None,
         cot_theta_max: Optional[float] = None,
@@ -365,7 +365,7 @@ class CircularShearViewer:
         V_Rd,max(cot) with circular b_w, and design reference lines.
 
         Args:
-            load_case: Shear demand definition as either ``ShearLoadCase`` or a
+            load_case: Shear demand definition as either ``LoadCase`` or a
                 ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
             n_points: Number of cot(theta) samples in the sweep.
             cot_theta_min: Optional lower bound for cot(theta).
@@ -554,7 +554,7 @@ class CircularShearViewer:
     def plot_cot_theta_moment_shift_study(
         self,
         *,
-        load_case: Union[ShearLoadCase, Dict[str, Any]],
+        load_case: Union[LoadCase, Dict[str, Any]],
         n_points: int = 60,
         cot_theta_min: Optional[float] = None,
         cot_theta_max: Optional[float] = None,
@@ -573,7 +573,7 @@ class CircularShearViewer:
         - additional moment from tension shift ``M_add``
 
         Args:
-            load_case: Shear demand definition as either ``ShearLoadCase`` or a
+            load_case: Shear demand definition as either ``LoadCase`` or a
                 ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN*m).
             n_points: Number of cot(theta) samples in the sweep.
             cot_theta_min: Optional lower bound for cot(theta).
@@ -693,7 +693,7 @@ class CircularShearViewer:
     def plot_force_cot_theta_contour(
         self,
         *,
-        load_case: Union[ShearLoadCase, Dict[str, Any]],
+        load_case: Union[LoadCase, Dict[str, Any]],
         n_axial: int = 31,
         n_moment: int = 31,
         moment_on_y_axis: bool = False,
@@ -717,7 +717,7 @@ class CircularShearViewer:
 
         Args:
             load_case: Base shear load case (``V_Ed`` is kept fixed). Can be
-                ``ShearLoadCase`` or a ``dict`` with keys ``V_Ed`` and optional
+                ``LoadCase`` or a ``dict`` with keys ``V_Ed`` and optional
                 ``M_Ed``/``N_Ed``.
             n_axial: Number of axial-force samples used on the heatmap force axis.
             n_moment: Number of moment samples used on the heatmap force axis.
@@ -832,9 +832,9 @@ class CircularShearViewer:
 
                 y_eval = float(np.clip(float(y_val), y_lower, y_upper))
                 if moment_on_y_axis:
-                    sweep_case = ShearLoadCase(V_Ed=case.V_Ed, M_Ed=y_eval, N_Ed=fixed_force)
+                    sweep_case = LoadCase(V_Ed=case.V_Ed, M_Ed=y_eval, N_Ed=fixed_force)
                 else:
-                    sweep_case = ShearLoadCase(V_Ed=case.V_Ed, M_Ed=fixed_force, N_Ed=y_eval)
+                    sweep_case = LoadCase(V_Ed=case.V_Ed, M_Ed=fixed_force, N_Ed=y_eval)
 
                 context = self._build_context(
                     load_case=sweep_case,
@@ -1200,7 +1200,7 @@ class CircularShearViewer:
                 left_bound = float(plot_domain.center_left[i_n])
                 right_bound = float(plot_domain.center_right[i_n])
                 m_eval = float(np.clip(float(m_ed), left_bound, right_bound))
-                case = ShearLoadCase(V_Ed=V_Ed, M_Ed=m_eval, N_Ed=float(n_ed))
+                case = LoadCase(V_Ed=V_Ed, M_Ed=m_eval, N_Ed=float(n_ed))
                 context = self._build_context(
                     load_case=case,
                     use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
@@ -1215,7 +1215,7 @@ class CircularShearViewer:
             cot_default_max = max(cot_max_candidates)
         else:
             fallback_context = self._build_context(
-                load_case=ShearLoadCase(V_Ed=V_Ed, M_Ed=0.0, N_Ed=0.0),
+                load_case=LoadCase(V_Ed=V_Ed, M_Ed=0.0, N_Ed=0.0),
                 use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
                 diagram=plot_diagram,
             )
