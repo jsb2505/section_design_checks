@@ -10,7 +10,7 @@ This enables checking multiple load cases against the same section efficiently.
 from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union, Dict, TYPE_CHECKING
-from math import atan, degrees, radians, sin, sqrt
+from math import atan, atan2, cos, degrees, radians, sin, sqrt
 import warnings
 from pydantic import Field, PrivateAttr, model_validator
 
@@ -840,40 +840,70 @@ class ShearCheck(BaseCodeCheck):
             f_ck=self.concrete.f_ck, gamma_c=self.gamma_c_design,
         )
 
+    @staticmethod
+    def _compute_I_along_angle(
+        I_xx: float, I_yy: float, I_xy: float, angle_deg: float
+    ) -> float:
+        """
+        Second moment of area about an axis at ``angle_deg`` from horizontal.
+
+        ``I(θ) = I_xx·cos²θ + I_yy·sin²θ − I_xy·sin(2θ)``
+
+        Args:
+            I_xx: Second moment about horizontal (x) axis (mm⁴).
+            I_yy: Second moment about vertical (y) axis (mm⁴).
+            I_xy: Product moment (mm⁴).
+            angle_deg: Angle of the shear/bending axis from horizontal (degrees).
+                       0° → vertical shear → I_xx; 90° → horizontal shear → I_yy.
+
+        Returns:
+            I_eff (mm⁴).
+        """
+        a = radians(angle_deg)
+        return I_xx * cos(a) ** 2 + I_yy * sin(a) ** 2 - I_xy * sin(2.0 * a)
+
     def find_V_Rd_c_uncracked(
-        self, sigma_cp: float, alpha_I: float = 1.0, *, b_w: Optional[float] = None,
+        self,
+        sigma_cp: float,
+        alpha_I: float = 1.0,
+        *,
+        b_w: Optional[float] = None,
+        shear_angle_deg: float = 0.0,
     ) -> float:
         """
         Uncracked shear resistance based on principal tensile stress (§6.2.2(2)).
 
-        V_Rd,c,uncracked = (I * b_w / S) * sqrt(f_ctd^2 + alpha_I * sigma_cp * f_ctd)
+        V_Rd,c,uncracked = (I_eff * b_w / S) * sqrt(f_ctd² + alpha_I · σ_cp · f_ctd)
 
-        .. note::
-            TODO: Currently hardcoded to ``I_xx``. For biaxial shear direction
-            (both ``Vy_Ed`` and ``Vz_Ed`` non-zero), should use the generalised
-            second moment of area about the shear axis. The current value is
-            conservative and this formula is rarely governing.
+        where ``I_eff`` is the second moment of area about the shear axis.
+        For uniaxial vertical shear (default ``shear_angle_deg=0``), ``I_eff = I_xx``.
+        For biaxial shear, pass the angle of the resultant shear direction from
+        horizontal and ``I_eff`` is computed via the generalised formula.
 
         Notes:
             - This is reported for reference in standard runs.
             - It should only govern design checks when explicitly requested.
 
         Args:
-            sigma_cp: Axial stress in concrete (MPa)
-            alpha_I: Coefficient for prestress contribution (default 1.0)
+            sigma_cp: Axial stress in concrete (MPa).
+            alpha_I: Coefficient for prestress contribution (default 1.0).
             b_w: Optional breadth override for per-load-case shear direction.
                  Defaults to ``self.breadth``.
+            shear_angle_deg: Angle of the resultant shear direction from horizontal
+                             (degrees). Default 0.0 → vertical shear → uses I_xx
+                             (backwards-compatible).
 
         Returns:
-            V_Rd,c,uncracked in kN
+            V_Rd,c,uncracked in kN.
         """
         if b_w is None:
             b_w = self.breadth
         if b_w <= 0.0:
             return 0.0
 
-        I_xx, _, _ = self.section.get_second_moment_area()
-        if I_xx <= 0.0:
+        I_xx, I_yy, I_xy = self.section.get_second_moment_area()
+        I_eff = self._compute_I_along_angle(I_xx, I_yy, I_xy, shear_angle_deg)
+        if I_eff <= 0.0:
             return 0.0
 
         _, cy = self.section.get_centroid()
@@ -902,7 +932,7 @@ class ShearCheck(BaseCodeCheck):
         if inner <= 0.0:
             return 0.0
 
-        V_Rd_c_N = (I_xx * b_w / S) * sqrt(inner)
+        V_Rd_c_N = (I_eff * b_w / S) * sqrt(inner)
         return to_kn(V_Rd_c_N, ForceUnit.N)
 
 
@@ -1416,8 +1446,12 @@ class ShearCheck(BaseCodeCheck):
         # Compute capacities (use z_ec2 for design checks per EC2)
 
         # Compute both V_Rd,c variants and choose the one used for design.
+        # Shear angle for generalised I: angle of the neutral axis from horizontal,
+        # equal to the angle of the shear force vector from vertical (y-axis).
+        # 0° → vertical shear (Vy_Ed only) → I_xx; 90° → horizontal shear → I_yy.
+        _shear_angle_deg = degrees(atan2(Vz_Ed, Vy_Ed)) if (abs(Vz_Ed) > 1e-9 or abs(Vy_Ed) > 1e-9) else 0.0
         V_Rd_c_cracked = self.find_V_Rd_c(d, rho_l, sigma_cp, b_w=b_w)
-        V_Rd_c_uncracked = self.find_V_Rd_c_uncracked(sigma_cp=sigma_cp, b_w=b_w)
+        V_Rd_c_uncracked = self.find_V_Rd_c_uncracked(sigma_cp=sigma_cp, b_w=b_w, shear_angle_deg=_shear_angle_deg)
         V_Rd_c = V_Rd_c_uncracked if use_uncracked_V_Rd_c else V_Rd_c_cracked
 
         reinforcement = self.shear_reinforcement

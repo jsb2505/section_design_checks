@@ -399,6 +399,101 @@ class FreeNADiagramAdapter:
         )
 
     # ----------------------------
+    # Analytical elastic solve (uncracked SLS fast path)
+    # ----------------------------
+
+    def _solve_uncracked_elastic(
+        self,
+        My: float,
+        N: float,
+        Mz: float,
+    ) -> Optional[Tuple[float, float, float]]:
+        """
+        Direct closed-form solve for an uncracked linear-elastic section.
+
+        For an elastic section the equilibrium equations in (ε₀, κ_y, κ_z) are
+        a 3×3 linear system — no iteration required and no spurious local minima.
+        This eliminates the biaxial solver convergence issue at low SLS loads
+        where the Levenberg-Marquardt sweep can find a physically incorrect
+        nearly-vertical NA.
+
+        Uses the transformed section (accounting for steel modular ratio via
+        ``section.get_transformed_second_moment_area``).  Moments are referenced
+        about the GEOMETRIC centroid to match the convention used by
+        ``calculate_point_pivot`` (``My = Σ σ·A·y_rel``).
+
+        Returns:
+            ``(eps_0, kappa_y, kappa_z)`` where ``eps_0`` is the strain at the
+            geometric centroid, ``kappa_y`` is the curvature in the y-direction
+            and ``kappa_z`` the curvature in the x-direction — ready for
+            ``StrainState.from_plane(plane_a=kappa_z, plane_b=kappa_y, plane_c=eps_0)``.
+
+            Returns ``None`` if:
+            - the concrete model is not linear-elastic with tension enabled, or
+            - any concrete fibre exceeds the cracking strain (section is cracked
+              → caller should fall through to the iterative solver).
+        """
+        from materials.reinforced_concrete.constitutive.concrete_stress_strain import (
+            ConcreteStressStrainLinearElastic,
+        )
+
+        if not (
+            self._biaxial.include_tension
+            and isinstance(self._biaxial.concrete_model, ConcreteStressStrainLinearElastic)
+        ):
+            return None
+
+        E_c = self._biaxial.elastic_modulus
+        if E_c is None or E_c <= 0.0:
+            return None
+
+        section = self._biaxial.section
+        try:
+            A_tr, cx_tr, cy_tr = section.get_transformed_centroid(E_c)
+            I_xx_tr, I_yy_tr, I_xy_tr = section.get_transformed_second_moment_area(E_c)
+        except Exception:
+            return None
+
+        cx_g = self.section_centroid_x
+        cy_g = self.section_centroid_y
+        dcx = cx_tr - cx_g
+        dcy = cy_tr - cy_g
+
+        # Parallel-axis shift: I values from transformed centroid → geometric centroid
+        I_xx_g = I_xx_tr + A_tr * dcy ** 2
+        I_yy_g = I_yy_tr + A_tr * dcx ** 2
+        I_xy_g = I_xy_tr + A_tr * dcx * dcy
+
+        # 3×3 stiffness matrix: [N, My, Mz] = E_c · K · [ε₀, κ_y, κ_z]
+        K = np.array([
+            [A_tr,           A_tr * dcy,  A_tr * dcx],
+            [A_tr * dcy,     I_xx_g,      I_xy_g    ],
+            [A_tr * dcx,     I_xy_g,      I_yy_g    ],
+        ])
+        try:
+            # Unit conversion: N [kN→N] *1e3, My/Mz [kN·m→N·mm] *1e6
+            rhs = np.array([N * 1e3, My * 1e6, Mz * 1e6]) / E_c
+            x = np.linalg.solve(K, rhs)
+        except np.linalg.LinAlgError:
+            return None
+
+        eps_0, kappa_y, kappa_z = float(x[0]), float(x[1]), float(x[2])
+
+        # Check cracking: any concrete fibre strain below cracking strain?
+        conc_mask = self._fibre_mat == "concrete"
+        if np.any(conc_mask):
+            conc_eps = (
+                eps_0
+                + kappa_y * (self._fibre_y[conc_mask] - cy_g)
+                + kappa_z * (self._fibre_x[conc_mask] - cx_g)
+            )
+            cracking_strain = float(self._biaxial.concrete_model.cracking_strain)
+            if np.any(conc_eps < cracking_strain):
+                return None  # section is cracked; fall through to iterative solver
+
+        return eps_0, kappa_y, kappa_z
+
+    # ----------------------------
     # Inverse solver
     # ----------------------------
 
@@ -431,6 +526,20 @@ class FreeNADiagramAdapter:
         if cached is not None:
             return cached
 
+        # --- Analytical fast path for uncracked linear-elastic SLS ---
+        # For an uncracked elastic section the equilibrium is a 3×3 linear system;
+        # this avoids the local-minima problem of the L-M sweep entirely.
+        elastic_plane = self._solve_uncracked_elastic(My_target, N_target, Mz_target)
+        if elastic_plane is not None:
+            eps_0, kappa_y, _kappa_z = elastic_plane
+            y_top_rel = float(self.section_top) - self.section_centroid_y
+            y_bot_rel = float(self.section_bottom) - self.section_centroid_y
+            eps_top = float(eps_0 + kappa_y * y_top_rel)
+            eps_bottom = float(eps_0 + kappa_y * y_bot_rel)
+            result_tuple = (eps_top, eps_bottom)
+            self._strain_cache[cache_key] = result_tuple
+            return result_tuple
+
         from scipy.optimize import least_squares
         import math as _math
 
@@ -451,21 +560,15 @@ class FreeNADiagramAdapter:
         best_result = None
         best_cost = float('inf')
 
-        # TODO (tasks/TODO.md — "Biaxial solver convergence at low SLS loads"):
-        # scipy.optimize.least_squares (L-M) is a local optimizer. At SLS load
-        # levels (loads far below capacity) the objective surface has multiple
-        # local minima and this sweep can converge to a physically incorrect
-        # equilibrium with a nearly-vertical NA (~±88°), producing wrong steel
-        # strains. Fix: add small-phi guesses (0.05, 0.1) at angle≈0° to seed
-        # the shallow-NA equilibrium, or validate the result sign and retry.
-
         # Include angle hint based on moment ratio when Mz != 0
         angle_inits = [0.0, 5.0, -5.0, 10.0, -10.0]
         if abs(Mz_target) > 1e-9:
             hint = _math.degrees(_math.atan2(Mz_target, My_target)) if abs(My_target) > 1e-9 else 90.0
             angle_inits = [hint, hint + 10, hint - 10] + angle_inits
 
-        for phi_init in [0.5, 0.8, 1.0, -0.3]:
+        # phi_inits: include shallow SLS-region values (phi≈0.02–0.15 → na_depth≈10–80mm
+        # for a 500mm section) in addition to the ULS-range deep values.
+        for phi_init in [0.02, 0.05, 0.1, 0.15, 0.5, 0.8, 1.0, -0.3]:
             for angle_init in angle_inits:
                 try:
                     result = least_squares(
@@ -569,10 +672,32 @@ class FreeNADiagramAdapter:
             Mz_target: Target minor axis moment (kN·m), default 0.
 
         Returns:
-            StrainState with is_biaxial=True and full plane coefficients.
+            StrainState with full plane coefficients (is_biaxial=True when section
+            requires NA rotation for equilibrium, e.g. when I_xy ≠ 0).
         """
-        from scipy.optimize import least_squares
         import math as _math
+
+        # --- Analytical fast path for uncracked linear-elastic SLS ---
+        elastic_plane = self._solve_uncracked_elastic(My_target, N_target, Mz_target)
+        if elastic_plane is not None:
+            eps_0, kappa_y, kappa_z = elastic_plane
+            y_top_rel = float(self.section_top) - self.section_centroid_y
+            y_bot_rel = float(self.section_bottom) - self.section_centroid_y
+            # NA angle: gradient direction (kappa_z, kappa_y); angle from horizontal
+            if abs(kappa_y) > 1e-15 or abs(kappa_z) > 1e-15:
+                na_angle = _math.degrees(_math.atan2(kappa_z, kappa_y))
+            else:
+                na_angle = 0.0
+            return StrainState.from_plane(
+                plane_a=kappa_z,
+                plane_b=kappa_y,
+                plane_c=eps_0,
+                y_top=y_top_rel,
+                y_bottom=y_bot_rel,
+                na_angle_deg=na_angle,
+            )
+
+        from scipy.optimize import least_squares
 
         max_dim = max(self._biaxial.section_width, self._biaxial.section_height)
 
@@ -591,7 +716,8 @@ class FreeNADiagramAdapter:
             hint = _math.degrees(_math.atan2(Mz_target, My_target)) if abs(My_target) > 1e-9 else 90.0
             angle_inits = [hint, hint + 10, hint - 10] + angle_inits
 
-        for phi_init in [0.5, 0.8, 1.0, -0.3]:
+        # phi_inits: include shallow SLS-region values
+        for phi_init in [0.02, 0.05, 0.1, 0.15, 0.5, 0.8, 1.0, -0.3]:
             for angle_init in angle_inits:
                 try:
                     result = least_squares(

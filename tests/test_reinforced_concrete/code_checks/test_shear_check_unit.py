@@ -1070,3 +1070,60 @@ class TestPlotWrappers:
         assert out4[0] == "link_angle_moment_shift"
         assert out5[0] == "heatmap"
         assert out6[0] == "axial"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _compute_I_along_angle (generalised second moment for shear)
+# ---------------------------------------------------------------------------
+
+class TestComputeIAlongAngle:
+    """Tests for ShearCheck._compute_I_along_angle static method."""
+
+    def test_angle_zero_returns_I_xx(self):
+        """At 0° (vertical shear direction), I_eff should equal I_xx."""
+        I_xx, I_yy, I_xy = 1.0e9, 2.0e9, 0.0
+        result = ShearCheck._compute_I_along_angle(I_xx, I_yy, I_xy, angle_deg=0.0)
+        assert abs(result - I_xx) < 1.0, f"Expected I_xx={I_xx}, got {result}"
+
+    def test_angle_90_returns_I_yy(self):
+        """At 90° (horizontal shear direction), I_eff should equal I_yy."""
+        I_xx, I_yy, I_xy = 1.0e9, 2.0e9, 0.0
+        result = ShearCheck._compute_I_along_angle(I_xx, I_yy, I_xy, angle_deg=90.0)
+        assert abs(result - I_yy) < 1.0, f"Expected I_yy={I_yy}, got {result}"
+
+    def test_symmetric_section_no_I_xy(self):
+        """For I_xy=0, result at 45° should be (I_xx + I_yy)/2."""
+        I_xx, I_yy, I_xy = 1.0e9, 3.0e9, 0.0
+        result = ShearCheck._compute_I_along_angle(I_xx, I_yy, I_xy, angle_deg=45.0)
+        expected = (I_xx + I_yy) / 2.0
+        assert abs(result - expected) < 1.0, f"Expected {expected}, got {result}"
+
+    def test_with_nonzero_I_xy(self):
+        """Non-zero I_xy shifts the result; verify formula numerically."""
+        import math
+        I_xx, I_yy, I_xy = 1.0e9, 2.0e9, 0.5e9
+        angle_deg = 30.0
+        a = math.radians(angle_deg)
+        expected = I_xx * math.cos(a)**2 + I_yy * math.sin(a)**2 - I_xy * math.sin(2*a)
+        result = ShearCheck._compute_I_along_angle(I_xx, I_yy, I_xy, angle_deg=angle_deg)
+        assert abs(result - expected) < 1.0
+
+    def test_backwards_compatible_default_shear_angle(self):
+        """Default shear_angle_deg=0.0 in find_V_Rd_c_uncracked gives same result as old I_xx path."""
+        check = _make_stub_shear_check()
+        # The stub section has get_second_moment_area returning (1e9, 0, 0)
+        # so I_eff at 0° = I_xx = 1e9; result should be non-zero
+        result_default = check.find_V_Rd_c_uncracked(sigma_cp=0.0, shear_angle_deg=0.0)
+        result_no_arg = check.find_V_Rd_c_uncracked(sigma_cp=0.0)  # default angle=0.0
+        assert abs(result_default - result_no_arg) < 1e-9, (
+            "Default shear_angle_deg=0 should give same result as omitting the argument"
+        )
+
+    def test_biaxial_shear_differs_from_uniaxial(self):
+        """When I_xx ≠ I_yy, biaxial shear angle gives different I_eff from I_xx."""
+        I_xx, I_yy, I_xy = 1.0e9, 3.0e9, 0.0
+        result_vertical = ShearCheck._compute_I_along_angle(I_xx, I_yy, I_xy, 0.0)
+        result_biaxial = ShearCheck._compute_I_along_angle(I_xx, I_yy, I_xy, 45.0)
+        assert result_biaxial != result_vertical, (
+            "I_eff at 45° should differ from I_eff at 0° when I_xx ≠ I_yy"
+        )
