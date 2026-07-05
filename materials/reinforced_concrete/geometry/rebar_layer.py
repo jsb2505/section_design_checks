@@ -9,13 +9,287 @@ Provides utilities for positioning rebars in common configurations:
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
+from shapely.geometry import Point as ShapelyPoint
 
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.geometry.section import RebarGroup
 from materials.reinforced_concrete.materials.rebar import Rebar
+
+if TYPE_CHECKING:
+    from materials.reinforced_concrete.geometry.section import RCSection
+
+
+_FACE_NAMES: tuple[str, ...] = ("top", "bottom", "left", "right")
+_GEOM_TOL = 1e-9
+
+
+def _normalise_face(face: str) -> Literal["top", "bottom", "left", "right"]:
+    """Validate and normalise face selector."""
+    face_norm = face.strip().lower()
+    if face_norm not in _FACE_NAMES:
+        raise ValueError("face must be one of: 'top', 'bottom', 'left', 'right'")
+    return cast(Literal["top", "bottom", "left", "right"], face_norm)
+
+
+def _resolve_face_segment(
+    section: "RCSection", face: Literal["top", "bottom", "left", "right"]
+) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """
+    Return the boundary segment that best represents a requested section face.
+
+    Selection is based on the segment midpoint coordinate in the face direction,
+    with segment length used as a tie-breaker.
+    """
+    coords = list(section.outline.exterior.coords)
+    best_segment: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None
+    best_key: Optional[Tuple[float, float]] = None
+
+    for (x0, y0), (x1, y1) in zip(coords[:-1], coords[1:]):
+        dx = float(x1 - x0)
+        dy = float(y1 - y0)
+        length = float(np.hypot(dx, dy))
+        if length <= _GEOM_TOL:
+            continue
+
+        mid_x = 0.5 * float(x0 + x1)
+        mid_y = 0.5 * float(y0 + y1)
+
+        if face == "top":
+            face_score = mid_y
+        elif face == "bottom":
+            face_score = -mid_y
+        elif face == "right":
+            face_score = mid_x
+        else:  # face == "left"
+            face_score = -mid_x
+
+        key = (face_score, length)
+        if best_key is None or key > best_key:
+            best_key = key
+            best_segment = ((float(x0), float(y0)), (float(x1), float(y1)))
+
+    if best_segment is None:
+        raise ValueError("Section outline has no valid boundary segments")
+
+    return best_segment
+
+
+def _orient_face_segment(
+    face: Literal["top", "bottom", "left", "right"],
+    segment_start: Tuple[float, float],
+    segment_end: Tuple[float, float],
+) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """Orient selected face segments consistently for predictable bar ordering."""
+    x0, y0 = segment_start
+    x1, y1 = segment_end
+
+    if face in ("top", "bottom"):
+        if x0 > x1:
+            return segment_end, segment_start
+    else:
+        if y0 > y1:
+            return segment_end, segment_start
+
+    return segment_start, segment_end
+
+
+def _signed_exterior_area(section: "RCSection") -> float:
+    """Signed area of exterior ring (positive for CCW winding)."""
+    coords = list(section.outline.exterior.coords)
+    area2 = 0.0
+    for (x0, y0), (x1, y1) in zip(coords[:-1], coords[1:]):
+        area2 += float(x0 * y1 - x1 * y0)
+    return 0.5 * area2
+
+
+def _get_inward_unit_normal(
+    section: "RCSection",
+    segment_start: Tuple[float, float],
+    segment_end: Tuple[float, float],
+) -> Tuple[float, float]:
+    """
+    Get inward unit normal for a boundary segment.
+
+    Uses a geometric probe test first and falls back to ring winding if both
+    probe directions are ambiguous.
+    """
+    x0, y0 = segment_start
+    x1, y1 = segment_end
+
+    dx = x1 - x0
+    dy = y1 - y0
+    length = float(np.hypot(dx, dy))
+    if length <= _GEOM_TOL:
+        raise ValueError("Selected face segment has near-zero length")
+
+    left_n = (-dy / length, dx / length)
+    mx = 0.5 * (x0 + x1)
+    my = 0.5 * (y0 + y1)
+    probe = max(1e-6, length * 1e-6)
+
+    left_probe = ShapelyPoint(mx + left_n[0] * probe, my + left_n[1] * probe)
+    right_probe = ShapelyPoint(mx - left_n[0] * probe, my - left_n[1] * probe)
+
+    left_inside = bool(section.outline.covers(left_probe))
+    right_inside = bool(section.outline.covers(right_probe))
+
+    if left_inside and not right_inside:
+        return left_n
+    if right_inside and not left_inside:
+        return (-left_n[0], -left_n[1])
+
+    # Fallback to winding direction if probe test is ambiguous.
+    if _signed_exterior_area(section) >= 0.0:
+        return left_n
+    return (-left_n[0], -left_n[1])
+
+
+def _offset_and_trim_segment(
+    *,
+    segment_start: Tuple[float, float],
+    segment_end: Tuple[float, float],
+    inward_normal: Tuple[float, float],
+    offset_to_bar_centre: float,
+    end_trim_to_bar_centre: float,
+) -> Tuple[Tuple[float, float], Tuple[float, float], float]:
+    """
+    Offset a face segment inward and trim equally at both ends.
+
+    Returns:
+        start, end, usable_length
+    """
+    if offset_to_bar_centre < 0.0:
+        raise ValueError("cover must be >= 0")
+    if end_trim_to_bar_centre < 0.0:
+        raise ValueError("side_cover must be >= 0")
+
+    x0, y0 = segment_start
+    x1, y1 = segment_end
+    dx = x1 - x0
+    dy = y1 - y0
+    seg_length = float(np.hypot(dx, dy))
+    if seg_length <= _GEOM_TOL:
+        raise ValueError("Selected face segment has near-zero length")
+
+    if 2.0 * end_trim_to_bar_centre > seg_length + _GEOM_TOL:
+        raise ValueError(
+            "side_cover + bar radius is too large for the selected face length"
+        )
+
+    tx = dx / seg_length
+    ty = dy / seg_length
+    nx, ny = inward_normal
+
+    offset_start = (
+        x0 + nx * offset_to_bar_centre,
+        y0 + ny * offset_to_bar_centre,
+    )
+    offset_end = (
+        x1 + nx * offset_to_bar_centre,
+        y1 + ny * offset_to_bar_centre,
+    )
+
+    usable_length = max(seg_length - 2.0 * end_trim_to_bar_centre, 0.0)
+    half_usable = 0.5 * usable_length
+
+    mx = 0.5 * (offset_start[0] + offset_end[0])
+    my = 0.5 * (offset_start[1] + offset_end[1])
+
+    start = (mx - tx * half_usable, my - ty * half_usable)
+    end = (mx + tx * half_usable, my + ty * half_usable)
+    return start, end, usable_length
+
+
+def _resolve_n_bars(
+    *,
+    n_bars: Optional[int],
+    bar_spacing: Optional[float],
+    usable_length: float,
+) -> int:
+    """Resolve number of bars from mutually exclusive count/spacing inputs."""
+    if (n_bars is None) == (bar_spacing is None):
+        raise ValueError("Provide exactly one of n_bars or bar_spacing")
+
+    if n_bars is not None:
+        if n_bars < 1:
+            raise ValueError("n_bars must be at least 1")
+        return int(n_bars)
+
+    spacing = float(bar_spacing)  # type: ignore[arg-type]
+    if spacing <= 0.0:
+        raise ValueError("bar_spacing must be > 0")
+
+    return max(int(np.floor(usable_length / spacing)) + 1, 1)
+
+
+def _create_linear_group_from_line(
+    *,
+    rebar: Rebar,
+    start_point: Tuple[float, float],
+    end_point: Tuple[float, float],
+    n_bars: int,
+    bar_spacing: Optional[float],
+    layer_name: Optional[str],
+    omit_start: bool,
+    omit_end: bool,
+) -> RebarGroup:
+    """
+    Create a linear group from a line using count or explicit spacing behaviour.
+
+    - ``bar_spacing is None``: endpoint-based spacing (delegates to
+      ``create_linear_rebar_layer``).
+    - ``bar_spacing`` set: bars are centred on line midpoint with exact spacing.
+    """
+    if bar_spacing is None:
+        return create_linear_rebar_layer(
+            rebar=rebar,
+            n_bars=n_bars,
+            start_point=start_point,
+            end_point=end_point,
+            layer_name=layer_name,
+            omit_start=omit_start,
+            omit_end=omit_end,
+        )
+
+    x0, y0 = start_point
+    x1, y1 = end_point
+    dx = x1 - x0
+    dy = y1 - y0
+    line_length = float(np.hypot(dx, dy))
+
+    if n_bars == 1 or line_length <= _GEOM_TOL:
+        positions = [Point2D(x=(x0 + x1) / 2.0, y=(y0 + y1) / 2.0)]
+    else:
+        spacing = float(bar_spacing)
+        tx = dx / line_length
+        ty = dy / line_length
+        mx = 0.5 * (x0 + x1)
+        my = 0.5 * (y0 + y1)
+        half_span = 0.5 * (n_bars - 1) * spacing
+
+        positions = []
+        for i in range(n_bars):
+            dist = -half_span + i * spacing
+            positions.append(Point2D(x=mx + tx * dist, y=my + ty * dist))
+
+    if omit_start and len(positions) > 0:
+        positions = positions[1:]
+    if omit_end and len(positions) > 0:
+        positions = positions[:-1]
+
+    if len(positions) == 0:
+        raise ValueError(
+            "All bars were omitted — n_bars is too small for the requested omit_start/omit_end combination"
+        )
+
+    return RebarGroup(
+        rebar=rebar,
+        positions=tuple(positions),
+        layer_name=layer_name,
+    )
 
 
 def create_linear_rebar_layer(
@@ -210,6 +484,208 @@ def create_multi_layer_linear_rebars(
             create_linear_rebar_layer(
                 rebar=rebar_list[i],
                 n_bars=n_bars,
+                start_point=layer_start,
+                end_point=layer_end,
+                layer_name=names[i],
+                omit_start=omit_start,
+                omit_end=omit_end,
+            )
+        )
+
+    return groups
+
+
+def create_linear_rebar_layer_on_face(
+    section: "RCSection",
+    rebar: Rebar,
+    face: Literal["top", "bottom", "left", "right"],
+    cover: float,
+    *,
+    n_bars: Optional[int] = None,
+    bar_spacing: Optional[float] = None,
+    side_cover: Optional[float] = None,
+    layer_name: Optional[str] = None,
+    omit_start: bool = False,
+    omit_end: bool = False,
+) -> RebarGroup:
+    """
+    Create a linear rebar layer by referencing a section face.
+
+    The selected face segment is offset inward by ``cover + bar_radius`` and
+    trimmed at both ends by ``side_cover + bar_radius`` (or ``cover + bar_radius``
+    when ``side_cover`` is not provided). Bars are then placed symmetrically
+    about the face midpoint.
+
+    Exactly one of ``n_bars`` or ``bar_spacing`` must be supplied.
+    """
+    face_norm = _normalise_face(face)
+
+    if cover < 0.0:
+        raise ValueError("cover must be >= 0")
+
+    resolved_side_cover = cover if side_cover is None else float(side_cover)
+    if resolved_side_cover < 0.0:
+        raise ValueError("side_cover must be >= 0")
+
+    segment_start, segment_end = _resolve_face_segment(section, face_norm)
+    segment_start, segment_end = _orient_face_segment(
+        face_norm, segment_start, segment_end
+    )
+    inward_normal = _get_inward_unit_normal(section, segment_start, segment_end)
+
+    start_point, end_point, usable_length = _offset_and_trim_segment(
+        segment_start=segment_start,
+        segment_end=segment_end,
+        inward_normal=inward_normal,
+        offset_to_bar_centre=cover + rebar.diameter / 2.0,
+        end_trim_to_bar_centre=resolved_side_cover + rebar.diameter / 2.0,
+    )
+
+    resolved_n_bars = _resolve_n_bars(
+        n_bars=n_bars,
+        bar_spacing=bar_spacing,
+        usable_length=usable_length,
+    )
+
+    if resolved_n_bars > 1 and usable_length <= _GEOM_TOL:
+        raise ValueError(
+            "Not enough usable face length for multiple bars after applying side_cover"
+        )
+
+    return _create_linear_group_from_line(
+        rebar=rebar,
+        n_bars=resolved_n_bars,
+        bar_spacing=bar_spacing,
+        start_point=start_point,
+        end_point=end_point,
+        layer_name=layer_name if layer_name is not None else face_norm,
+        omit_start=omit_start,
+        omit_end=omit_end,
+    )
+
+
+def create_multi_layer_linear_rebars_on_face(
+    section: "RCSection",
+    rebars: Union[Rebar, Sequence[Rebar]],
+    face: Literal["top", "bottom", "left", "right"],
+    cover: float,
+    *,
+    n_bars: Optional[int] = None,
+    bar_spacing: Optional[float] = None,
+    side_cover: Optional[float] = None,
+    gap: Union[float, Sequence[float]] = 25.0,
+    gap_between_faces: bool = True,
+    layer_names: Optional[Sequence[str]] = None,
+    omit_start: bool = False,
+    omit_end: bool = False,
+) -> List[RebarGroup]:
+    """
+    Create multiple parallel face-based linear rebar layers.
+
+    Layers are stacked inward from the requested face. Spacing between layers
+    follows ``gap`` and ``gap_between_faces`` semantics from
+    ``create_multi_layer_linear_rebars``.
+
+    Exactly one of ``n_bars`` or ``bar_spacing`` must be supplied. When
+    ``bar_spacing`` is used, the bar count is derived from the first layer and
+    reused for all layers.
+    """
+    face_norm = _normalise_face(face)
+
+    if cover < 0.0:
+        raise ValueError("cover must be >= 0")
+
+    resolved_side_cover = cover if side_cover is None else float(side_cover)
+    if resolved_side_cover < 0.0:
+        raise ValueError("side_cover must be >= 0")
+
+    if isinstance(rebars, Rebar):
+        raise TypeError(
+            "rebars must be a sequence of Rebar objects (one per layer), "
+            "not a single Rebar.  Wrap in a list: [rebar, rebar, ...]"
+        )
+    rebar_list: List[Rebar] = list(rebars)
+    n_layers = len(rebar_list)
+    if n_layers < 1:
+        raise ValueError("At least one rebar layer is required")
+
+    if isinstance(gap, (int, float)):
+        gaps: List[float] = [float(gap)] * max(n_layers - 1, 0)
+    else:
+        gaps = [float(g) for g in gap]
+        if len(gaps) != n_layers - 1:
+            raise ValueError(
+                f"gap sequence length ({len(gaps)}) must equal n_layers - 1 ({n_layers - 1})"
+            )
+
+    if layer_names is not None:
+        if len(layer_names) != n_layers:
+            raise ValueError(
+                f"layer_names length ({len(layer_names)}) must equal number of layers ({n_layers})"
+            )
+        names: List[Optional[str]] = list(layer_names)
+    else:
+        names = [f"layer_{i}" for i in range(n_layers)]
+
+    segment_start, segment_end = _resolve_face_segment(section, face_norm)
+    segment_start, segment_end = _orient_face_segment(
+        face_norm, segment_start, segment_end
+    )
+    inward_normal = _get_inward_unit_normal(section, segment_start, segment_end)
+
+    _, _, first_layer_usable_length = _offset_and_trim_segment(
+        segment_start=segment_start,
+        segment_end=segment_end,
+        inward_normal=inward_normal,
+        offset_to_bar_centre=cover + rebar_list[0].diameter / 2.0,
+        end_trim_to_bar_centre=resolved_side_cover + rebar_list[0].diameter / 2.0,
+    )
+
+    resolved_n_bars = _resolve_n_bars(
+        n_bars=n_bars,
+        bar_spacing=bar_spacing,
+        usable_length=first_layer_usable_length,
+    )
+
+    groups: List[RebarGroup] = []
+    cumulative_offset = cover + rebar_list[0].diameter / 2.0
+
+    for i in range(n_layers):
+        if i > 0:
+            if gap_between_faces:
+                cumulative_offset += (
+                    rebar_list[i - 1].diameter / 2.0
+                    + gaps[i - 1]
+                    + rebar_list[i].diameter / 2.0
+                )
+            else:
+                cumulative_offset += gaps[i - 1]
+
+        layer_start, layer_end, layer_usable_length = _offset_and_trim_segment(
+            segment_start=segment_start,
+            segment_end=segment_end,
+            inward_normal=inward_normal,
+            offset_to_bar_centre=cumulative_offset,
+            end_trim_to_bar_centre=resolved_side_cover + rebar_list[i].diameter / 2.0,
+        )
+
+        if resolved_n_bars > 1 and layer_usable_length <= _GEOM_TOL:
+            raise ValueError(
+                f"Not enough usable face length for multiple bars in layer {i} after applying side_cover"
+            )
+
+        if bar_spacing is not None and resolved_n_bars > 1:
+            required_span = (resolved_n_bars - 1) * float(bar_spacing)
+            if required_span > layer_usable_length + _GEOM_TOL:
+                raise ValueError(
+                    f"Requested bar_spacing does not fit usable face length in layer {i}"
+                )
+
+        groups.append(
+            _create_linear_group_from_line(
+                rebar=rebar_list[i],
+                n_bars=resolved_n_bars,
+                bar_spacing=bar_spacing,
                 start_point=layer_start,
                 end_point=layer_end,
                 layer_name=names[i],

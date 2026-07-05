@@ -12,7 +12,11 @@ from materials.reinforced_concrete.geometry import (
     create_circular_perimeter_rebars,
     create_custom_rebar_layer,
     create_linear_rebar_layer,
+    create_linear_rebar_layer_on_face,
+    create_multi_layer_linear_rebars_on_face,
     create_rectangular_perimeter_rebars,
+    create_rectangular_section,
+    create_trapezoidal_section,
 )
 from materials.reinforced_concrete.materials import Rebar
 
@@ -49,6 +53,216 @@ class TestCreateLinearRebarLayer:
         xs = [p.x for p in layer.positions]
         assert xs == pytest.approx([100.0, 200.0], rel=1e-12)
 
+
+class TestCreateLinearRebarLayerOnFace:
+    """Tests for create_linear_rebar_layer_on_face."""
+
+    def test_rectangular_top_face_with_count(self):
+        """Top-face placement is offset, trimmed, and symmetric."""
+        section = create_rectangular_section(width=300.0, height=500.0)
+        bar = Rebar(diameter=20, grade="B500B")
+
+        layer = create_linear_rebar_layer_on_face(
+            section=section,
+            rebar=bar,
+            face="top",
+            cover=30.0,
+            n_bars=3,
+        )
+
+        assert layer.layer_name == "top"
+        assert len(layer.positions) == 3
+
+        xs = sorted(p.x for p in layer.positions)
+        ys = [p.y for p in layer.positions]
+
+        assert xs == pytest.approx([40.0, 150.0, 260.0], rel=1e-12)
+        assert ys == pytest.approx([460.0, 460.0, 460.0], rel=1e-12)
+
+    def test_spacing_is_centered_about_face_midpoint(self):
+        """Spacing mode uses midpoint datum and maximises extent without violating side cover."""
+        section = create_rectangular_section(width=300.0, height=500.0)
+        bar = Rebar(diameter=20, grade="B500B")
+
+        layer = create_linear_rebar_layer_on_face(
+            section=section,
+            rebar=bar,
+            face="bottom",
+            cover=30.0,
+            bar_spacing=80.0,
+        )
+
+        assert len(layer.positions) == 3
+        xs = sorted(p.x for p in layer.positions)
+        ys = [p.y for p in layer.positions]
+
+        assert xs == pytest.approx([70.0, 150.0, 230.0], rel=1e-12)
+        assert ys == pytest.approx([40.0, 40.0, 40.0], rel=1e-12)
+
+    def test_tapered_left_face_uses_sloped_segment(self):
+        """Left-face placement follows the tapered edge and offsets inward."""
+        section = create_trapezoidal_section(b_top=200.0, b_bot=300.0, height=400.0)
+        bar = Rebar(diameter=20, grade="B500B")
+
+        layer = create_linear_rebar_layer_on_face(
+            section=section,
+            rebar=bar,
+            face="left",
+            cover=30.0,
+            n_bars=3,
+        )
+
+        assert len(layer.positions) == 3
+
+        # Left face of this trapezoid runs from (0,0) to (50,400).
+        x0, y0 = 0.0, 0.0
+        x1, y1 = 50.0, 400.0
+        line_len = math.hypot(x1 - x0, y1 - y0)
+
+        # Every bar centre should be 40 mm (cover + radius) from that face line.
+        for p in layer.positions:
+            dist = abs((x1 - x0) * (y0 - p.y) - (x0 - p.x) * (y1 - y0)) / line_len
+            assert dist == pytest.approx(40.0, rel=1e-12)
+
+        # Mid bar should lie at the face midpoint shifted inward.
+        midpoint = (25.0, 200.0)
+        dx = x1 - x0
+        dy = y1 - y0
+        # For this convex trapezoid, inward normal for the left face is to the right of the
+        # bottom->top face tangent.
+        inward = (dy / line_len, -dx / line_len)
+        expected_mid_x = midpoint[0] + 40.0 * inward[0]
+        expected_mid_y = midpoint[1] + 40.0 * inward[1]
+
+        mid_bar = layer.positions[1]
+        assert mid_bar.x == pytest.approx(expected_mid_x, rel=1e-12)
+        assert mid_bar.y == pytest.approx(expected_mid_y, rel=1e-12)
+
+    def test_input_validation(self):
+        """Input validation for face wrapper."""
+        section = create_rectangular_section(width=300.0, height=500.0)
+        bar = Rebar(diameter=20, grade="B500B")
+
+        with pytest.raises(ValueError, match="exactly one of n_bars or bar_spacing"):
+            create_linear_rebar_layer_on_face(
+                section=section,
+                rebar=bar,
+                face="top",
+                cover=30.0,
+                n_bars=3,
+                bar_spacing=100.0,
+            )
+
+        with pytest.raises(ValueError, match="exactly one of n_bars or bar_spacing"):
+            create_linear_rebar_layer_on_face(
+                section=section,
+                rebar=bar,
+                face="top",
+                cover=30.0,
+            )
+
+        with pytest.raises(ValueError, match="face must be one of"):
+            create_linear_rebar_layer_on_face(
+                section=section,
+                rebar=bar,
+                face="roof",
+                cover=30.0,
+                n_bars=3,
+            )
+
+        with pytest.raises(ValueError, match="cover must be >= 0"):
+            create_linear_rebar_layer_on_face(
+                section=section,
+                rebar=bar,
+                face="top",
+                cover=-1.0,
+                n_bars=3,
+            )
+
+        with pytest.raises(ValueError, match="side_cover \\+ bar radius is too large"):
+            create_linear_rebar_layer_on_face(
+                section=section,
+                rebar=bar,
+                face="top",
+                cover=30.0,
+                side_cover=200.0,
+                n_bars=1,
+            )
+
+
+class TestCreateMultiLayerLinearRebarsOnFace:
+    """Tests for create_multi_layer_linear_rebars_on_face."""
+
+    def test_rectangular_bottom_face_offsets_and_trimming(self):
+        """Multi-layer placement offsets inward and trims per layer diameter."""
+        section = create_rectangular_section(width=300.0, height=500.0)
+        bars = [
+            Rebar(diameter=16, grade="B500B"),
+            Rebar(diameter=20, grade="B500B"),
+        ]
+
+        groups = create_multi_layer_linear_rebars_on_face(
+            section=section,
+            rebars=bars,
+            face="bottom",
+            cover=30.0,
+            n_bars=3,
+            gap=25.0,
+            gap_between_faces=True,
+        )
+
+        assert [g.layer_name for g in groups] == ["layer_0", "layer_1"]
+
+        xs0 = sorted(p.x for p in groups[0].positions)
+        ys0 = [p.y for p in groups[0].positions]
+        assert xs0 == pytest.approx([38.0, 150.0, 262.0], rel=1e-12)
+        assert ys0 == pytest.approx([38.0, 38.0, 38.0], rel=1e-12)
+
+        xs1 = sorted(p.x for p in groups[1].positions)
+        ys1 = [p.y for p in groups[1].positions]
+        assert xs1 == pytest.approx([40.0, 150.0, 260.0], rel=1e-12)
+        assert ys1 == pytest.approx([81.0, 81.0, 81.0], rel=1e-12)
+
+    def test_spacing_mode_uses_same_count_across_layers(self):
+        """Spacing mode resolves one count from layer 0 and reuses it."""
+        section = create_rectangular_section(width=300.0, height=500.0)
+        bars = [Rebar(diameter=16, grade="B500B"), Rebar(diameter=16, grade="B500B")]
+
+        groups = create_multi_layer_linear_rebars_on_face(
+            section=section,
+            rebars=bars,
+            face="top",
+            cover=30.0,
+            bar_spacing=80.0,
+            gap=25.0,
+        )
+
+        assert len(groups[0].positions) == 3
+        assert len(groups[1].positions) == 3
+
+    def test_input_validation(self):
+        """Input validation mirrors base multi-layer helper semantics."""
+        section = create_rectangular_section(width=300.0, height=500.0)
+        bar = Rebar(diameter=16, grade="B500B")
+
+        with pytest.raises(TypeError, match="rebars must be a sequence"):
+            create_multi_layer_linear_rebars_on_face(
+                section=section,
+                rebars=bar,
+                face="top",
+                cover=30.0,
+                n_bars=2,
+            )
+
+        with pytest.raises(ValueError, match="gap sequence length"):
+            create_multi_layer_linear_rebars_on_face(
+                section=section,
+                rebars=[bar, bar, bar],
+                face="top",
+                cover=30.0,
+                n_bars=2,
+                gap=[25.0],
+            )
 
 class TestCreateRectangularPerimeterRebars:
     """Tests for TestCreateRectangularPerimeterRebars."""
