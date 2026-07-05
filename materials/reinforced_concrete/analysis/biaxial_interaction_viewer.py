@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.analysis.biaxial_interaction import (
@@ -9,20 +9,20 @@ if TYPE_CHECKING:
 
 
 class BiaxialInteractionViewer:
-    def __init__(self, surface: "BiaxialMNInteractionSurface") -> None:
+    def __init__(self, surface: BiaxialMNInteractionSurface) -> None:
         self.surface = surface
 
     def plot(
         self,
         *,
-        load_points: Optional[List[Dict[str, Any]]] = None,
+        load_points: list[dict[str, Any]] | None = None,
         show_vectors: bool = False,
         show_metadata: bool = True,
         n_angles: int = 36,
         n_axial_levels: int = 20,
-        save_path: Optional[str] = None,
+        save_path: str | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
     ) -> Any:
         """
         Plot biaxial M-M-N interaction surface with optional load points using Plotly.

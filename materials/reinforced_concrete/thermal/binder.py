@@ -1,9 +1,9 @@
 """Binder composition model for concrete thermal analysis."""
 
-from typing import Optional
-from pydantic import BaseModel, Field, ConfigDict, model_validator
 from enum import StrEnum
 from math import isclose
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class BinderSubstituteType(StrEnum):
@@ -46,7 +46,7 @@ class Binder(BaseModel):
     """
     model_config = ConfigDict(validate_assignment=True)
 
-    substitute_type: Optional[BinderSubstituteType] = Field(
+    substitute_type: BinderSubstituteType | None = Field(
         default=None,
         description="Type of cement substitute: 'ggbs' or 'pfa', None for pure cement",
     )

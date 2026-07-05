@@ -7,12 +7,13 @@ elastic/cracked section analysis to calculate crack widths.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
 import math
 import re
 import warnings
+from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.analysis.strain_state import StrainState
@@ -20,37 +21,37 @@ if TYPE_CHECKING:
 import numpy as np
 from pydantic import Field, PrivateAttr, computed_field
 
+from materials.core.geometry import Point2D
+from materials.core.units import ForceUnit, MomentUnit, from_kn, to_knm
+from materials.reinforced_concrete.analysis import create_interaction_diagram
+from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
     CheckResult,
 )
+from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
 from materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check import (
     check_characteristic_concrete_stress,
-    check_quasi_permanent_concrete_stress,
     check_characteristic_reinforcement_stress,
-    check_reinforcement_yielding,
     check_imposed_deformation_stress,
+    check_quasi_permanent_concrete_stress,
+    check_reinforcement_yielding,
     compute_nonlinear_creep_coefficient,
 )
 from materials.reinforced_concrete.constitutive import (
     ConcreteModelType,
-    SteelModelType,
     ConcreteStressStrainLinearElastic,
+    SteelModelType,
 )
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial
-from materials.reinforced_concrete.analysis import create_interaction_diagram
-from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
-from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
-from materials.core.geometry import Point2D
-from materials.core.units import ForceUnit, MomentUnit, from_kn, to_knm
 from materials.reinforced_concrete.ndp import get_ndp, get_ndp_callable
 
 
 class LoadDuration(StrEnum):
     """
     Load duration for k_t factor in crack width calculation (EC2 §7.3.4(2)).
-    
+
     Attributes:
         SHORT_TERM
         LONG_TERM
@@ -87,31 +88,31 @@ class CrackFacePolicy(StrEnum):
 @dataclass
 class CrackingResult:
     """Detailed results from crack width calculation."""
-    w_k: Optional[float]  # Calculated crack width (mm)
+    w_k: float | None  # Calculated crack width (mm)
     w_k_limit: float  # Allowable crack width (mm)
-    s_r_max: Optional[float]  # Maximum crack spacing (mm)
-    eps_sm_minus_eps_cm: Optional[float]  # Difference in mean strains (dimensionless)
-    sigma_s: Optional[float]  # Steel stress in tension rebar (MPa)
-    rho_p_eff: Optional[float]  # Effective reinforcement ratio (dimensionless)
-    h_c_ef: Optional[float]  # Effective height of concrete in tension (mm)
-    x: Optional[float]  # Neutral axis depth from compression face (mm)
+    s_r_max: float | None  # Maximum crack spacing (mm)
+    eps_sm_minus_eps_cm: float | None  # Difference in mean strains (dimensionless)
+    sigma_s: float | None  # Steel stress in tension rebar (MPa)
+    rho_p_eff: float | None  # Effective reinforcement ratio (dimensionless)
+    h_c_ef: float | None  # Effective height of concrete in tension (mm)
+    x: float | None  # Neutral axis depth from compression face (mm)
     is_cracked: bool  # Whether section is cracked
-    phi_eq: Optional[float]  # Equivalent bar diameter (mm)
-    cover: Optional[float]  # Concrete cover to tension rebar (mm)
+    phi_eq: float | None  # Equivalent bar diameter (mm)
+    cover: float | None  # Concrete cover to tension rebar (mm)
     solved: bool = True  # Whether full equilibrium-based result was solved
-    solver_stage: Optional[str] = None  # Stage where solve failed (if any)
-    solver_error: Optional[str] = None  # Solver failure message
-    solver_residual_N: Optional[float] = None  # dN (kN) from solver, if available
-    solver_residual_M: Optional[float] = None  # dM (kN.m) from solver, if available
-    sigma_c_peak: Optional[float] = None  # Peak concrete compressive stress (MPa)
+    solver_stage: str | None = None  # Stage where solve failed (if any)
+    solver_error: str | None = None  # Solver failure message
+    solver_residual_N: float | None = None  # dN (kN) from solver, if available
+    solver_residual_M: float | None = None  # dM (kN.m) from solver, if available
+    sigma_c_peak: float | None = None  # Peak concrete compressive stress (MPa)
     nonlinear_creep_applied: bool = False  # Whether non-linear creep adjustment was applied
     creep_coefficient_used: float = 0.0  # Actual creep coefficient used (may be φ_NL)
     steel_yielded: bool = False  # Whether σ_s > f_yk (EC2 §7.2(4)P inelastic strain)
-    governing_face: Optional[str] = None  # "top" or "bottom" — which face governed w_k
+    governing_face: str | None = None  # "top" or "bottom" — which face governed w_k
     # Bar diameter correction fields (for equivalent-area bar substitution)
-    actual_bar_diameter: Optional[float] = None  # User-supplied actual bar diameter (mm)
-    s_r_max_uncorrected: Optional[float] = None  # s_r,max before diameter correction (mm)
-    phi_correction_factor: Optional[float] = None  # φ_actual / φ_eq ratio applied
+    actual_bar_diameter: float | None = None  # User-supplied actual bar diameter (mm)
+    s_r_max_uncorrected: float | None = None  # s_r,max before diameter correction (mm)
+    phi_correction_factor: float | None = None  # φ_actual / φ_eq ratio applied
 
 
 class CrackingCheck(BaseCodeCheck):
@@ -262,7 +263,7 @@ class CrackingCheck(BaseCodeCheck):
         ),
     )
 
-    net_tension_face: Optional[Literal["top", "bottom"]] = Field(
+    net_tension_face: Literal["top", "bottom"] | None = Field(
         default=None,
         description=(
             "Face-checking policy for net tension (both faces in tension). "
@@ -297,14 +298,14 @@ class CrackingCheck(BaseCodeCheck):
     # Internal state (private)
     # =========================
 
-    _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
-    _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
-    _diagram_uncracked: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
-    _diagram_uncracked_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
-    _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
-    _diagram_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
-    _diagram_uncracked_snapshot: Optional[dict] = PrivateAttr(default=None)
-    _diagram_uncracked_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
+    _diagram: MNInteractionDiagram | None = PrivateAttr(default=None)
+    _diagram_no_comp_steel: MNInteractionDiagram | None = PrivateAttr(default=None)
+    _diagram_uncracked: MNInteractionDiagram | None = PrivateAttr(default=None)
+    _diagram_uncracked_no_comp_steel: MNInteractionDiagram | None = PrivateAttr(default=None)
+    _diagram_snapshot: dict | None = PrivateAttr(default=None)
+    _diagram_no_comp_snapshot: dict | None = PrivateAttr(default=None)
+    _diagram_uncracked_snapshot: dict | None = PrivateAttr(default=None)
+    _diagram_uncracked_no_comp_snapshot: dict | None = PrivateAttr(default=None)
 
     def _take_snapshot(self) -> dict:
         """Capture current state of inputs that affect the interaction diagram."""
@@ -430,7 +431,7 @@ class CrackingCheck(BaseCodeCheck):
         """Factor for load duration (EC2 §7.3.4(2))."""
         return self.load_duration.k_t
 
-    def find_k_1(self, k_2: Optional[float] = None) -> float:
+    def find_k_1(self, k_2: float | None = None) -> float:
         """Bond coefficient (EC2 §7.3.4(3)), via NDP k_1_crack.
 
         Base EC2: 0.8 for high bond, 1.6 for plain (independent of k_2).
@@ -478,7 +479,7 @@ class CrackingCheck(BaseCodeCheck):
         self,
         N_Ed: float = 0.0,
         use_f_ctm_fl: bool = False,
-        na_angle_deg: Optional[float] = None,
+        na_angle_deg: float | None = None,
         ) -> float:
         """
         Cracking moment M_cr (kN·m) - moment at which section first cracks.
@@ -574,9 +575,9 @@ class CrackingCheck(BaseCodeCheck):
     def find_h_c_ef(
         self,
         d: float,
-        x: Optional[float] = None,
+        x: float | None = None,
         *,
-        h_override: Optional[float] = None,
+        h_override: float | None = None,
     ) -> float:
         """
         Effective height of concrete in tension zone h_c,ef (EC2 §7.3.2(3), Fig 7.1).
@@ -625,7 +626,7 @@ class CrackingCheck(BaseCodeCheck):
         self,
         d_top: float,
         d_bottom: float,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """
         Effective heights for fully tensioned sections (EC2 Fig 7.1, case c).
 
@@ -665,7 +666,7 @@ class CrackingCheck(BaseCodeCheck):
         h_c_ef: float,
         xi_1: float = 0.0,
         A_p: float = 0.0,
-        A_c_eff: Optional[float] = None,
+        A_c_eff: float | None = None,
     ) -> float:
         """
         Effective reinforcement ratio ρ_p,eff (EC2 §7.3.4(2)).
@@ -754,7 +755,7 @@ class CrackingCheck(BaseCodeCheck):
 
     def find_k_2_from_strain_state(
         self,
-        strain_state: "StrainState",
+        strain_state: StrainState,
     ) -> float:
         """
         Strain distribution coefficient k_2 from a 2D strain state (EC2 §7.3.4(3)).
@@ -815,7 +816,7 @@ class CrackingCheck(BaseCodeCheck):
         phi_eq: float,
         rho_p_eff: float,
         k_2: float,
-        x: Optional[float] = None,
+        x: float | None = None,
         has_tension_reinforcement: bool = True,
         sigma_s: float = 0.0,
         bar_spacing: float = 0.0,
@@ -962,7 +963,7 @@ class CrackingCheck(BaseCodeCheck):
     def find_minimum_crack_reinforcement(
         self,
         steel_stress: float = 500.0,
-        k_c: Optional[float] = None,
+        k_c: float | None = None,
         N_Ed: float = 0.0,
         is_in_bending: bool = True,
     ) -> float:
@@ -1096,10 +1097,10 @@ class CrackingCheck(BaseCodeCheck):
         self,
         eps_top: float,
         eps_bottom: float,
-        face: Optional[str] = None,
-        h_c_ef_limit: Optional[float] = None,
-        strain_state: Optional[StrainState] = None,
-    ) -> Tuple[float, float, List[Tuple[float, int]]]:
+        face: str | None = None,
+        h_c_ef_limit: float | None = None,
+        strain_state: StrainState | None = None,
+    ) -> tuple[float, float, list[tuple[float, int]]]:
         """
         Get tension reinforcement information from strain state.
 
@@ -1125,7 +1126,7 @@ class CrackingCheck(BaseCodeCheck):
         h = bounds[3] - bounds[1]
         y_min = bounds[1]
         y_max = bounds[3]
-        tension_bars: List[Tuple[float, int]] = []
+        tension_bars: list[tuple[float, int]] = []
         total_area = 0.0
         cover_sum = 0.0
 
@@ -1194,9 +1195,9 @@ class CrackingCheck(BaseCodeCheck):
         self,
         eps_top: float,
         eps_bottom: float,
-        face: Optional[str] = None,
-        h_c_ef_limit: Optional[float] = None,
-        strain_state: Optional[StrainState] = None,
+        face: str | None = None,
+        h_c_ef_limit: float | None = None,
+        strain_state: StrainState | None = None,
     ) -> float:
         """
         Get maximum steel stress in tension zone from strain state.
@@ -1286,7 +1287,7 @@ class CrackingCheck(BaseCodeCheck):
         self,
         eps_top: float,
         eps_bottom: float,
-        strain_state: Optional[StrainState] = None,
+        strain_state: StrainState | None = None,
     ) -> float:
         """
         Get E_s from the outermost tension rebar layer.
@@ -1322,7 +1323,7 @@ class CrackingCheck(BaseCodeCheck):
             cx = cy = 0.0
 
         # Track the outermost tension bar: by Y-coordinate (1D) or by projection distance (2D)
-        outermost_y: Optional[float] = None
+        outermost_y: float | None = None
         outermost_dist: float = -1.0
         outermost_E_s = first_E_s
 
@@ -1364,9 +1365,9 @@ class CrackingCheck(BaseCodeCheck):
         self,
         eps_top: float,
         eps_bottom: float,
-        face: Optional[str] = None,
-        h_c_ef_limit: Optional[float] = None,
-        strain_state: Optional[StrainState] = None,
+        face: str | None = None,
+        h_c_ef_limit: float | None = None,
+        strain_state: StrainState | None = None,
     ) -> float:
         """
         Maximum centre-to-centre spacing between adjacent tension bars.
@@ -1398,7 +1399,7 @@ class CrackingCheck(BaseCodeCheck):
             cover_ref = (face or "bottom") if comp_face is None else ("bottom" if comp_face == "top" else "top")
             cx = cy = 0.0
 
-        qualifying: List[Point2D] = []
+        qualifying: list[Point2D] = []
 
         for group in self.section.rebar_groups:
             for pos in group.positions:
@@ -1463,10 +1464,10 @@ class CrackingCheck(BaseCodeCheck):
         cover: float,
         phi_eq: float,
         bar_spacing: float,
-        face: Optional[str] = None,
-        h_c_ef_limit: Optional[float] = None,
-        strain_state: Optional["StrainState"] = None,
-        breadth_override: Optional[float] = None,
+        face: str | None = None,
+        h_c_ef_limit: float | None = None,
+        strain_state: StrainState | None = None,
+        breadth_override: float | None = None,
     ) -> float:
         """
         Effective concrete area in tension A_c,eff (EC2 §7.3.4, Figure 7.2).
@@ -1516,7 +1517,7 @@ class CrackingCheck(BaseCodeCheck):
             cx = cy = 0.0
 
         # Each entry: (bar_x, bar_diameter, bar_cover_to_tension_face)
-        qualifying: List[Tuple[float, float, float]] = []
+        qualifying: list[tuple[float, float, float]] = []
 
         for group in self.section.rebar_groups:
             diameter = float(group.rebar.diameter)
@@ -1583,8 +1584,8 @@ class CrackingCheck(BaseCodeCheck):
         self,
         eps_top: float,
         eps_bottom: float,
-        diagram: Optional[MNInteractionDiagram] = None,
-        strain_state: Optional[StrainState] = None,
+        diagram: MNInteractionDiagram | None = None,
+        strain_state: StrainState | None = None,
     ) -> float:
         """
         Peak compressive stress in concrete from fibre integration.
@@ -1662,7 +1663,7 @@ class CrackingCheck(BaseCodeCheck):
         )
 
     @staticmethod
-    def _extract_solver_residuals(error_message: str) -> Tuple[Optional[float], Optional[float]]:
+    def _extract_solver_residuals(error_message: str) -> tuple[float | None, float | None]:
         """Extract dN and dM residuals from inverse solver error text."""
         match = re.search(
             r"dN=([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*kN,\s*dM=([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*kN\.m",
@@ -1681,9 +1682,9 @@ class CrackingCheck(BaseCodeCheck):
         is_cracked: bool,
         solver_stage: str,
         solver_error: str,
-        sigma_c_peak: Optional[float] = None,
+        sigma_c_peak: float | None = None,
         nonlinear_creep_applied: bool = False,
-        creep_coefficient_used: Optional[float] = None,
+        creep_coefficient_used: float | None = None,
     ) -> CrackingResult:
         """Create a detailed result payload for non-solvable load cases."""
         dN, dM = self._extract_solver_residuals(solver_error)
@@ -1714,7 +1715,7 @@ class CrackingCheck(BaseCodeCheck):
         )
 
     @staticmethod
-    def _require_result_value(value: Optional[float], field_name: str) -> float:
+    def _require_result_value(value: float | None, field_name: str) -> float:
         """Return a float from an optional result field, or raise a clear error."""
         if value is None:
             raise RuntimeError(
@@ -1728,8 +1729,8 @@ class CrackingCheck(BaseCodeCheck):
         M_Ed: float,
         N_Ed: float,
         ignore_compression_steel: bool = False,
-        _mz_kw: Optional[dict] = None,
-    ) -> Tuple[bool, float, float, Optional[float], Optional[float]]:
+        _mz_kw: dict | None = None,
+    ) -> tuple[bool, float, float, float | None, float | None]:
         """
         Determine cracked state using an uncracked solver pass.
 
@@ -1742,7 +1743,9 @@ class CrackingCheck(BaseCodeCheck):
         # even when free_neutral_axis=True (the biaxial solver does not support SLS params).
         # For cracking detection the probe only needs to identify whether concrete is in
         # tension — calling it without Mz_target (horizontal NA approximation) is adequate.
-        from materials.reinforced_concrete.analysis.free_na_adapter import FreeNADiagramAdapter as _FreeNA
+        from materials.reinforced_concrete.analysis.free_na_adapter import (
+            FreeNADiagramAdapter as _FreeNA,
+        )
         probe_mz_kw = (_mz_kw or {}) if isinstance(probe_diagram, _FreeNA) else {}
         eps_top, eps_bottom = probe_diagram.find_strains_for_MN(
             My_target=M_Ed,
@@ -1770,7 +1773,7 @@ class CrackingCheck(BaseCodeCheck):
 
         min_tension_concrete_strain = float(np.min(concrete_strains_real[tension_mask]))
 
-        cracking_strain: Optional[float] = None
+        cracking_strain: float | None = None
         if isinstance(probe_diagram.concrete_model, ConcreteStressStrainLinearElastic):
             cracking_strain = float(probe_diagram.concrete_model.cracking_strain)
             return (
@@ -1799,7 +1802,7 @@ class CrackingCheck(BaseCodeCheck):
         actual_bar_diameter: float,
         cover: float,
         k_3: float,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """
         Correct s_r,max for equivalent-area bar substitution.
 
@@ -1847,7 +1850,7 @@ class CrackingCheck(BaseCodeCheck):
 
     def _compute_biaxial_section_extents(
         self,
-        strain_state: "StrainState",
+        strain_state: StrainState,
     ) -> tuple[float, float]:
         """
         Compute section height and breadth for a rotated NA.
@@ -1883,7 +1886,7 @@ class CrackingCheck(BaseCodeCheck):
     def _compute_biaxial_bar_face_distance(
         self,
         pos: Point2D,
-        strain_state: "StrainState",
+        strain_state: StrainState,
     ) -> float:
         """
         Distance from bar to section face along compression direction (tension side).
@@ -1932,15 +1935,15 @@ class CrackingCheck(BaseCodeCheck):
         eps_top: float,
         eps_bottom: float,
         face: Literal["top", "bottom"],
-        x: Optional[float],
+        x: float | None,
         is_net_tension: bool,
         suppress_warnings: bool = False,
-        actual_bar_diameter: Optional[float] = None,
-        cover_override: Optional[float] = None,
-        strain_state: Optional["StrainState"] = None,
-        h_override: Optional[float] = None,
-        breadth_override: Optional[float] = None,
-        d_override: Optional[float] = None,
+        actual_bar_diameter: float | None = None,
+        cover_override: float | None = None,
+        strain_state: StrainState | None = None,
+        h_override: float | None = None,
+        breadth_override: float | None = None,
+        d_override: float | None = None,
     ) -> CrackingResult:
         """
         Calculate crack width for a single face using iterative h_c,ef.
@@ -2172,8 +2175,8 @@ class CrackingCheck(BaseCodeCheck):
         )
 
         # Bar diameter correction for equivalent-area substitution
-        s_r_max_uncorrected: Optional[float] = None
-        phi_correction_factor: Optional[float] = None
+        s_r_max_uncorrected: float | None = None
+        phi_correction_factor: float | None = None
         if actual_bar_diameter is not None and phi_eq > 0:
             s_r_max_uncorrected = s_r_max
             s_r_max, phi_correction_factor = self._compute_bar_diameter_correction(
@@ -2220,15 +2223,15 @@ class CrackingCheck(BaseCodeCheck):
     def perform_check(
         self,
         *,
-        My_Ed: Optional[float] = None,
+        My_Ed: float | None = None,
         N_Ed: float = 0.0,
         Mz_Ed: float = 0.0,
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
         suppress_warnings: bool = False,
-        actual_bar_diameter: Optional[float] = None,
-        cover_override: Optional[float] = None,
+        actual_bar_diameter: float | None = None,
+        cover_override: float | None = None,
         **kwargs,
     ) -> CheckResult:
         """
@@ -2291,7 +2294,7 @@ class CrackingCheck(BaseCodeCheck):
         self,
         eps_top: float,
         eps_bottom: float,
-        strain_state: Optional["StrainState"],
+        strain_state: StrainState | None,
     ) -> bool:
         """Whether the whole section is in compression (so no cracking is possible).
 
@@ -2322,8 +2325,8 @@ class CrackingCheck(BaseCodeCheck):
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
         suppress_warnings: bool = False,
-        actual_bar_diameter: Optional[float] = None,
-        cover_override: Optional[float] = None,
+        actual_bar_diameter: float | None = None,
+        cover_override: float | None = None,
     ) -> CheckResult:
         """Internal implementation of crack check."""
         # Validate Mz_Ed requires free neutral axis
@@ -2337,7 +2340,7 @@ class CrackingCheck(BaseCodeCheck):
         M_Ed = My_Ed
 
         # Build keyword dict for Mz_target (only passed when non-zero)
-        _mz_kw: Dict[str, Any] = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
+        _mz_kw: dict[str, Any] = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
 
         if (
             not self.section.rebar_groups
@@ -2350,11 +2353,11 @@ class CrackingCheck(BaseCodeCheck):
 
         # Step 1: Determine cracked state.
         crack_detection_method = "forced_cracked" if force_cracked else "solver_uncracked_tension_threshold"
-        probe_solver_error: Optional[str] = None
-        probe_eps_top: Optional[float] = None
-        probe_eps_bottom: Optional[float] = None
-        probe_min_tension_concrete_strain: Optional[float] = None
-        probe_cracking_strain: Optional[float] = None
+        probe_solver_error: str | None = None
+        probe_eps_top: float | None = None
+        probe_eps_bottom: float | None = None
+        probe_min_tension_concrete_strain: float | None = None
+        probe_cracking_strain: float | None = None
 
         if force_cracked:
             is_cracked = True
@@ -2581,8 +2584,8 @@ class CrackingCheck(BaseCodeCheck):
         is_net_tension = comp_face is None
 
         # Biaxial face policy: auto-upgrade TOP_BOTTOM → NA_NORMAL when biaxial
-        _h_override: Optional[float] = None
-        _b_override: Optional[float] = None
+        _h_override: float | None = None
+        _b_override: float | None = None
         effective_policy = self.crack_face_policy
         if (
             strain_state_local is not None
@@ -2615,7 +2618,7 @@ class CrackingCheck(BaseCodeCheck):
 
         # Pre-compute biaxial effective depth so _calculate_face_crack_width can use it.
         # For 1D, d is face-dependent and computed inside _calculate_face_crack_width.
-        _d_override: Optional[float] = None
+        _d_override: float | None = None
         if strain_state_local is not None and strain_state_local.is_biaxial:
             _d_override = flexure_utils.find_effective_depth_for_flexure(
                 section=self.section,
@@ -2637,7 +2640,7 @@ class CrackingCheck(BaseCodeCheck):
             else:
                 faces_to_check = ["bottom", "top"]
 
-            best_cr: Optional[CrackingResult] = None
+            best_cr: CrackingResult | None = None
             governing_face_result: Literal["top", "bottom"] = "bottom"
 
             for face_candidate in faces_to_check:
@@ -2808,13 +2811,13 @@ class CrackingCheck(BaseCodeCheck):
 
     def calculate_detailed(
         self,
-        My_Ed: Optional[float] = None,
+        My_Ed: float | None = None,
         N_Ed: float = 0.0,
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
         suppress_warnings: bool = False,
-        actual_bar_diameter: Optional[float] = None,
-        cover_override: Optional[float] = None,
+        actual_bar_diameter: float | None = None,
+        cover_override: float | None = None,
         skip_stress_checks: bool = False,
         Mz_Ed: float = 0.0,
         **kwargs,
@@ -2870,7 +2873,7 @@ class CrackingCheck(BaseCodeCheck):
 
         # Local alias
         M_Ed = My_Ed
-        _mz_kw: Dict[str, Any] = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
+        _mz_kw: dict[str, Any] = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
 
         # Determine cracked state using an uncracked solver probe.
         if force_cracked:
@@ -2983,8 +2986,8 @@ class CrackingCheck(BaseCodeCheck):
         is_net_tension = comp_face is None
 
         # Biaxial face policy: auto-upgrade TOP_BOTTOM → NA_NORMAL when biaxial
-        _h_override_d: Optional[float] = None
-        _b_override_d: Optional[float] = None
+        _h_override_d: float | None = None
+        _b_override_d: float | None = None
         effective_policy_d = self.crack_face_policy
         if (
             strain_state_local is not None
@@ -3010,7 +3013,7 @@ class CrackingCheck(BaseCodeCheck):
         # point returns the SAME crack width as perform_check for biaxial loads.
         # Without this, _calculate_face_crack_width fell back to the 1D face-based
         # effective depth here, diverging from perform_check.
-        _d_override_d: Optional[float] = None
+        _d_override_d: float | None = None
         if strain_state_local is not None and strain_state_local.is_biaxial:
             _d_override_d = flexure_utils.find_effective_depth_for_flexure(
                 section=self.section,
@@ -3032,7 +3035,7 @@ class CrackingCheck(BaseCodeCheck):
             else:
                 faces_to_check = ["bottom", "top"]
 
-            best_result: Optional[CrackingResult] = None
+            best_result: CrackingResult | None = None
             governing_face_result: Literal["top", "bottom"] = "bottom"
 
             for face_candidate in faces_to_check:
@@ -3099,7 +3102,7 @@ class CrackingCheck(BaseCodeCheck):
 
     def plot_load_cases(
         self,
-        load_cases: Sequence[Dict[str, Any]],
+        load_cases: Sequence[dict[str, Any]],
         **kwargs,
     ) -> Any:
         """

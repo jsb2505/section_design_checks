@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from math import cos, sin, copysign, inf, remainder, pi
+from math import copysign, cos, inf, pi, remainder, sin
 from typing import Any
+
 import numpy as np
 
 

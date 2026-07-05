@@ -5,7 +5,8 @@ Provides common interface and validation for material properties.
 """
 
 from abc import ABC, abstractmethod
-from pydantic import BaseModel, Field, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BaseMaterial(BaseModel, ABC):

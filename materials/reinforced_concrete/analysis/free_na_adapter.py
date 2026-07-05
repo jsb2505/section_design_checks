@@ -9,19 +9,19 @@ must be free to rotate for correct equilibrium.
 from __future__ import annotations
 
 import warnings
-from typing import Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
 
-from materials.utils.helpers import as_float
 from materials.core.units import ForceUnit, MomentUnit, to_kn, to_knm
 from materials.reinforced_concrete.analysis.interaction_diagram import (
-    InteractionPoint,
     CapacityResult,
+    InteractionPoint,
     _ray_segment_intersection_alpha,
 )
 from materials.reinforced_concrete.analysis.strain_state import StrainState
+from materials.utils.helpers import as_float
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.analysis.biaxial_interaction import (
@@ -47,7 +47,7 @@ class FreeNADiagramAdapter:
 
     def __init__(
         self,
-        biaxial_surface: "BiaxialMNInteractionSurface",
+        biaxial_surface: BiaxialMNInteractionSurface,
         n_angles: int = 72,
         n_axial_levels: int = 30,
     ):
@@ -122,7 +122,7 @@ class FreeNADiagramAdapter:
         stresses: npt.NDArray[np.float64],
         *,
         use_section_centroid: bool = True,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """Calculate (N, M) from fibre stresses — identical to 2D diagram."""
         y = self._fibre_y
         area = self._fibre_area
@@ -187,7 +187,7 @@ class FreeNADiagramAdapter:
     def get_diagram_arrays(
         self,
         n_points: int = 120,
-    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """Return (N_array, M_array) for the Mz=0 slice."""
         pts = self.generate_diagram_points(n_points=n_points)
         N = np.array([p.N for p in pts], dtype=float)
@@ -280,7 +280,7 @@ class FreeNADiagramAdapter:
         N_Ed: float,
         M_Ed: float,
         n_points: int = 120,
-    ) -> Tuple[bool, float]:
+    ) -> tuple[bool, float]:
         """Convenience wrapper returning (is_safe, utilization)."""
         cap = self.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points)
         return (bool(cap.is_safe), float(cap.utilization))
@@ -290,7 +290,7 @@ class FreeNADiagramAdapter:
         N_Ed: float,
         *,
         n_points: int = 160,
-    ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    ) -> tuple[float | None, float | None, float | None]:
         """Horizontal-line capacity at fixed axial force on Mz=0 slice."""
         diagram_points = self.generate_diagram_points(n_points=n_points)
         if len(diagram_points) < 4:
@@ -407,7 +407,7 @@ class FreeNADiagramAdapter:
         My: float,
         N: float,
         Mz: float,
-    ) -> Optional[Tuple[float, float, float]]:
+    ) -> tuple[float, float, float] | None:
         """
         Direct closed-form solve for an uncracked linear-elastic section.
 
@@ -507,7 +507,7 @@ class FreeNADiagramAdapter:
 
     def _pivot_slope_and_y_na(
         self, na_depth: float, cos_a: float, sin_a: float
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """EC2 pivot-method strain slope and neutral-axis position for a solved
         (na_depth, angle).
 
@@ -550,11 +550,11 @@ class FreeNADiagramAdapter:
         self,
         My_target: float,
         N_target: float,
-        initial_guess: Optional[Tuple[float, float]] = None,
+        initial_guess: tuple[float, float] | None = None,
         tol: float = 1e-6,
         strict: bool = False,
         Mz_target: float = 0.0,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """
         Find end strains that produce target (My, N, Mz) with free NA.
 
@@ -589,8 +589,9 @@ class FreeNADiagramAdapter:
             self._strain_cache[cache_key] = result_tuple
             return result_tuple
 
-        from scipy.optimize import least_squares
         import math as _math
+
+        from scipy.optimize import least_squares
 
         max_dim = max(self._biaxial.section_width, self._biaxial.section_height)
 
@@ -676,7 +677,7 @@ class FreeNADiagramAdapter:
         self,
         My_target: float,
         N_target: float,
-        initial_guess: Optional[Tuple[float, float]] = None,
+        initial_guess: tuple[float, float] | None = None,
         tol: float = 1e-6,
         strict: bool = False,
         Mz_target: float = 0.0,
@@ -799,7 +800,7 @@ class FreeNADiagramAdapter:
         self,
         eps_top: float,
         eps_bottom: float,
-    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """
         Compute fibre-level forces from projected end strains.
 
@@ -836,8 +837,8 @@ class FreeNADiagramAdapter:
 
     def get_fibre_forces_from_strain_state(
         self,
-        strain_state: "StrainState",
-    ) -> Tuple[
+        strain_state: StrainState,
+    ) -> tuple[
         npt.NDArray[np.float64],
         npt.NDArray[np.float64],
         npt.NDArray[np.float64],
@@ -901,7 +902,7 @@ class FreeNADiagramAdapter:
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
         warn_on_fallback: bool = False,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """Compute lever arm z and effective depth d."""
         eps_top, eps_bottom = None, None
         if abs(M_Ed) > 1e-6:
@@ -923,8 +924,8 @@ class FreeNADiagramAdapter:
         self,
         M_Ed: float = 0.0,
         N_Ed: float = 0.0,
-        eps_top: Optional[float] = None,
-        eps_bottom: Optional[float] = None,
+        eps_top: float | None = None,
+        eps_bottom: float | None = None,
     ) -> float:
         """
         Effective depth from compression face to tension steel centroid.
@@ -956,18 +957,18 @@ class FreeNADiagramAdapter:
         self,
         M_Ed: float = 0.0,
         N_Ed: float = 0.0,
-        d: Optional[float] = None,
-        eps_top: Optional[float] = None,
-        eps_bottom: Optional[float] = None,
+        d: float | None = None,
+        eps_top: float | None = None,
+        eps_bottom: float | None = None,
         *,
-        strain_state: Optional["StrainState"] = None,
+        strain_state: StrainState | None = None,
         use_mechanical_lever_arm: bool = False,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
         warn_on_fallback: bool = False,
         force_virtual: bool = False,
-    ) -> Tuple[float, Optional[float]]:
+    ) -> tuple[float, float | None]:
         """Lever arm z and rigorous lever arm (if computed)."""
         if d is None:
             d = self.get_effective_depth(M_Ed=M_Ed, N_Ed=N_Ed, eps_top=eps_top, eps_bottom=eps_bottom)
@@ -1018,8 +1019,8 @@ class FreeNADiagramAdapter:
 
     def _compute_lever_arm_from_strain_state(
         self,
-        strain_state: "StrainState",
-    ) -> Optional[float]:
+        strain_state: StrainState,
+    ) -> float | None:
         """
         Mechanical lever arm projected along compression direction for biaxial.
         """
@@ -1065,22 +1066,22 @@ class FreeNADiagramAdapter:
         M_Ed: float,
         V_Ed: float,
         N_Ed: float = 0.0,
-        M_cap: Optional[float] = None,
-        shear_reinforcement: Optional["ShearRebar"] = None,
-        cot_theta_override: Optional[float] = None,
+        M_cap: float | None = None,
+        shear_reinforcement: ShearRebar | None = None,
+        cot_theta_override: float | None = None,
         use_v_rd_s_for_cot_theta: bool = False,
-        cot_max_override: Optional[float] = None,
+        cot_max_override: float | None = None,
         iterate_z: bool = False,
         use_mechanical_lever_arm: bool = False,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
         warn_on_fallback: bool = False,
-    ) -> "TensionShiftResult":
+    ) -> TensionShiftResult:
         """Apply EC2 tension shift — delegates to shear_utils with adapter's z, d."""
         from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
-            calculate_tension_shift,
             calculate_section_breadth,
+            calculate_tension_shift,
         )
 
         z, d = self._compute_z_d_for_moment(
@@ -1099,8 +1100,8 @@ class FreeNADiagramAdapter:
 
         if shear_reinforcement is not None:
             from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
-                sigma_cp_from_N_and_area,
                 cap_sigma_cp_upper,
+                sigma_cp_from_N_and_area,
             )
             b_w = calculate_section_breadth(section=self.section)
             f_cd = self.concrete.f_cd

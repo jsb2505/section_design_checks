@@ -6,10 +6,11 @@ Implements characteristic and design strengths for reinforcing bar grades.
 
 from enum import StrEnum
 from typing import Literal, cast
-from pydantic import Field, ConfigDict
+
+from pydantic import ConfigDict, Field
+
 from materials.core.base_material import BaseMaterial
 from materials.reinforced_concrete.ndp import get_ndp
-
 
 # Define a Type Alias for clarity
 DuctilityClass = Literal["A", "B", "C"]
@@ -35,7 +36,7 @@ class ReinforcingSteelGrade(StrEnum):
     B500A = "B500A"
     B500B = "B500B"
     B500C = "B500C"
-    
+
     @property
     def f_yk(self) -> float: return _STEEL_GRADE_TABLE[self][0]
 
@@ -174,7 +175,7 @@ class ReinforcingSteel(BaseMaterial):
     def ductility_class(self) -> Literal["A", "B", "C"]:
         """Ductility class based on grade."""
         return self.grade.ductility_class
-    
+
     def get_elastic_modulus(self) -> float:
         """
         Return elastic modulus (implements BaseMaterial abstract method).

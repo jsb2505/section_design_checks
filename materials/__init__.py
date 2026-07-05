@@ -8,9 +8,9 @@ __version__ = "0.1.0"
 
 # Core exports
 from materials.core import (
-    BaseMaterial,
     BaseConstitutiveModel,
     BaseGeometry,
+    BaseMaterial,
     Point2D,
 )
 

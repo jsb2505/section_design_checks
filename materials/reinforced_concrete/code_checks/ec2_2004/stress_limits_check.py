@@ -11,28 +11,27 @@ Provides:
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from math import exp
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
-import warnings
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.analysis.strain_state import StrainState
 
 from pydantic import Field, PrivateAttr
 
+from materials.reinforced_concrete.analysis import create_interaction_diagram
+from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
     CheckResult,
 )
+from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
 from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial
-from materials.reinforced_concrete.analysis import create_interaction_diagram
-from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
-from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
 from materials.reinforced_concrete.ndp import get_ndp
-
 
 # =====================================================================
 # Pure functions — used by both StressLimitsCheck and CrackingCheck
@@ -42,9 +41,9 @@ from materials.reinforced_concrete.ndp import get_ndp
 def check_characteristic_concrete_stress(
     sigma_c: float,
     f_ck: float,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """EC2 §7.2(2): characteristic concrete stress limit.
-    
+
     Uses k₁ which is a NDP stress limit factor.
 
     Longitudinal cracking risk if σ_c > k₁·f_ck under characteristic loads.
@@ -71,7 +70,7 @@ def check_characteristic_concrete_stress(
 def check_quasi_permanent_concrete_stress(
     sigma_c: float,
     f_ck: float,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """EC2 §7.2(3): quasi-permanent concrete stress limit.
 
     Uses k₂ which is a NDP stress limit factor.
@@ -99,8 +98,8 @@ def check_quasi_permanent_concrete_stress(
 def check_characteristic_reinforcement_stress(
     sigma_s: float,
     f_yk: float,
-) -> Tuple[bool, str]:
-    """EC2 §7.2(5): SLS characteristic stress limit in reinforcement for 
+) -> tuple[bool, str]:
+    """EC2 §7.2(5): SLS characteristic stress limit in reinforcement for
     for which the appearance of cracking or deformations may be deemed acceptable.
 
     Uses k₃ which is a NDP stress limit factor.
@@ -126,7 +125,7 @@ def check_characteristic_reinforcement_stress(
 def check_reinforcement_yielding(
     sigma_s: float,
     f_yk: float,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """EC2 §7.2(4)P: inelastic strain check.
 
     Args:
@@ -148,7 +147,7 @@ def check_reinforcement_yielding(
 def check_imposed_deformation_stress(
     sigma_s: float,
     f_yk: float,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """EC2 §7.2(5): imposed deformation SLS Characteristic stress limit.
 
     Uses k₄ which is a NDP stress limit factor.
@@ -216,7 +215,7 @@ class StressLimitResult:
     k4_exceeded: bool = False
     nonlinear_creep_applied: bool = False
     creep_coefficient_used: float = 0.0
-    messages: List[str] = field(default_factory=list)
+    messages: list[str] = field(default_factory=list)
 
 
 # =====================================================================
@@ -332,10 +331,10 @@ class StressLimitsCheck(BaseCodeCheck):
 
     # --- Internal state ---
 
-    _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
-    _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
-    _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
-    _diagram_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
+    _diagram: MNInteractionDiagram | None = PrivateAttr(default=None)
+    _diagram_no_comp_steel: MNInteractionDiagram | None = PrivateAttr(default=None)
+    _diagram_snapshot: dict | None = PrivateAttr(default=None)
+    _diagram_no_comp_snapshot: dict | None = PrivateAttr(default=None)
 
     # --- Properties ---
 
@@ -439,8 +438,8 @@ class StressLimitsCheck(BaseCodeCheck):
         self,
         eps_top: float,
         eps_bottom: float,
-        diagram: Optional[MNInteractionDiagram] = None,
-        strain_state: Optional["StrainState"] = None,
+        diagram: MNInteractionDiagram | None = None,
+        strain_state: StrainState | None = None,
     ) -> float:
         """Peak compressive stress in concrete from fibre integration."""
         diag = diagram or self._get_diagram()
@@ -468,7 +467,7 @@ class StressLimitsCheck(BaseCodeCheck):
         self,
         eps_top: float,
         eps_bottom: float,
-        strain_state: Optional["StrainState"] = None,
+        strain_state: StrainState | None = None,
     ) -> float:
         """Maximum tensile stress across all bars (MPa, converted to positive stress).
 
@@ -564,7 +563,7 @@ class StressLimitsCheck(BaseCodeCheck):
 
         nonlinear_creep_applied = False
         creep_coefficient_used = self.creep_coefficient
-        messages: List[str] = []
+        messages: list[str] = []
 
         result = StressLimitResult(
             sigma_c_peak=sigma_c,
@@ -650,7 +649,7 @@ class StressLimitsCheck(BaseCodeCheck):
     def perform_check(
         self,
         *,
-        My_Ed: Optional[float] = None,
+        My_Ed: float | None = None,
         N_Ed: float = 0.0,
         Mz_Ed: float = 0.0,
         ignore_compression_steel: bool = False,
@@ -698,7 +697,7 @@ class StressLimitsCheck(BaseCodeCheck):
             )
 
         # Compute utilization for each enabled check
-        utilizations: List[Tuple[float, str]] = []
+        utilizations: list[tuple[float, str]] = []
 
         if self.check_k1_stress:
             limit = self.k_1_stress * self.concrete.f_ck
@@ -736,7 +735,7 @@ class StressLimitsCheck(BaseCodeCheck):
                 warnings.warn(msg, stacklevel=2)
 
         # Build details
-        details: Dict[str, Any] = {
+        details: dict[str, Any] = {
             "My_Ed": float(My_Ed),
             "Mz_Ed": float(Mz_Ed),
             "N_Ed": float(N_Ed),

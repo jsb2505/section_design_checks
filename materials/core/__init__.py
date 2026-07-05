@@ -11,13 +11,13 @@ from materials.core.constitutive import (
 )
 from materials.core.geometry import BaseGeometry, Point2D
 from materials.core.units import (
-    LengthUnit,
-    StressUnit,
-    ForceUnit,
-    MomentUnit,
+    FORCE_TO_KN,
     LENGTH_TO_MM,
     STRESS_TO_MPA,
-    FORCE_TO_KN,
+    ForceUnit,
+    LengthUnit,
+    MomentUnit,
+    StressUnit,
 )
 
 __all__ = [

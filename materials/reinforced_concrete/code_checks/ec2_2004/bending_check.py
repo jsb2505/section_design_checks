@@ -7,24 +7,21 @@ Uses the fibre-based M-N interaction diagram infrastructure.
 
 from __future__ import annotations
 
-from pathlib import Path
 import warnings
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.analysis.strain_state import StrainState
-from pydantic import Field, PrivateAttr, model_validator
 import numpy as np
+from pydantic import Field, PrivateAttr, model_validator
 
+from materials.reinforced_concrete.analysis import create_interaction_diagram
+from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
     CheckResult,
 )
-from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
-from materials.reinforced_concrete.geometry import RCSection
-from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
-from materials.reinforced_concrete.analysis import create_interaction_diagram
-from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import (
     EffectiveDepthFallback,
     calculate_section_breadth,
@@ -32,6 +29,9 @@ from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import (
     find_area_of_steel_minimum,
     find_effective_depth_for_flexure,
 )
+from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
+from materials.reinforced_concrete.geometry import RCSection
+from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
 from materials.reinforced_concrete.ndp import get_ndp
 
 
@@ -96,11 +96,11 @@ class BendingCheck(BaseCodeCheck):
         description="Steel post-yield behaviour (Fig 3.8)",
     )
 
-    concrete_model_override: Optional[Any] = Field(
+    concrete_model_override: Any | None = Field(
         default=None, exclude=True,
         description="Pre-built custom concrete constitutive model (bypasses factory).",
     )
-    steel_models_override: Optional[List[Any]] = Field(
+    steel_models_override: list[Any] | None = Field(
         default=None, exclude=True,
         description="Pre-built custom steel constitutive models, one per rebar group (bypasses factory).",
     )
@@ -175,13 +175,13 @@ class BendingCheck(BaseCodeCheck):
     # Internal state (private)
     # ===========================
 
-    _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
-    _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
-    _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
-    _diagram_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
+    _diagram: MNInteractionDiagram | None = PrivateAttr(default=None)
+    _diagram_no_comp_steel: MNInteractionDiagram | None = PrivateAttr(default=None)
+    _diagram_snapshot: dict | None = PrivateAttr(default=None)
+    _diagram_no_comp_snapshot: dict | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
-    def _validate_concrete_model_type(self) -> "BendingCheck":
+    def _validate_concrete_model_type(self) -> BendingCheck:
         if self.concrete_model_override is not None:
             return self
         if self.concrete_model_type == ConcreteModelType.LINEAR_ELASTIC:
@@ -268,10 +268,10 @@ class BendingCheck(BaseCodeCheck):
         My_Ed: float = None,  # type: ignore[assignment]
         Mz_Ed: float = 0.0,
         N_Ed: float = 0.0,
-        V_Ed: Optional[float] = None,
-        M_cap: Optional[float] = None,
-        shear_reinforcement: Optional[ShearRebar] = None,
-        cot_theta_override: Optional[float] = None,
+        V_Ed: float | None = None,
+        M_cap: float | None = None,
+        shear_reinforcement: ShearRebar | None = None,
+        cot_theta_override: float | None = None,
         use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float = 0.95,
         suppress_warnings: bool = False,
@@ -372,9 +372,9 @@ class BendingCheck(BaseCodeCheck):
         *,
         eps_top: float,
         eps_bottom: float,
-        strain_state: Optional["StrainState"] = None,
+        strain_state: StrainState | None = None,
         strain_tol: float = 1e-12,
-    ) -> tuple[float, Optional[float]]:
+    ) -> tuple[float, float | None]:
         """
         Return total tension steel area and governing f_yk from current strain state.
 
@@ -424,10 +424,10 @@ class BendingCheck(BaseCodeCheck):
         My_Ed: float,
         Mz_Ed: float = 0.0,
         N_Ed: float,
-        V_Ed: Optional[float],
-        M_cap: Optional[float],
-        shear_reinforcement: Optional[ShearRebar],
-        cot_theta_override: Optional[float] = None,
+        V_Ed: float | None,
+        M_cap: float | None,
+        shear_reinforcement: ShearRebar | None,
+        cot_theta_override: float | None = None,
         use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float,
         suppress_warnings: bool = False,
@@ -455,7 +455,7 @@ class BendingCheck(BaseCodeCheck):
                 raise ValueError("V_Ed must be provided when M_cap is provided (tension shift enabled)")
 
             # Compute effective cot_max for tension cases (UK NA §6.2.3(2))
-            cot_max_override: Optional[float] = None
+            cot_max_override: float | None = None
             if self.apply_tension_cot_theta_limit and N_Ed < 0:
                 tension_lim = get_ndp("cot_theta_upper_lim_tension")
                 if tension_lim is not None and not callable(tension_lim):
@@ -507,18 +507,18 @@ class BendingCheck(BaseCodeCheck):
         N_Rd, M_Rd, utilization = capacity.N_Rd, capacity.M_Rd, capacity.utilization
 
         # --- Step 2a: reinforcement limit checks (EC2 §9.2.1.1) ---
-        A_s_total_provided: Optional[float] = None
-        A_s_max_allowed: Optional[float] = None
-        A_s_max_satisfied: Optional[bool] = None
+        A_s_total_provided: float | None = None
+        A_s_max_allowed: float | None = None
+        A_s_max_satisfied: bool | None = None
 
         A_s_min_check_applicable = False
-        A_s_min_required: Optional[float] = None
-        A_s_min_provided_tension: Optional[float] = None
-        A_s_min_satisfied: Optional[bool] = None
-        A_s_min_breadth_b: Optional[float] = None
-        A_s_min_effective_depth_d: Optional[float] = None
-        A_s_min_f_yk: Optional[float] = None
-        A_s_min_f_ctm: Optional[float] = None
+        A_s_min_required: float | None = None
+        A_s_min_provided_tension: float | None = None
+        A_s_min_satisfied: bool | None = None
+        A_s_min_breadth_b: float | None = None
+        A_s_min_effective_depth_d: float | None = None
+        A_s_min_f_yk: float | None = None
+        A_s_min_f_ctm: float | None = None
 
         if isinstance(self.section, RCSection):
             A_s_total_provided = float(self.section.total_steel_area)
@@ -541,7 +541,7 @@ class BendingCheck(BaseCodeCheck):
                 eps_top, eps_bottom = None, None
 
             # Obtain full strain state for biaxial-aware downstream calls
-            strain_state_local: Optional["StrainState"] = None
+            strain_state_local: StrainState | None = None
             if eps_top is not None and eps_bottom is not None:
                 try:
                     strain_state_local = diagram.find_strain_state_for_MN(M_design, N_Ed, **_mz_kw)
@@ -684,7 +684,7 @@ class BendingCheck(BaseCodeCheck):
             details=details,
         )
 
-    def get_moment_capacity(self, N_Ed: float = 0.0) -> tuple[Optional[float], Optional[float]]:
+    def get_moment_capacity(self, N_Ed: float = 0.0) -> tuple[float | None, float | None]:
         """
         Get moment capacity at specified axial force.
 
@@ -709,7 +709,7 @@ class BendingCheck(BaseCodeCheck):
         return (M_Rd_pos, M_Rd_neg)
 
 
-    def generate_interaction_diagram_arrays(self, n_points: int = 120) -> tuple["np.ndarray", "np.ndarray"]:
+    def generate_interaction_diagram_arrays(self, n_points: int = 120) -> tuple[np.ndarray, np.ndarray]:
         """
         Generate complete M-N interaction diagram for visualization.
 
@@ -724,13 +724,13 @@ class BendingCheck(BaseCodeCheck):
     def plot_mn(
         self,
         *,
-        load_points: Optional[List[Dict[str, Any]]] = None,
+        load_points: list[dict[str, Any]] | None = None,
         show_vectors: bool = False,
         show_metadata: bool = True,
         n_points: int = 120,
-        save_path: Optional[str | Path] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         ignore_compression_steel: bool = False,
         width: int = 900,
         height: int = 700,
@@ -797,7 +797,7 @@ class BendingCheck(BaseCodeCheck):
         N_Ed: float,
         *,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1200,
         height: int = 600,
         section_render: Literal["points", "filled"] = "points",

@@ -1,14 +1,14 @@
 import math
 import warnings
-from pathlib import Path
-from typing import Any, Optional, Tuple, Literal
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Literal
+
 import numpy as np
 
+from materials.core.units import FORCE_TO_KN, ForceUnit, MomentUnit, to_kn, to_knm
 from materials.reinforced_concrete.analysis import MNInteractionDiagram
 from materials.reinforced_concrete.analysis.strain_state import StrainState
-from materials.core.units import FORCE_TO_KN, ForceUnit, MomentUnit, to_kn, to_knm
-
 
 # ------------------------------------------
 # Helper Class for Stress-Strain Plot State
@@ -113,16 +113,16 @@ class _StressStrainPlotState:
 class StressStrainViewer:
     def __init__(self, diagram: "MNInteractionDiagram") -> None:
         self.diagram = diagram
- 
+
     def plot(
         self,
-        My_Ed: Optional[float] = None,
+        My_Ed: float | None = None,
         N_Ed: float = 0.0,
         *,
         Mz_Ed: float = 0.0,
-        save_path: Optional[str | Path] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1100,
         height: int = 1000,
         section_render: Literal["points", "filled"] = "points",
@@ -261,7 +261,7 @@ class StressStrainViewer:
 
         # 1) Solve for strain state
         mz_kw = {"Mz_target": Mz_Ed} if biaxial else {}
-        strain_state_obj: Optional[StrainState] = None
+        strain_state_obj: StrainState | None = None
         try:
             if biaxial and hasattr(d, "find_strain_state_for_MN"):
                 strain_state_obj = d.find_strain_state_for_MN(
@@ -892,7 +892,7 @@ class StressStrainViewer:
         fig: Any,
         s: _StressStrainPlotState,
         *,
-        title: Optional[str],
+        title: str | None,
         width: int,
         height: int,
     ) -> None:
@@ -1294,7 +1294,7 @@ class StressStrainViewer:
         self,
         strain_state: StrainState,
         bbox: tuple[float, float, float, float],
-    ) -> Optional[tuple[tuple[float, float], tuple[float, float]]]:
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
         """
         Compute the NA line clipped to the section bounding box.
 
@@ -1349,7 +1349,7 @@ class StressStrainViewer:
         return float(np.sum(f * y[mask]) / denom)
 
     @staticmethod
-    def _neutral_axis(*, eps_top: float, eps_bottom: float, y_top: float, y_bottom: float, h: float) -> Tuple[float | None, bool]:
+    def _neutral_axis(*, eps_top: float, eps_bottom: float, y_top: float, y_bottom: float, h: float) -> tuple[float | None, bool]:
         # strain(y) = eps_bottom + (eps_top-eps_bottom)*(y - y_bottom)/h
         # set strain=0 => y = y_bottom - eps_bottom*h/(eps_top-eps_bottom)
         if abs(eps_top - eps_bottom) <= 1e-12:
@@ -1362,7 +1362,7 @@ class StressStrainViewer:
         self,
         s: _StressStrainPlotState,
         n_points: int = 100,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Generate a smooth concrete stress profile by interpolating across section depth.
 
@@ -1420,7 +1420,7 @@ class StressStrainViewer:
             return np.asarray(stress_fn(strains), dtype=float)
         return np.asarray(self.diagram.concrete_model.get_stress_array(strains), dtype=float)
 
-    def _get_outline_xy(self) -> Tuple[list[float], list[float]]:
+    def _get_outline_xy(self) -> tuple[list[float], list[float]]:
         """
         Return section outline x/y suitable for Plotly.
         Assumes section.outline is a shapely Polygon.
@@ -1431,7 +1431,7 @@ class StressStrainViewer:
         return outline_x, outline_y
 
     @staticmethod
-    def _concrete_colorscale(conc_stresses: np.ndarray) -> Tuple[float, float, Any]:
+    def _concrete_colorscale(conc_stresses: np.ndarray) -> tuple[float, float, Any]:
         """
         Returns (cmin, cmax, colorscale) for concrete stress coloring.
         If no tension: [0..max] with white->red. If tension exists: symmetric with RdBu_r.
@@ -1452,7 +1452,7 @@ class StressStrainViewer:
         return -abs_max, abs_max, "RdBu_r"
 
     @staticmethod
-    def _concrete_stress_range(stresses: np.ndarray, conc_mask: np.ndarray) -> Tuple[float, float]:
+    def _concrete_stress_range(stresses: np.ndarray, conc_mask: np.ndarray) -> tuple[float, float]:
         if np.any(conc_mask):
             conc = stresses[conc_mask]
             max_pos = max(0.0, float(np.max(conc)))
@@ -1634,7 +1634,7 @@ class StressStrainViewer:
 
         return (block_gap.join(left_blocks), block_gap.join(right_blocks))
 
-    def _stress_x_range(self, s: _StressStrainPlotState) -> Tuple[float, float]:
+    def _stress_x_range(self, s: _StressStrainPlotState) -> tuple[float, float]:
         # base range from concrete stresses
         x_min = s.min_stress_neg if s.min_stress_neg < 0.0 else 0.0
         x_max = s.max_stress_pos if s.max_stress_pos > 0.0 else 0.0

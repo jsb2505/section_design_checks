@@ -8,10 +8,11 @@ Provides two plot types:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
+from typing import Any, cast
 
 import numpy as np
 
@@ -35,7 +36,7 @@ class _LoadCaseResult:
     w_k_limit: float
     is_cracked: bool
     solved: bool
-    solver_error: Optional[str]
+    solver_error: str | None
     passes: bool
 
 
@@ -66,7 +67,7 @@ def _get_domain_bounds(
     check: CrackingCheck,
     concrete_model_type: ConcreteModelType,
     n_points: int,
-) -> Tuple[float, float, float, float]:
+) -> tuple[float, float, float, float]:
     """Return (M_min, M_max, N_min, N_max) for the evaluation grid.
 
     All bounds come from the ULS diagram (design strengths). SLS loads
@@ -151,7 +152,7 @@ def _find_boundary_for_n_slice(
     w_k_limit: float,
     force_cracked: bool,
     n_bracket: int = 30,
-) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
     """Find boundary points for a single N slice. Returns (pos_point, neg_point)."""
     from scipy.optimize import brentq
 
@@ -163,8 +164,8 @@ def _find_boundary_for_n_slice(
             return LARGE_VALUE
         return w_k - w_k_limit
 
-    pos_point: Optional[Tuple[float, float]] = None
-    neg_point: Optional[Tuple[float, float]] = None
+    pos_point: tuple[float, float] | None = None
+    neg_point: tuple[float, float] | None = None
 
     # --- Positive M direction (sagging) ---
     M_probe = np.linspace(0.0, M_max, n_bracket)
@@ -209,8 +210,8 @@ def _find_crack_width_boundary(
     M_max: float,
     w_k_limit: float,
     force_cracked: bool,
-    max_workers: Optional[int] = None,
-) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]:
+    max_workers: int | None = None,
+) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
     """Find (M, N) boundary points where w_k = w_k_limit.
 
     For each N_i, use brentq to find M* where w_k(M*, N_i) = w_lim.
@@ -223,8 +224,8 @@ def _find_crack_width_boundary(
     """
     workers = max_workers or 1
 
-    pos_boundary: List[Tuple[float, float]] = []
-    neg_boundary: List[Tuple[float, float]] = []
+    pos_boundary: list[tuple[float, float]] = []
+    neg_boundary: list[tuple[float, float]] = []
 
     if workers <= 1:
         for N_i in N_values:
@@ -236,7 +237,7 @@ def _find_crack_width_boundary(
             if neg_pt is not None:
                 neg_boundary.append(neg_pt)
     else:
-        def _worker(N_i: float) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+        def _worker(N_i: float) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
             return _find_boundary_for_n_slice(
                 check, float(N_i), M_min, M_max, w_k_limit, force_cracked,
             )
@@ -257,7 +258,7 @@ def _eval_grid(
     N_vals: np.ndarray,
     force_cracked: bool,
     comp_mask: np.ndarray,
-    max_workers: Optional[int] = None,
+    max_workers: int | None = None,
 ) -> np.ndarray:
     """Evaluate w_k grid with compression pre-filter.
 
@@ -296,7 +297,7 @@ def _eval_grid(
     if not tasks:
         return W
 
-    def _worker(args: Tuple[int, int, float, float]) -> Tuple[int, int, float]:
+    def _worker(args: tuple[int, int, float, float]) -> tuple[int, int, float]:
         i, j, m, n = args
         return i, j, _eval_w_k(check, m, n, force_cracked)
 
@@ -323,11 +324,11 @@ class CrackWidthViewer:
     # ------------------------------------------------------------------
     def plot_load_cases(
         self,
-        load_cases: Sequence[Dict[str, Any]],
+        load_cases: Sequence[dict[str, Any]],
         *,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 900,
         height: int = 700,
     ) -> Any:
@@ -359,7 +360,7 @@ class CrackWidthViewer:
                 "Plotly is required for plotting. Install with: pip install plotly"
             ) from e
 
-        results: List[_LoadCaseResult] = []
+        results: list[_LoadCaseResult] = []
         for idx, lc in enumerate(load_cases):
             M_Ed = float(lc["M_Ed"])
             N_Ed = float(lc.get("N_Ed", 0.0))
@@ -458,18 +459,18 @@ class CrackWidthViewer:
     def plot_contours(
         self,
         *,
-        load_cases: Optional[Sequence[Dict[str, Any]]] = None,
+        load_cases: Sequence[dict[str, Any]] | None = None,
         concrete_model_type: ConcreteModelType = ConcreteModelType.PARABOLA_RECTANGLE,
         n_grid: int = 20,
         n_boundary_points: int = 40,
         force_cracked: bool = True,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 900,
         height: int = 700,
         n_envelope_points: int = 120,
-        max_workers: Optional[int] = None,
+        max_workers: int | None = None,
     ) -> Any:
         """
         2D contour map of crack width across the M-N domain.

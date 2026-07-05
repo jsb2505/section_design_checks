@@ -14,16 +14,20 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
-      # Blocking gate: pyflakes (real bugs — undefined names, unused imports) on
-      # production code. The full ruff ruleset and mypy are advisory for now
-      # (there is a pre-existing style/type backlog); tighten as it is cleared.
-      - name: ruff (pyflakes, blocking)
-        run: ruff check --select F materials
+      # Blocking gate: the full configured ruff ruleset on production code, minus
+      # E501 (line-length is enforced via pyproject line-length=120 but kept
+      # advisory — the few residual long lines are long HTML/annotation strings).
+      - name: ruff (blocking, materials)
+        run: ruff check materials --extend-ignore E501
+      # Advisory: full ruff incl. E501 and the test tree (surfaces line-length and
+      # any test-file lint without blocking).
       - name: ruff (full, advisory)
         run: ruff check materials tests
         continue-on-error: true
+      # mypy stays advisory (type-annotation backlog); --ignore-missing-imports
+      # silences third-party stub noise (scipy/shapely/plotly).
       - name: mypy (advisory)
-        run: mypy materials
+        run: mypy materials --ignore-missing-imports
         continue-on-error: true
 
   test:

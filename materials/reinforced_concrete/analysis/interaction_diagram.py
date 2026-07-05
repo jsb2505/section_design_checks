@@ -40,46 +40,52 @@ Notes on confinement:
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, NamedTuple, Sequence, Literal, TYPE_CHECKING
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    NamedTuple,
+)
 
 if TYPE_CHECKING:
+    from materials.reinforced_concrete.analysis.strain_state import StrainState
     from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
     from materials.reinforced_concrete.materials.rebar import ShearRebar
-    from materials.reinforced_concrete.analysis.strain_state import StrainState
 
-import warnings
 import csv
 import json
+import warnings
+
 import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field
 from scipy.optimize import least_squares, leastsq
 
-from materials.utils.helpers import as_float
+from materials.core.units import ForceUnit, MomentUnit, to_kn, to_knm
 from materials.reinforced_concrete.constitutive import (
-    create_concrete_stress_strain,
-    create_steel_stress_strain,
+    ConcreteModelType,
     ConcreteStressStrainLinearElastic,
     SteelModelType,
-    ConcreteModelType,
+    create_concrete_stress_strain,
+    create_steel_stress_strain,
 )
 from materials.reinforced_concrete.geometry import FibreMesh, RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial
-from materials.core.units import ForceUnit, MomentUnit, to_kn, to_knm
-
+from materials.utils.helpers import as_float
 
 # ------------------------
 # Types / small utilities
 # ------------------------
 
 def _ray_segment_intersection_alpha(
-    ray_dir: Tuple[float, float],
-    p1: Tuple[float, float],
-    p2: Tuple[float, float],
+    ray_dir: tuple[float, float],
+    p1: tuple[float, float],
+    p2: tuple[float, float],
     tol: float = 1e-12,
-) -> Optional[float]:
+) -> float | None:
     """
     Intersect ray from origin: R(t) = t * ray_dir, t >= 0
     with segment S(s) = p1 + s*(p2-p1), s in [0,1].
@@ -131,7 +137,7 @@ class InteractionPoint(BaseModel):
             f"NA={self.neutral_axis_depth:.2f} mm, comp={face})"
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "N": self.N,
             "M": self.M,
@@ -147,11 +153,11 @@ class InteractionPoint(BaseModel):
 # ----------------------------
 
 class CapacityResult(NamedTuple):
-    N_Rd: Optional[float]
-    M_Rd: Optional[float]
+    N_Rd: float | None
+    M_Rd: float | None
     is_safe: bool
     utilization: float
-    details: Optional[dict] = None # Default value for the 5th item
+    details: dict | None = None # Default value for the 5th item
 
 
 # ----------------------------
@@ -182,15 +188,15 @@ class MNInteractionDiagram:
         use_characteristic: bool = False,
         use_accidental: bool = False,
         confined_concrete: bool = False,
-        confinement_rho_s: Optional[float] = None,
-        confinement_f_yh: Optional[float] = None,
+        confinement_rho_s: float | None = None,
+        confinement_f_yh: float | None = None,
         confinement_eps_su: float = 0.10,
         ignore_compression_steel: bool = False,
-        elastic_modulus: Optional[float] = None,
+        elastic_modulus: float | None = None,
         include_tension: bool = False,
         crack_to_neutral_axis_on_first_tension_failure: bool = True,
-        concrete_model_override: Optional[Any] = None,
-        steel_models_override: Optional[List[Any]] = None,
+        concrete_model_override: Any | None = None,
+        steel_models_override: list[Any] | None = None,
     ):
         self.section = section
         self.concrete = concrete
@@ -313,7 +319,7 @@ class MNInteractionDiagram:
         self._section_cx, self._section_cy = self.section.get_centroid()
 
         # Cache diagram points to avoid repeated generation
-        self._dense_diagram_points: Optional[tuple[InteractionPoint, ...]] = None
+        self._dense_diagram_points: tuple[InteractionPoint, ...] | None = None
         self._dense_diagram_n: int = 0
         self._diagram_points_cache: dict[int, tuple[InteractionPoint, ...]] = {}
 
@@ -333,7 +339,7 @@ class MNInteractionDiagram:
         stresses: npt.NDArray[np.float64],
         *,
         use_section_centroid: bool = True,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """
         Calculate resultant axial force and single-axis bending moment from fibre stresses.
 
@@ -365,7 +371,7 @@ class MNInteractionDiagram:
 
         return (as_float(N), as_float(M))
 
-    def _confined_strength_and_peak_strain(self) -> Tuple[float, float]:
+    def _confined_strength_and_peak_strain(self) -> tuple[float, float]:
         """Mander confined characteristic strength f_cc,k and peak strain eps_cc.
 
         Pure function of the (instance-level) confinement inputs — no per-fibre
@@ -699,7 +705,7 @@ class MNInteractionDiagram:
         self,
         eps_top: float,
         eps_bottom: float,
-    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """
         Compute fibre-level forces from strain profile (public helper for external tools).
 
@@ -765,8 +771,8 @@ class MNInteractionDiagram:
 
     def get_fibre_forces_from_strain_state(
         self,
-        strain_state: "StrainState",
-    ) -> Tuple[
+        strain_state: StrainState,
+    ) -> tuple[
         npt.NDArray[np.float64],
         npt.NDArray[np.float64],
         npt.NDArray[np.float64],
@@ -846,9 +852,9 @@ class MNInteractionDiagram:
 
     @staticmethod
     def _dedupe_pairs(
-        pairs: List[Tuple[float, float]],
+        pairs: list[tuple[float, float]],
         tol: float = 1e-12,
-    ) -> List[Tuple[float, float]]:
+    ) -> list[tuple[float, float]]:
         """Remove consecutive near-duplicate strain pairs."""
         if not pairs:
             return pairs
@@ -863,7 +869,7 @@ class MNInteractionDiagram:
     def _resample_closed_polyline_by_chord(
         points: Sequence[InteractionPoint],
         n_out: int,
-    ) -> List[InteractionPoint]:
+    ) -> list[InteractionPoint]:
         """
         Resample a CLOSED polyline (last point equals first) to n_out points, approximately
         uniform spacing in (M,N) chord length.
@@ -873,7 +879,7 @@ class MNInteractionDiagram:
         """
         if n_out < 3:
             raise ValueError("n_out must be >= 3")
-        
+
         pts = list(points)
 
         if len(pts) < 4:
@@ -909,7 +915,7 @@ class MNInteractionDiagram:
 
         # Interpolate (M, N) to create geometrically accurate points
         # Metadata (neutral axis, etc.) comes from the nearest dense point for approximation
-        out: List[InteractionPoint] = []
+        out: list[InteractionPoint] = []
         for st, i in zip(s_target, idx):
             s0, s1 = s[i], s[i + 1]
             if s1 <= s0:
@@ -954,9 +960,9 @@ class MNInteractionDiagram:
 
     @staticmethod
     def _pin_extremal_points(
-        resampled: List[InteractionPoint],
+        resampled: list[InteractionPoint],
         dense: tuple[InteractionPoint, ...],
-    ) -> List[InteractionPoint]:
+    ) -> list[InteractionPoint]:
         """
         Ensure min N, max M, and min M from the dense diagram appear exactly in the
         resampled output by replacing the nearest unused resampled neighbour.
@@ -1012,7 +1018,7 @@ class MNInteractionDiagram:
         n_points: int,
         eps_cu: float,
         eps_t: float,
-    ) -> List[Tuple[float, float]]:
+    ) -> list[tuple[float, float]]:
         """
         Build a CLOSED loop in (eps_top, eps_bottom) that targets the interaction envelope
         efficiently (avoids wasting points on redundant 'both-faces-tension' states).
@@ -1053,7 +1059,7 @@ class MNInteractionDiagram:
         sC = self._cosine_space(nC)
         sD = self._cosine_space(nD)
 
-        pairs: List[Tuple[float, float]] = []
+        pairs: list[tuple[float, float]] = []
 
         # Segment A: top = +eps_cu, bottom: +eps_cu -> -eps_t
         bot_A = self._interp(eps_cu, eps_ten, sA)
@@ -1127,10 +1133,10 @@ class MNInteractionDiagram:
         self,
         My_target: float,
         N_target: float,
-        initial_guess: Optional[Tuple[float, float]] = None,
+        initial_guess: tuple[float, float] | None = None,
         tol: float = 1e-6,
         strict: bool = False,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """
         Inverse solver: Find end strains that produce target (M, N).
 
@@ -1213,7 +1219,7 @@ class MNInteractionDiagram:
             and bool(getattr(self.concrete_model, "include_tension", False))
         )
 
-        jac_method: Union[Callable[[npt.NDArray], npt.NDArray], str]
+        jac_method: Callable[[npt.NDArray], npt.NDArray] | str
         if self.confined_concrete or _crack_to_na_active:
             jac_method = '2-point'
             max_iterations = 200
@@ -1226,14 +1232,14 @@ class MNInteractionDiagram:
             jac_method = analytical_jacobian
             max_iterations = 50  # Analytical Jacobian converges much faster
 
-        def clamp_guess(guess: Tuple[float, float]) -> Tuple[float, float]:
+        def clamp_guess(guess: tuple[float, float]) -> tuple[float, float]:
             """Clamp guess to strain bounds before handing it to the optimizer."""
             return (
                 float(np.clip(guess[0], -eps_t, +eps_cu)),
                 float(np.clip(guess[1], -eps_t, +eps_cu)),
             )
 
-        def residual_metrics(result: Any) -> Tuple[float, float]:
+        def residual_metrics(result: Any) -> tuple[float, float]:
             """
             Return (max_abs_residual, normalized_residual_norm).
 
@@ -1255,7 +1261,7 @@ class MNInteractionDiagram:
 
         def _prefer_tensile_branch(
             current_best: Any,
-            all_attempts: List[Tuple[Any, str, Tuple[float, float]]],
+            all_attempts: list[tuple[Any, str, tuple[float, float]]],
         ) -> Any:
             """For tension loads (N < 0), prefer all-tensile solutions over
             eccentric solutions with compression at one face, when both
@@ -1297,10 +1303,10 @@ class MNInteractionDiagram:
             return min(tensile_candidates, key=lambda t: (t[1], t[2]))[0]
 
         def solve_from_guess(
-            guess: Tuple[float, float],
-            jac: Union[Callable[[npt.NDArray], npt.NDArray], str],
-            max_nfev: Optional[int] = None,
-            bounds_override: Optional[Tuple[npt.NDArray, npt.NDArray]] = None,
+            guess: tuple[float, float],
+            jac: Callable[[npt.NDArray], npt.NDArray] | str,
+            max_nfev: int | None = None,
+            bounds_override: tuple[npt.NDArray, npt.NDArray] | None = None,
         ) -> Any:
             # Analytical Jacobian: exact derivatives, 5-10 iterations typical
             # Numerical Jacobian: finite difference, 30-50 iterations typical
@@ -1345,7 +1351,7 @@ class MNInteractionDiagram:
 
         # Build a compact set of branch-diverse candidate guesses. Keep the
         # existing heuristic as first choice, then add conservative alternatives.
-        candidate_guesses: List[Tuple[float, float]] = [initial_guess]
+        candidate_guesses: list[tuple[float, float]] = [initial_guess]
 
         # Near-origin seeds are valuable for small load cases where the true solution
         # is close to zero curvature/strain and for linear-elastic concrete with
@@ -1356,7 +1362,7 @@ class MNInteractionDiagram:
             and bool(getattr(self.concrete_model, "include_tension", False))
         )
 
-        near_zero_guesses: List[Tuple[float, float]] = []
+        near_zero_guesses: list[tuple[float, float]] = []
         if is_small_load_case or is_linear_elastic_with_tension:
             eps_ref = max(min(float(abs(eps_cu)), float(abs(eps_t)), float(abs(eps_y))), 1e-9)
             eps_tiny = max(1e-9, eps_ref * 1e-3)
@@ -1373,7 +1379,7 @@ class MNInteractionDiagram:
         # scaled seeds.  SLS strains are typically 1-10x the cracking strain
         # (eps_cr ≈ f_ctm/E_cm ≈ 88 microstrain for C30/37), which is ~100x
         # smaller than the eps_y-scaled seeds that work for ULS.
-        elastic_bending_guesses: List[Tuple[float, float]] = []
+        elastic_bending_guesses: list[tuple[float, float]] = []
         if is_linear_elastic_with_tension and isinstance(
             self.concrete_model, ConcreteStressStrainLinearElastic
         ):
@@ -1472,7 +1478,7 @@ class MNInteractionDiagram:
                 ])
 
         # Deduplicate after clamping to avoid redundant solve calls.
-        deduped_guesses: List[Tuple[float, float]] = []
+        deduped_guesses: list[tuple[float, float]] = []
         for guess in candidate_guesses:
             clamped = clamp_guess(guess)
             if not any(abs(clamped[0] - d[0]) < 1e-9 and abs(clamped[1] - d[1]) < 1e-9 for d in deduped_guesses):
@@ -1483,7 +1489,7 @@ class MNInteractionDiagram:
         # used to decide if additional fallback passes are necessary.
         acceptable_abs_error = max(1.0, tol * 1e6)
 
-        attempts: List[Tuple[Any, str, Tuple[float, float]]] = []
+        attempts: list[tuple[Any, str, tuple[float, float]]] = []
 
         # Fast path: primary guess only.
         primary_guess = deduped_guesses[0]
@@ -1693,7 +1699,7 @@ class MNInteractionDiagram:
         self,
         M: float,
         N: float,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """
         Heuristic initial guess for strain pair based on (M, N) quadrant.
 
@@ -1767,8 +1773,8 @@ class MNInteractionDiagram:
         self,
         M_Ed: float,
         N_Ed: float,
-        eps_top: Optional[float] = None,
-        eps_bottom: Optional[float] = None,
+        eps_top: float | None = None,
+        eps_bottom: float | None = None,
     ) -> float:
         """
         Get effective depth from compression face for a given load case.
@@ -1828,18 +1834,18 @@ class MNInteractionDiagram:
         self,
         M_Ed: float,
         N_Ed: float,
-        d: Optional[float] = None,
-        eps_top: Optional[float] = None,
-        eps_bottom: Optional[float] = None,
+        d: float | None = None,
+        eps_top: float | None = None,
+        eps_bottom: float | None = None,
         *,
-        strain_state: Optional["StrainState"] = None,
+        strain_state: StrainState | None = None,
         use_mechanical_lever_arm: bool = True,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
         warn_on_fallback: bool = True,
         force_virtual: bool = False,
-    ) -> tuple[float, Optional[float]]:
+    ) -> tuple[float, float | None]:
         """
         Returns (z_design, z_mech).
 
@@ -2024,7 +2030,7 @@ class MNInteractionDiagram:
         self,
         eps_top: float,
         eps_bottom: float,
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Mechanical lever arm from force resultant centroids.
         Returns None if either tension or compression resultant is absent.
@@ -2057,8 +2063,8 @@ class MNInteractionDiagram:
 
     def _compute_lever_arm_from_strain_state(
         self,
-        strain_state: "StrainState",
-    ) -> Optional[float]:
+        strain_state: StrainState,
+    ) -> float | None:
         """
         Mechanical lever arm projected along the compression direction.
 
@@ -2110,10 +2116,10 @@ class MNInteractionDiagram:
         self,
         My_target: float,
         N_target: float,
-        initial_guess: Optional[Tuple[float, float]] = None,
+        initial_guess: tuple[float, float] | None = None,
         tol: float = 1e-6,
         strict: bool = False,
-    ) -> "StrainState":
+    ) -> StrainState:
         """
         Inverse solver returning a full :class:`StrainState` for target (M, N).
 
@@ -2151,7 +2157,7 @@ class MNInteractionDiagram:
     def _get_dense_diagram_points(self, n_dense: int) -> tuple[InteractionPoint, ...]:
         if self._dense_diagram_points is not None and self._dense_diagram_n == n_dense:
             return self._dense_diagram_points
-        
+
         # --- Compression-side strain limit (concrete-controlled; confined-aware)
         eps_cu = float(self.effective_ultimate_strain())
 
@@ -2177,7 +2183,7 @@ class MNInteractionDiagram:
         self._dense_diagram_n = int(n_dense)
         self._diagram_points_cache.clear()
         return dense_pts
-    
+
 
     def generate_diagram_points(
         self,
@@ -2387,7 +2393,7 @@ class MNInteractionDiagram:
         N_Ed: float,
         M_Ed: float,
         n_points: int = 120,
-    ) -> Tuple[bool, float]:
+    ) -> tuple[bool, float]:
         """Convenience wrapper returning (is_safe, utilization) using vector method."""
         capacity = self.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points, return_details=False)
         return (bool(capacity.is_safe), float(capacity.utilization))
@@ -2395,15 +2401,15 @@ class MNInteractionDiagram:
 
     @staticmethod
     def _intersections_with_horizontal(
-        pts: List[Tuple[float, float]],
+        pts: list[tuple[float, float]],
         N0: float,
         tol: float = 1e-9,
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Intersect a polyline (M,N) with the horizontal line N=N0.
         Returns list of M values where intersections occur.
         """
-        Ms: List[float] = []
+        Ms: list[float] = []
         if len(pts) < 2:
             return Ms
 
@@ -2431,7 +2437,7 @@ class MNInteractionDiagram:
 
         # De-duplicate within tolerance (important around vertices)
         Ms.sort()
-        out: List[float] = []
+        out: list[float] = []
         for m in Ms:
             if not out or abs(m - out[-1]) > 1e-7:  # moment tolerance in kN·m
                 out.append(m)
@@ -2443,7 +2449,7 @@ class MNInteractionDiagram:
         N_Ed: float,
         *,
         n_points: int = 160,
-    ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    ) -> tuple[float | None, float | None, float | None]:
         """
         Horizontal-line capacity at fixed axial force.
 
@@ -2496,7 +2502,7 @@ class MNInteractionDiagram:
     def get_diagram_arrays(
         self,
         n_points: int = 120,
-    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         pts = self.generate_diagram_points(n_points=n_points)
         N = np.array([p.N for p in pts], dtype=float)
         M = np.array([p.M for p in pts], dtype=float)
@@ -2511,7 +2517,7 @@ class MNInteractionDiagram:
         indent: int = 2,
     ) -> None:
         points = self.generate_diagram_points(n_points=n_points)
-        data: Dict[str, Any] = {"diagram_points": [p.to_dict() for p in points]}
+        data: dict[str, Any] = {"diagram_points": [p.to_dict() for p in points]}
 
         if include_metadata:
             data["metadata"] = {
@@ -2565,9 +2571,9 @@ class MNInteractionDiagram:
         self,
         n_points: int = 120,
         include_metadata: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         points = self.generate_diagram_points(n_points=n_points)
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "points": [p.to_dict() for p in points],
             "N_array": [p.N for p in points],
             "M_array": [p.M for p in points],
@@ -2594,13 +2600,13 @@ class MNInteractionDiagram:
     def plot_mn(
         self,
         *,
-        load_points: Optional[List[Dict[str, Any]]] = None,
+        load_points: list[dict[str, Any]] | None = None,
         show_vectors: bool = False,
         show_metadata: bool = True,
         n_points: int = 120,
-        save_path: Optional[str | Path] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 900,
         height: int = 700,
     ) -> Any:
@@ -2655,7 +2661,7 @@ class MNInteractionDiagram:
         N_Ed: float,
         *,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1200,
         height: int = 1000,
         section_render: Literal["points", "filled"] = "points",
@@ -2741,18 +2747,18 @@ class MNInteractionDiagram:
         M_Ed: float,
         V_Ed: float,
         N_Ed: float = 0.0,
-        M_cap: Optional[float] = None,
-        shear_reinforcement: Optional["ShearRebar"] = None,
-        cot_theta_override: Optional[float] = None,
+        M_cap: float | None = None,
+        shear_reinforcement: ShearRebar | None = None,
+        cot_theta_override: float | None = None,
         use_v_rd_s_for_cot_theta: bool = False,
-        cot_max_override: Optional[float] = None,
+        cot_max_override: float | None = None,
         iterate_z: bool = False,
         use_mechanical_lever_arm: bool = False,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
         z_d_approx: float = 0.9,
         warn_on_fallback: bool = False,
-    ) -> "TensionShiftResult":
+    ) -> TensionShiftResult:
         """
         Apply EC2 §9.2.1.3 tension shift rule to a bending moment.
 
@@ -2804,8 +2810,8 @@ class MNInteractionDiagram:
         """
         # Local imports to avoid circular dependencies
         from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
-            calculate_tension_shift,
             calculate_section_breadth,
+            calculate_tension_shift,
         )
 
         M_Ed_original = float(M_Ed)
@@ -2823,15 +2829,15 @@ class MNInteractionDiagram:
         )
 
         # Compute parameters needed for shear reinforcement case
-        b_w: Optional[float] = None
-        f_cd: Optional[float] = None
-        f_ck: Optional[float] = None
+        b_w: float | None = None
+        f_cd: float | None = None
+        f_ck: float | None = None
         sigma_cp: float = 0.0
 
         if shear_reinforcement is not None:
             from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
-                sigma_cp_from_N_and_area,
                 cap_sigma_cp_upper,
+                sigma_cp_from_N_and_area,
             )
             b_w = calculate_section_breadth(section=self.section)
             f_cd = self.concrete.f_cd

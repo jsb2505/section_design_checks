@@ -30,28 +30,28 @@ Axis Convention (3D FEA standard):
 
 from __future__ import annotations
 
-from typing import List, Optional, Dict, Any, Tuple
-import json
 import csv
+import json
 from pathlib import Path
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from scipy.optimize import brentq
 from scipy.spatial import ConvexHull
 
-from materials.utils.helpers import as_float
 from materials.core.units import ForceUnit, MomentUnit, to_kn, to_knm
-
-from materials.reinforced_concrete.geometry import RCSection, FibreMesh
 from materials.reinforced_concrete.constitutive import (
-    create_concrete_stress_strain,
-    create_steel_stress_strain,
-    SteelModelType,
     ConcreteModelType,
     ConcreteStressStrainLinearElastic,
+    SteelModelType,
+    create_concrete_stress_strain,
+    create_steel_stress_strain,
 )
+from materials.reinforced_concrete.geometry import FibreMesh, RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial
+from materials.utils.helpers import as_float
 
 
 class BiaxialInteractionPoint(BaseModel):
@@ -79,7 +79,7 @@ class BiaxialInteractionPoint(BaseModel):
     def __repr__(self) -> str:
         return f"BiaxialPoint(N={self.N:.1f} kN, My={self.My:.1f} kN·m, Mz={self.Mz:.1f} kN·m)"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Export biaxial interaction point to dictionary."""
         return {
             "N": self.N,
@@ -155,11 +155,11 @@ class BiaxialMNInteractionSurface:
         use_characteristic: bool = False,
         use_accidental: bool = False,
         confined_concrete: bool = False,
-        confinement_rho_s: Optional[float] = None,
-        confinement_f_yh: Optional[float] = None,
+        confinement_rho_s: float | None = None,
+        confinement_f_yh: float | None = None,
         confinement_eps_su: float = 0.10,
         ignore_compression_steel: bool = False,
-        elastic_modulus: Optional[float] = None,
+        elastic_modulus: float | None = None,
         include_tension: bool = False,
         crack_to_neutral_axis_on_first_tension_failure: bool = True,
     ):
@@ -280,8 +280,8 @@ class BiaxialMNInteractionSurface:
         self.section_height = max_y - min_y
 
         # Multi-tier cache for generated surfaces
-        self._dense_surface_points: Optional[tuple[BiaxialInteractionPoint, ...]] = None
-        self._dense_params: Optional[tuple[int, int]] = None
+        self._dense_surface_points: tuple[BiaxialInteractionPoint, ...] | None = None
+        self._dense_params: tuple[int, int] | None = None
         self._surface_cache: dict[tuple[int, int], tuple[BiaxialInteractionPoint, ...]] = {}
         self._hull_cache: dict[tuple[int, int], ConvexHull] = {}
         self._grid_indices: list[tuple[int, int]] = []
@@ -310,7 +310,7 @@ class BiaxialMNInteractionSurface:
     # Concrete stress with options
     # ----------------------------
 
-    def _confined_strength_and_peak_strain(self) -> Tuple[float, float]:
+    def _confined_strength_and_peak_strain(self) -> tuple[float, float]:
         """Mander confined characteristic strength f_cc,k and peak strain eps_cc."""
         assert self.confinement_rho_s is not None
         assert self.confinement_f_yh is not None
@@ -448,7 +448,7 @@ class BiaxialMNInteractionSurface:
         mz_target: float = 0.0,
         n_angles: int = 72,
         n_axial_levels: int = 30,
-    ) -> List[Tuple[float, float]]:
+    ) -> list[tuple[float, float]]:
         """
         Extract a 2D M-N curve by slicing the 3D convex hull at a fixed Mz value.
 
@@ -473,7 +473,7 @@ class BiaxialMNInteractionSurface:
         vertices = hull.points  # shape (n_pts, 3): columns are [N, My, Mz]
 
         # Collect intersection segments in (N, My) space
-        segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+        segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
 
         for simplex in hull.simplices:
             # simplex is a triangle (3 vertex indices)
@@ -481,7 +481,7 @@ class BiaxialMNInteractionSurface:
             mz_vals = tri[:, 2]  # Mz column
 
             # Find which edges cross the plane Mz = mz_target
-            edge_points: List[Tuple[float, float]] = []
+            edge_points: list[tuple[float, float]] = []
 
             for i0, i1 in [(0, 1), (1, 2), (2, 0)]:
                 mz0, mz1 = mz_vals[i0], mz_vals[i1]
@@ -504,7 +504,7 @@ class BiaxialMNInteractionSurface:
                     edge_points.append((float(pt[1]), float(pt[0])))  # (My, N)
 
             # De-duplicate edge points within tolerance
-            unique_pts: List[Tuple[float, float]] = []
+            unique_pts: list[tuple[float, float]] = []
             for p in edge_points:
                 if not any(abs(p[0] - u[0]) < 1e-9 and abs(p[1] - u[1]) < 1e-9 for u in unique_pts):
                     unique_pts.append(p)
@@ -516,12 +516,12 @@ class BiaxialMNInteractionSurface:
             return []
 
         # Order segments into a closed polygon by angle from centroid
-        all_points: List[Tuple[float, float]] = []
+        all_points: list[tuple[float, float]] = []
         for s in segments:
             all_points.extend(s)
 
         # De-duplicate
-        unique_all: List[Tuple[float, float]] = []
+        unique_all: list[tuple[float, float]] = []
         for p in all_points:
             if not any(abs(p[0] - u[0]) < 1e-6 and abs(p[1] - u[1]) < 1e-6 for u in unique_all):
                 unique_all.append(p)
@@ -553,11 +553,11 @@ class BiaxialMNInteractionSurface:
         N_Ed: float,
         My_Ed: float,
         Mz_Ed: float,
-        surface_points: Optional[List[BiaxialInteractionPoint]] = None,
-        hull: Optional[ConvexHull] = None,
+        surface_points: list[BiaxialInteractionPoint] | None = None,
+        hull: ConvexHull | None = None,
         n_angles: int = 72,
         n_axial_levels: int = 30,
-    ) -> Tuple[bool, float]:
+    ) -> tuple[bool, float]:
         """
         Check capacity using exact ray-to-surface intersection via convex hull.
 
@@ -580,11 +580,11 @@ class BiaxialMNInteractionSurface:
         N_Ed: float,
         My_Ed: float,
         Mz_Ed: float,
-        surface_points: Optional[List[BiaxialInteractionPoint]] = None,
-        hull: Optional[ConvexHull] = None,
+        surface_points: list[BiaxialInteractionPoint] | None = None,
+        hull: ConvexHull | None = None,
         n_angles: int = 72,
         n_axial_levels: int = 30,
-    ) -> Tuple[Optional[float], Optional[float], Optional[float], bool, float]:
+    ) -> tuple[float | None, float | None, float | None, bool, float]:
         """
         Get exact capacity point using convex hull intersection (ray-plane with triangles).
         """
@@ -644,11 +644,11 @@ class BiaxialMNInteractionSurface:
         N_Ed: float,
         My_Ed: float,
         Mz_Ed: float,
-        surface_points: Optional[List[BiaxialInteractionPoint]] = None,
-        hull: Optional[ConvexHull] = None,
+        surface_points: list[BiaxialInteractionPoint] | None = None,
+        hull: ConvexHull | None = None,
         n_angles: int = 72,
         n_axial_levels: int = 30,
-    ) -> Tuple[Optional[float], Optional[float], Optional[float], bool, float]:
+    ) -> tuple[float | None, float | None, float | None, bool, float]:
         """
         Backwards-compatible wrapper for get_capacity_vector_exact.
         """
@@ -1007,8 +1007,8 @@ class BiaxialMNInteractionSurface:
         self,
         n_angles: int = 36,
         n_axial_levels: int = 20,
-        n_dense_angles: Optional[int] = None,
-        n_dense_axial: Optional[int] = None,
+        n_dense_angles: int | None = None,
+        n_dense_axial: int | None = None,
     ) -> tuple[BiaxialInteractionPoint, ...]:
         """
         Generate M-M-N surface using PIVOT METHOD with oversample + downsample.
@@ -1122,14 +1122,14 @@ class BiaxialMNInteractionSurface:
 
     def plot(
         self,
-        load_points: Optional[List[Dict[str, Any]]] = None,
+        load_points: list[dict[str, Any]] | None = None,
         show_vectors: bool = False,
         show_metadata: bool = True,
         n_angles: int = 36,
         n_axial_levels: int = 20,
-        save_path: Optional[str] = None,
+        save_path: str | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
     ) -> Any:
         """
         Plot biaxial M-M-N interaction surface with optional load points using Plotly.
@@ -1148,7 +1148,9 @@ class BiaxialMNInteractionSurface:
         Returns:
             Plotly Figure object
         """
-        from materials.reinforced_concrete.analysis.biaxial_interaction_viewer import BiaxialInteractionViewer
+        from materials.reinforced_concrete.analysis.biaxial_interaction_viewer import (
+            BiaxialInteractionViewer,
+        )
 
         viewer = BiaxialInteractionViewer(self)
         return viewer.plot(
@@ -1173,7 +1175,7 @@ class BiaxialMNInteractionSurface:
         """Export biaxial M-M-N surface to JSON file."""
         points = self.generate_surface_pivot(n_angles=n_angles, n_axial_levels=n_axial_levels)
 
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "surface_points": [p.to_dict() for p in points],
         }
 

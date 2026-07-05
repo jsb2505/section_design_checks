@@ -3,12 +3,14 @@ Rebar (reinforcing bar) with geometry and material properties.
 """
 
 import warnings
-from typing import Final, Optional
-from math import pi, sin, radians
+from math import pi, radians, sin
+from typing import Final
+
 from pydantic import Field, computed_field, field_validator
+
+from materials.core.units import LENGTH_TO_MM, LengthUnit
 from materials.reinforced_concrete.materials.reinforcing_steel import ReinforcingSteel
 from materials.utils.helpers import cot
-from materials.core.units import LengthUnit, LENGTH_TO_MM
 
 # Standard bar diameters in mm (EC2 common practice) - single source of truth
 STANDARD_BAR_DIAMETERS: Final = (6, 8, 10, 12, 16, 20, 25, 28, 32, 40)
@@ -34,7 +36,7 @@ class Rebar(ReinforcingSteel):
     def perimeter(self) -> float:
         """Perimeter (mm): P = π d."""
         return pi * float(self.diameter)
-    
+
     @computed_field
     @property
     def mass_per_metre(self) -> float:
@@ -45,12 +47,12 @@ class Rebar(ReinforcingSteel):
         mm_per_m = LENGTH_TO_MM[LengthUnit.M]
         area_m2 = self.area / mm_per_m ** 2
         return area_m2 * self.density
-    
+
     @property
     def is_standard(self) -> bool:
         """Checks if the chosen diameter is a standard Eurocode size."""
         return self.diameter in STANDARD_BAR_DIAMETERS
-    
+
     @field_validator("diameter")
     @classmethod
     def check_standard_size(cls, v: float) -> float:
@@ -73,7 +75,7 @@ class ShearRebar(Rebar):
         description="Longitudinal link spacing along member axis (or pitch if spiral) (mm)",
         gt=0,
     )
-    leg_spacing: Optional[float] = Field(
+    leg_spacing: float | None = Field(
         default=None,
         description="Transverse spacing between shear legs across section width (mm)",
         gt=0,
@@ -127,7 +129,7 @@ class ShearRebar(Rebar):
     def max_leg_spacing(self, effective_depth: float) -> float:
         """
         EC2 §9.2.2(8): s_t,max = min(600 mm, 0.75 d).
-        
+
         Note:
             This is an NDP. This function is the base EC2 version.
         """

@@ -12,31 +12,23 @@ plots are not included.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from materials.core.units import ForceUnit, to_kn
-from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
-    calculate_tension_shift,
-    find_alpha_cw,
-    find_nu_1_factor,
-    find_V_Rd_c_cracked,
-    sigma_cp_from_N_and_area,
-    cap_sigma_cp_upper,
-)
 from materials.reinforced_concrete.analysis.shear_viewer import (
+    _as_load_case,
     _axis_centers_from_edges,
     _build_axial_moment_plot_domain,
     _build_axis_edges,
     _build_horizontal_clip_masks,
-    _build_outside_clip_masks,
-    _as_load_case,
-    _build_slider_animation_controls,
     _build_nice_force_slider_values,
+    _build_outside_clip_masks,
+    _build_slider_animation_controls,
     _build_slider_values,
     _format_slider_numeric_label,
     _get_closed_mn_polyline,
@@ -45,6 +37,15 @@ from materials.reinforced_concrete.analysis.shear_viewer import (
     _show_or_save,
     _subdivide_axis,
     _utilization_colorscale,
+)
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
+    calculate_tension_shift,
+    cap_sigma_cp_upper,
+    find_alpha_cw,
+    find_nu_1_factor,
+    find_V_Rd_c_cracked,
+    sigma_cp_from_N_and_area,
 )
 
 if TYPE_CHECKING:
@@ -91,13 +92,13 @@ class _CircularCotThetaStudySeries:
     M_add_vals: list[float]
     V_Rd_s_design: float
     V_Rd_max_design: float
-    cot_intersection: Optional[float]
+    cot_intersection: float | None
 
 
 class CircularShearViewer:
     """Plotting utilities for ``CircularSectionCheck`` shear studies."""
 
-    def __init__(self, check: "CircularSectionCheck") -> None:
+    def __init__(self, check: CircularSectionCheck) -> None:
         self.check = check
 
     def _require_shear_reinforcement(self) -> None:
@@ -106,7 +107,7 @@ class CircularShearViewer:
 
     def _resolve_plot_diagram(
         self,
-    ) -> "MNInteractionDiagram":
+    ) -> MNInteractionDiagram:
         """Return the default cached interaction diagram for plotting."""
         shear_check = self.check._shear_check
         assert shear_check is not None
@@ -118,7 +119,7 @@ class CircularShearViewer:
         load_case: LoadCase,
         use_uncracked_V_Rd_c: bool = False,
         ignore_compression_steel: bool = False,
-        diagram: Optional["MNInteractionDiagram"] = None,
+        diagram: MNInteractionDiagram | None = None,
     ) -> _CircularStudyContext:
         """Compute shared parameters for a load case once."""
         V_Ed = abs(float(load_case.V_Ed))
@@ -130,8 +131,8 @@ class CircularShearViewer:
         assert self.check._concrete_uls is not None
 
         # 1. Solve strains once
-        eps_top: Optional[float]
-        eps_bottom: Optional[float]
+        eps_top: float | None
+        eps_bottom: float | None
         if abs(M_Ed) > 1e-6:
             interaction_diagram = diagram
             if interaction_diagram is None:
@@ -254,7 +255,7 @@ class CircularShearViewer:
         x_vals: np.ndarray,
         y_a_vals: Sequence[float],
         y_b_vals: Sequence[float],
-    ) -> Optional[float]:
+    ) -> float | None:
         """Return first x-position where two sampled curves intersect."""
         diff = np.asarray(y_a_vals, dtype=float) - np.asarray(y_b_vals, dtype=float)
         if diff.size < 2:
@@ -278,10 +279,10 @@ class CircularShearViewer:
     def _compute_cot_theta_study_series(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
+        load_case: LoadCase | dict[str, Any],
         n_points: int,
-        cot_theta_min: Optional[float],
-        cot_theta_max: Optional[float],
+        cot_theta_min: float | None,
+        cot_theta_max: float | None,
         use_uncracked_V_Rd_c: bool,
     ) -> _CircularCotThetaStudySeries:
         """Compute reusable cot(theta) sweep values for plotting."""
@@ -360,14 +361,14 @@ class CircularShearViewer:
     def plot_cot_theta_study(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
+        load_case: LoadCase | dict[str, Any],
         n_points: int = 60,
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         use_uncracked_V_Rd_c: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1000,
         height: int = 560,
     ) -> Any:
@@ -567,14 +568,14 @@ class CircularShearViewer:
     def plot_cot_theta_moment_shift_study(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
+        load_case: LoadCase | dict[str, Any],
         n_points: int = 60,
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         use_uncracked_V_Rd_c: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1000,
         height: int = 560,
     ) -> Any:
@@ -706,18 +707,18 @@ class CircularShearViewer:
     def plot_force_cot_theta_contour(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
+        load_case: LoadCase | dict[str, Any],
         n_axial: int = 31,
         n_moment: int = 31,
         moment_on_y_axis: bool = False,
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         n_cot: int = 40,
         metric: str = "utilization",
         use_uncracked_V_Rd_c: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 980,
         height: int = 760,
     ) -> Any:
@@ -805,7 +806,7 @@ class CircularShearViewer:
         display_y_edges = _subdivide_axis(y_edges, display_oversample)
         display_y_vals = _axis_centers_from_edges(display_y_edges)
 
-        context_grid: list[list[Optional[_CircularStudyContext]]] = [
+        context_grid: list[list[_CircularStudyContext | None]] = [
             [None for _ in range(len(y_vals))]
             for _ in range(len(slider_vals))
         ]
@@ -1145,18 +1146,18 @@ class CircularShearViewer:
         self,
         *,
         V_Ed: float,
-        loadcases: Optional[Sequence[Union[Dict[str, Any], Sequence[float]]]] = None,
+        loadcases: Sequence[dict[str, Any] | Sequence[float]] | None = None,
         n_diagram_points: int = 120,
         n_moment: int = 41,
         n_axial: int = 31,
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         n_cot: int = 20,
-        cot_theta_step: Optional[float] = 0.05,
+        cot_theta_step: float | None = 0.05,
         use_uncracked_V_Rd_c: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1000,
         height: int = 760,
     ) -> Any:
@@ -1199,7 +1200,7 @@ class CircularShearViewer:
         )
         plotted_loadcases = _normalize_mn_loadcases(loadcases)
 
-        context_grid: list[list[Optional[_CircularStudyContext]]] = [
+        context_grid: list[list[_CircularStudyContext | None]] = [
             [None for _ in range(len(plot_domain.m_vals))]
             for _ in range(len(plot_domain.n_vals))
         ]

@@ -3,22 +3,22 @@ Reinforced concrete material definitions.
 """
 
 from materials.reinforced_concrete.materials.concrete import (
-    ConcreteMaterial,
-    ConcreteGrade,
     AggregateType,
+    ConcreteGrade,
+    ConcreteMaterial,
 )
 from materials.reinforced_concrete.materials.concrete_age import (
-    ConcreteAge,
     CementClass,
+    ConcreteAge,
+)
+from materials.reinforced_concrete.materials.rebar import (
+    STANDARD_BAR_DIAMETERS,
+    Rebar,
+    ShearRebar,
 )
 from materials.reinforced_concrete.materials.reinforcing_steel import (
     ReinforcingSteel,
     ReinforcingSteelGrade,
-)
-from materials.reinforced_concrete.materials.rebar import (
-    Rebar,
-    ShearRebar,
-    STANDARD_BAR_DIAMETERS,    
 )
 
 __all__ = [

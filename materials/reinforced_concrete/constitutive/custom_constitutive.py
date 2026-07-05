@@ -11,7 +11,7 @@ Sign convention follows EC2:
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import numpy as np
 import numpy.typing as npt
@@ -59,11 +59,11 @@ class CustomConcreteModel(BaseConstitutiveModel):
         description="User-supplied key for snapshot-based cache invalidation.",
     )
 
-    stress_array_fn: Optional[Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]] = Field(
+    stress_array_fn: Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]] | None = Field(
         default=None,
         description="Optional vectorized stress function for performance.",
     )
-    tangent_modulus_fn: Optional[Callable[[float], float]] = Field(
+    tangent_modulus_fn: Callable[[float], float] | None = Field(
         default=None,
         description="Optional analytical tangent modulus function for performance.",
     )
@@ -127,7 +127,7 @@ class CustomSteelModel(BaseConstitutiveModel):
     yield_stress: float = Field(
         ..., gt=0, description="Yield / characteristic stress (MPa)."
     )
-    epsilon_y: Optional[float] = Field(
+    epsilon_y: float | None = Field(
         default=None,
         description=(
             "Yield strain. Defaults to yield_stress / 200_000 if not provided."
@@ -138,17 +138,17 @@ class CustomSteelModel(BaseConstitutiveModel):
         description="User-supplied key for snapshot-based cache invalidation.",
     )
 
-    stress_array_fn: Optional[Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]] = Field(
+    stress_array_fn: Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]] | None = Field(
         default=None,
         description="Optional vectorized stress function for performance.",
     )
-    tangent_modulus_fn: Optional[Callable[[float], float]] = Field(
+    tangent_modulus_fn: Callable[[float], float] | None = Field(
         default=None,
         description="Optional analytical tangent modulus function for performance.",
     )
 
     @model_validator(mode="after")
-    def _set_default_epsilon_y(self) -> "CustomSteelModel":
+    def _set_default_epsilon_y(self) -> CustomSteelModel:
         if self.epsilon_y is None:
             self.epsilon_y = self.yield_stress / 200_000.0
         return self

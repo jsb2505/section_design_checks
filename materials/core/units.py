@@ -9,10 +9,10 @@ All calculations use SI base units internally:
 - Temperature: °C
 """
 
+from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import Literal, Mapping, Union
-
+from typing import Literal
 
 __all__ = [
     "LengthUnit",
@@ -136,7 +136,7 @@ MOMENT_TO_KNM: Mapping[MomentUnit, float] = MappingProxyType({
 
 # --- Conversion helper functions ---
 
-def to_mm(value: float, unit: Union[LengthUnit, str]) -> float:
+def to_mm(value: float, unit: LengthUnit | str) -> float:
     """Convert a length value to millimetres.
 
     Accepts a LengthUnit enum or its string value (e.g. ``"m"``).
@@ -145,7 +145,7 @@ def to_mm(value: float, unit: Union[LengthUnit, str]) -> float:
     return value * LENGTH_TO_MM[unit]
 
 
-def to_mpa(value: float, unit: Union[StressUnit, str]) -> float:
+def to_mpa(value: float, unit: StressUnit | str) -> float:
     """Convert a stress value to megapascals.
 
     Accepts a StressUnit enum or its string value (e.g. ``"GPa"``).
@@ -154,7 +154,7 @@ def to_mpa(value: float, unit: Union[StressUnit, str]) -> float:
     return value * STRESS_TO_MPA[unit]
 
 
-def to_kn(value: float, unit: Union[ForceUnit, str]) -> float:
+def to_kn(value: float, unit: ForceUnit | str) -> float:
     """Convert a force value to kilonewtons.
 
     Accepts a ForceUnit enum or its string value (e.g. ``"N"``).
@@ -163,7 +163,7 @@ def to_kn(value: float, unit: Union[ForceUnit, str]) -> float:
     return value * FORCE_TO_KN[unit]
 
 
-def to_knm(value: float, unit: Union[MomentUnit, str]) -> float:
+def to_knm(value: float, unit: MomentUnit | str) -> float:
     """Convert a moment value to kilonewton-metres.
 
     Accepts a MomentUnit enum or its string value (e.g. ``"N·m"``).
@@ -174,7 +174,7 @@ def to_knm(value: float, unit: Union[MomentUnit, str]) -> float:
 
 # --- Reverse conversion helper functions (from standard units) ---
 
-def from_mm(value: float, unit: Union[LengthUnit, str]) -> float:
+def from_mm(value: float, unit: LengthUnit | str) -> float:
     """Convert a length value from millimetres to the specified unit.
 
     Accepts a LengthUnit enum or its string value (e.g. ``"m"``).
@@ -183,7 +183,7 @@ def from_mm(value: float, unit: Union[LengthUnit, str]) -> float:
     return value / LENGTH_TO_MM[unit]
 
 
-def from_mpa(value: float, unit: Union[StressUnit, str]) -> float:
+def from_mpa(value: float, unit: StressUnit | str) -> float:
     """Convert a stress value from megapascals to the specified unit.
 
     Accepts a StressUnit enum or its string value (e.g. ``"GPa"``).
@@ -192,7 +192,7 @@ def from_mpa(value: float, unit: Union[StressUnit, str]) -> float:
     return value / STRESS_TO_MPA[unit]
 
 
-def from_kn(value: float, unit: Union[ForceUnit, str]) -> float:
+def from_kn(value: float, unit: ForceUnit | str) -> float:
     """Convert a force value from kilonewtons to the specified unit.
 
     Accepts a ForceUnit enum or its string value (e.g. ``"N"``).
@@ -201,7 +201,7 @@ def from_kn(value: float, unit: Union[ForceUnit, str]) -> float:
     return value / FORCE_TO_KN[unit]
 
 
-def from_knm(value: float, unit: Union[MomentUnit, str]) -> float:
+def from_knm(value: float, unit: MomentUnit | str) -> float:
     """Convert a moment value from kilonewton-metres to the specified unit.
 
     Accepts a MomentUnit enum or its string value (e.g. ``"N·m"``).
