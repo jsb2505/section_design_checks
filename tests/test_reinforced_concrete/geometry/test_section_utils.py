@@ -7,12 +7,34 @@ import pytest
 from materials.reinforced_concrete.geometry import (
     create_box_section,
     create_channel_section,
+    create_circular_section,
     create_i_beam_section,
     create_inverted_t_beam_section,
+    create_rectangular_section,
     create_t_beam_section,
     create_trapezoidal_section,
     create_voided_deck_section,
 )
+
+
+class TestFactoryInputValidation:
+    """Public section factories must reject non-positive dimensions instead of
+    silently building a degenerate (zero/negative-area) section."""
+
+    @pytest.mark.parametrize("w,h", [(0.0, 500.0), (300.0, 0.0), (-10.0, 500.0), (300.0, -5.0)])
+    def test_rectangular_rejects_nonpositive(self, w, h):
+        with pytest.raises(ValueError, match="positive width and height"):
+            create_rectangular_section(width=w, height=h)
+
+    def test_circular_rejects_nonpositive_diameter(self):
+        with pytest.raises(ValueError, match="positive diameter"):
+            create_circular_section(diameter=0.0)
+        with pytest.raises(ValueError, match="positive diameter"):
+            create_circular_section(diameter=-100.0)
+
+    def test_circular_rejects_too_few_points(self):
+        with pytest.raises(ValueError, match="n_points"):
+            create_circular_section(diameter=400.0, n_points=2)
 
 
 def test_create_t_beam_section_geometry() -> None:

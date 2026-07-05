@@ -104,6 +104,12 @@ def create_rectangular_section(
         >>> # Section with bottom-left at (100, 50)
         >>> section = create_rectangular_section(300, 500, origin=(100, 50))
     """
+    if width <= 0.0 or height <= 0.0:
+        raise ValueError(
+            f"create_rectangular_section requires positive width and height, "
+            f"got width={width}, height={height}."
+        )
+
     x0, y0 = _resolve_hook_ref(width, height, origin, hook_ref)
 
     coords = [
@@ -157,6 +163,11 @@ def create_circular_section(
         >>> # Circle centred at (0, 0)
         >>> section = create_circular_section(400, hook_ref=0)
     """
+    if diameter <= 0.0:
+        raise ValueError(f"create_circular_section requires a positive diameter, got {diameter}.")
+    if n_points < 3:
+        raise ValueError(f"create_circular_section requires n_points >= 3, got {n_points}.")
+
     radius = diameter / 2.0
     # _resolve_hook_ref gives bottom-left of bounding box; centre = BL + radius
     x0, y0 = _resolve_hook_ref(diameter, diameter, origin, hook_ref)
