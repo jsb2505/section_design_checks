@@ -21,7 +21,7 @@ This avoids discontinuities while not creating a post-crushing plateau.
 
 from __future__ import annotations
 
-from typing import Literal
+from enum import StrEnum
 
 import numpy as np
 import numpy.typing as npt
@@ -31,7 +31,10 @@ from materials.core.constitutive import BaseConstitutiveModel
 from materials.reinforced_concrete.materials.concrete import ConcreteMaterial
 
 
-ConcreteModelType = Literal["schematic", "parabola-rectangle", "bilinear"]
+class ConcreteModelType(StrEnum):
+    SCHEMATIC = "schematic"
+    PARABOLA_RECTANGLE = "parabola-rectangle"
+    BILINEAR = "bilinear"
 
 
 def _apply_ultimate_tolerance_clip(
@@ -101,10 +104,12 @@ class ConcreteStressStrainSchematic(BaseConstitutiveModel):
         description="Tolerance for ultimate strain clipping (dimensionless strain).",
     )
 
+
     @property
     def k(self) -> float:
         """k = 1.05 · E_cm · |ε_c1| / f_cm"""
         return 1.05 * self.concrete.E_cm * abs(self.concrete.epsilon_c1) / self.concrete.f_cm
+
 
     @model_validator(mode="after")
     def validate_parameters(self) -> "ConcreteStressStrainSchematic":
@@ -115,6 +120,7 @@ class ConcreteStressStrainSchematic(BaseConstitutiveModel):
         if self.concrete.epsilon_cu1 <= 0:
             raise ValueError(f"Concrete epsilon_cu1 must be > 0, got {self.concrete.epsilon_cu1}")
         return self
+
 
     def get_stress(self, strain: float) -> float:
         """
@@ -148,6 +154,7 @@ class ConcreteStressStrainSchematic(BaseConstitutiveModel):
 
         stress = self.concrete.f_cm * numerator / denominator
         return max(0.0, float(stress))
+
 
     def get_stress_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """Vectorized stress calculation."""
@@ -184,9 +191,11 @@ class ConcreteStressStrainSchematic(BaseConstitutiveModel):
 
         return np.maximum(0.0, stresses)
 
+
     def get_ultimate_strain(self) -> float:
         """Return ultimate strain."""
         return float(self.concrete.epsilon_cu1)
+
 
     def get_yield_stress(self) -> float:
         """Return peak stress (mean strength)."""
@@ -232,6 +241,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         description="Tolerance for ultimate strain clipping (dimensionless strain).",
     )
 
+
     @property
     def f_c(self) -> float:
         """Design, characteristic, or accidental strength depending on flags."""
@@ -240,6 +250,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         if self.use_accidental:
             return self.concrete.f_cd_accidental
         return self.concrete.f_cd
+
 
     @model_validator(mode="after")
     def validate_parameters(self) -> "ConcreteStressStrainParabolaRectangle":
@@ -259,6 +270,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         if self.concrete.n <= 0:
             raise ValueError(f"Concrete exponent n must be > 0, got {self.concrete.n}")
         return self
+
 
     def get_stress(self, strain: float) -> float:
         """Calculate stress for given strain (compression positive)."""
@@ -280,6 +292,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         # Parabolic portion
         ratio = 1.0 - strain / self.concrete.epsilon_c2
         return float(self.f_c * (1.0 - ratio ** self.concrete.n))
+
 
     def get_stress_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """
@@ -328,13 +341,16 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
 
         return stresses
 
+
     def get_ultimate_strain(self) -> float:
         """Return ultimate strain."""
         return float(self.concrete.epsilon_cu2)
 
+
     def get_yield_stress(self) -> float:
         """Return design/characteristic strength."""
         return float(self.f_c)
+
 
     def get_tangent_modulus(self, strain: float) -> float:
         """
@@ -376,6 +392,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         ratio = 1.0 - strain / eps_c2
         E_t = self.f_c * n * (1.0 / eps_c2) * (ratio ** (n - 1))
         return float(E_t)
+
 
     def get_tangent_modulus_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """
@@ -531,7 +548,7 @@ class ConcreteStressStrainBilinear(BaseConstitutiveModel):
 
 def create_concrete_stress_strain(
     concrete: ConcreteMaterial,
-    model_type: ConcreteModelType = "parabola-rectangle",
+    model_type: ConcreteModelType = ConcreteModelType.PARABOLA_RECTANGLE,
     use_characteristic: bool = False,
     use_accidental: bool = False,
 ) -> BaseConstitutiveModel:
@@ -553,21 +570,23 @@ def create_concrete_stress_strain(
     Note:
         use_characteristic and use_accidental are mutually exclusive.
     """
-    if model_type == "schematic":
-        return ConcreteStressStrainSchematic(concrete=concrete)
+    match model_type:
+        case ConcreteModelType.SCHEMATIC:
+            return ConcreteStressStrainSchematic(concrete=concrete)
 
-    if model_type == "parabola-rectangle":
-        return ConcreteStressStrainParabolaRectangle(
-            concrete=concrete,
-            use_characteristic=use_characteristic,
-            use_accidental=use_accidental
-        )
-
-    if model_type == "bilinear":
-        return ConcreteStressStrainBilinear(
-            concrete=concrete,
-            use_characteristic=use_characteristic,
-            use_accidental=use_accidental
-        )
-
-    raise ValueError(f"Unknown model type: {model_type}")
+        case ConcreteModelType.PARABOLA_RECTANGLE:
+            return ConcreteStressStrainParabolaRectangle(
+                concrete=concrete,
+                use_characteristic=use_characteristic,
+                use_accidental=use_accidental
+            )
+        
+        case ConcreteModelType.BILINEAR:
+            return ConcreteStressStrainBilinear(
+                concrete=concrete,
+                use_characteristic=use_characteristic,
+                use_accidental=use_accidental
+            )
+        
+        case _:
+            raise ValueError(f"Unknown model type: {model_type}")

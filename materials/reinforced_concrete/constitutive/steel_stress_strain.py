@@ -8,7 +8,7 @@ Implements EC2 Fig 3.8 with options for:
 
 from __future__ import annotations
 
-from typing import Literal
+from enum import StrEnum
 
 import numpy as np
 import numpy.typing as npt
@@ -18,7 +18,9 @@ from materials.core.constitutive import BaseConstitutiveModel
 from materials.reinforced_concrete.materials.reinforcing_steel import ReinforcingSteel
 
 
-SteelModelType = Literal["inclined", "horizontal"]
+class SteelModelType(StrEnum):
+    INCLINED = "inclined"
+    HORIZONTAL = "horizontal"
 
 
 class SteelStressStrainEC2(BaseConstitutiveModel):
@@ -50,7 +52,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
     )
 
     branch_type: SteelModelType = Field(
-        default="inclined",
+        default=SteelModelType.INCLINED,
         description="Top branch type (inclined=strain hardening, horizontal=perfectly plastic)"
     )
 
@@ -69,6 +71,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         description="Model name"
     )
 
+
     @property
     def f_y(self) -> float:
         """Yield strength (design, characteristic, or accidental)."""
@@ -78,10 +81,12 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
             return self.steel.f_yd_accidental
         return self.steel.f_yd
 
+
     @property
     def epsilon_y(self) -> float:
         """Yield strain corresponding to f_y."""
         return self.f_y / self.steel.E_s
+
 
     @model_validator(mode="after")
     def validate_strain_limits(self) -> "SteelStressStrainEC2":
@@ -102,6 +107,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
                     f"epsilon_ud ({self.steel.epsilon_ud:g}) must be > epsilon_y ({self.epsilon_y:g})."
                 )
         return self
+
 
     def get_stress(self, strain: float) -> float:
         """
@@ -132,6 +138,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         strain_ratio = (clipped - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
         stress = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
         return sign * stress
+
 
     def get_stress_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """
@@ -186,6 +193,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
 
         return stresses
 
+
     def get_ultimate_strain(self) -> float:
         """
         Return ultimate strain limit used by the model.
@@ -195,9 +203,11 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         """
         return float("inf") if self.branch_type == "horizontal" else float(self.steel.epsilon_ud)
 
+
     def get_yield_stress(self) -> float:
         """Return yield strength used by the model."""
         return float(self.f_y)
+
 
     def get_tangent_modulus(self, strain: float) -> float:
         """
@@ -240,6 +250,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         E_hardening = (self.steel.f_t - self.f_y) / (self.steel.epsilon_ud - self.epsilon_y)
         return float(E_hardening)  # Typically ~1000-2000 MPa
 
+
     def get_tangent_modulus_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """
         Vectorized tangent modulus calculation.
@@ -278,6 +289,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
 
         return E_t
 
+
     def get_stress_tension_only(self, strain: float) -> float:
         """
         Calculate stress for tension only (ignores compression).
@@ -291,6 +303,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         if strain <= 0.0:
             return 0.0
         return self.get_stress(strain)
+
 
     def get_stress_compression_only(self, strain: float) -> float:
         """
@@ -309,7 +322,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
 
 def create_steel_stress_strain(
     steel: ReinforcingSteel,
-    branch_type: SteelModelType = "inclined",
+    branch_type: SteelModelType = SteelModelType.INCLINED,
     use_characteristic: bool = False,
     use_accidental: bool = False,
 ) -> SteelStressStrainEC2:

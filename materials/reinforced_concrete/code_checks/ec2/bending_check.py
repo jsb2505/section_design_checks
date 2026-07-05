@@ -2,10 +2,11 @@
 Bending (flexure) check using M-N interaction diagrams.
 
 This is a FIRST PRINCIPLES check based on strain compatibility and force equilibrium.
-Uses the fiber-based M-N interaction diagram infrastructure.
+Uses the fibre-based M-N interaction diagram infrastructure.
 """
 
-from typing import Literal, Optional
+from typing import Optional
+from math import copysign
 from pydantic import Field, PrivateAttr
 import numpy as np
 
@@ -13,11 +14,12 @@ from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
     CheckResult,
 )
+from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
 from materials.reinforced_concrete.analysis import create_interaction_diagram
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
-from materials.reinforced_concrete.code_checks.ec2.shear_utils import find_cot_theta_for_V_Ed
+import materials.reinforced_concrete.code_checks.ec2.shear_utils as shear_utils
 
 
 class BendingCheck(BaseCodeCheck):
@@ -30,7 +32,7 @@ class BendingCheck(BaseCodeCheck):
     3. Constitutive models (stress-strain with codified factors γ_c, γ_s)
 
     The M-N diagram already handles:
-    - Fiber-based integration
+    - fibre-based integration
     - Design strengths (f_cd, f_yd)
     - Ultimate limit state strains
     - Stress-strain models per EC2 Figs 3.2-3.8
@@ -40,8 +42,8 @@ class BendingCheck(BaseCodeCheck):
         concrete: Concrete material (with γ_c factor)
         concrete_model_type: EC2 constitutive model to use
         steel_branch_type: Steel post-yield behaviour
-        n_fibers_width: Mesh resolution (width)
-        n_fibers_height: Mesh resolution (height)
+        n_fibres_width: Mesh resolution (width)
+        n_fibres_height: Mesh resolution (height)
 
     Example:
         >>> from materials.reinforced_concrete.geometry import create_rectangular_section
@@ -71,35 +73,46 @@ class BendingCheck(BaseCodeCheck):
         description="Concrete material (γ_c applied to get f_cd)",
     )
 
-    concrete_model_type: Literal["parabola-rectangle", "bilinear", "schematic"] = Field(
-        default="parabola-rectangle",
+    concrete_model_type: ConcreteModelType = Field(
+        default=ConcreteModelType.PARABOLA_RECTANGLE,
         description="EC2 concrete stress-strain model (Fig 3.3, 3.4, 3.2)",
     )
 
-    steel_branch_type: Literal["horizontal", "inclined"] = Field(
-        default="inclined",
+    steel_branch_type: SteelModelType = Field(
+        default=SteelModelType.INCLINED,
         description="Steel post-yield behaviour (Fig 3.8)",
     )
 
-    n_fibers_width: int = Field(
+    n_fibres_width: int = Field(
         default=20,
-        description="Number of concrete fibers across width",
+        description="Number of concrete fibres across width",
         ge=10,
         le=500,
     )
 
-    n_fibers_height: int = Field(
+    n_fibres_height: int = Field(
         default=30,
-        description="Number of concrete fibers across height",
+        description="Number of concrete fibres across height",
         ge=10,
         le=500,
     )
+
+
+    # ===========================
+    # Limit state factors
+    # ===========================
+
+    use_accidental: bool = Field(
+        default=False,
+        description="Use accidental limit state partial factors (gamma_c_accidental, gamma_s_accidental)",
+    )
+
 
     # ===========================
     # Internal state (private)
     # ===========================
 
-    _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
+    _diagram: MNInteractionDiagram = PrivateAttr()
 
     def model_post_init(self, __context):
         """
@@ -116,9 +129,30 @@ class BendingCheck(BaseCodeCheck):
             concrete=self.concrete,
             concrete_model_type=self.concrete_model_type,
             steel_branch_type=self.steel_branch_type,
-            n_fibers_width=self.n_fibers_width,
-            n_fibers_height=self.n_fibers_height,
+            n_fibres_width=self.n_fibres_width,
+            n_fibres_height=self.n_fibres_height,
+            use_accidental=self.use_accidental,
         )
+
+        # cached properties to save time later
+        self._A_transformed = self.section.get_transformed_area(self.concrete.E_cm)  # mm²
+        self._A_gross = self.section.get_area()  # mm²
+
+
+    # ===============================================
+    # Properties (immutable - don't depend on loads)
+    # ===============================================
+
+    @property
+    def f_cd_design(self) -> float:
+        """Design concrete strength (accidental or persistent) in MPa."""
+        return self.concrete.f_cd_accidental if self.use_accidental else self.concrete.f_cd
+
+    @property  # TODO needed?
+    def gamma_c_design(self) -> float:
+        """Partial factor for concrete (accidental or persistent)."""
+        return self.concrete.gamma_c_accidental if self.use_accidental else self.concrete.gamma_c
+
 
     def perform_check(
         self,
@@ -178,13 +212,12 @@ class BendingCheck(BaseCodeCheck):
         # Apply tension shift rule if requested
         M_Ed_original = M_Ed
         M_add = 0.0
-        z_lever_arm = None
-        cot_theta_used = None
+        z_ec2 = None
+        cot_theta = None
         shift_distance_a_l = None
 
         if apply_tension_shift and V_Ed is not None:
             # Use diagram methods to calculate effective depth and lever arm
-            assert self._diagram is not None, "Diagram should be initialized in model_post_init"
 
             # Solve strains once if it helps (moment is what determines compression face)
             if abs(M_Ed_original) > 1e-6:
@@ -200,7 +233,7 @@ class BendingCheck(BaseCodeCheck):
                 eps_bottom=eps_bottom,
             )
 
-            z_lever_arm, _ = self._diagram.get_lever_arm(
+            z_ec2, _ = self._diagram.get_lever_arm(
                 M_Ed=M_Ed_original,
                 N_Ed=N_Ed,
                 d=d,
@@ -213,54 +246,59 @@ class BendingCheck(BaseCodeCheck):
 
             if shear_reinforcement is not None:
                 # With shear reinforcement - calculate cot_theta from V_Ed
-                # Need to import and use ShearCheck's method for calculating cot_theta
-                from materials.reinforced_concrete.code_checks.ec2.shear_check import ShearCheck
+                
+                f_cd = self.f_cd_design  # N/mm²
 
-                # Create temporary shear check instance just for cot_theta calculation
-                temp_shear_check = ShearCheck(
-                    section=self.section,
-                    concrete=self.concrete,
-                    shear_reinforcement=shear_reinforcement,
-                )
+                # Hard-coded using transformed area and allowing negative N_Ed into Sigma_cp calculation
+                sigma_cp_uncapped = shear_utils.sigma_cp_from_N_and_area(N_Ed=N_Ed, A_mm2=self._A_transformed)  # N/mm²
+                sigma_cp = shear_utils.cap_sigma_cp_upper(sigma_cp=sigma_cp_uncapped, f_cd=f_cd)  # N/mm²
 
-                # Estimate sigma_cp
-                sigma_cp = 0.0  # Conservative assumption TODO update this
-                if N_Ed > 0:  # Compression
-                    # Rough estimate: σ_cp = N_Ed / A_c
-                    A_c = self.section.get_area()  # mm² TODO update this
-                    sigma_cp = (N_Ed * 1000) / A_c  # Convert kN to N, get MPa TODO update this
+                alpha_cw = shear_utils.find_alpha_cw(f_cd=f_cd, sigma_cp=sigma_cp)
+                nu = shear_utils.find_nu_factor(f_ck=self.concrete.f_ck)
+                b_w = shear_utils.calculate_section_breadth(section=self.section)  # mm
 
-                # TODO calculate K for cot_theta
-                K =
+                # K = alpha_cw * b_w * z * nu * f_cd
+                K = alpha_cw * b_w * z_ec2 * nu * f_cd 
 
-                # Calculate optimal cot_theta from V_Ed
-                cot_theta_used = find_cot_theta_for_V_Ed(
+                # Calculate optimal cot_theta from V_Ed. Is clamped to [1.0, 2.5] internally
+                cot_theta = shear_utils.find_cot_theta_for_V_Ed(
                     V_Ed=V_Ed,
                     K=K,
                     link_angle_degrees=shear_reinforcement.angle
                 )
 
                 # EC2 §9.2.1.3(2): a_l = 0.5 · z · cot(θ) for vertical links
-                shift_distance_a_l = 0.5 * z_lever_arm * cot_theta_used
+                shift_distance_a_l = 0.5 * z_ec2 * cot_theta
             else:
                 # Without shear reinforcement - use a_l = d
                 # EC2 §9.2.1.3(2): For members without shear reinforcement, a_l = d
                 shift_distance_a_l = d
-                cot_theta_used = None  # Not applicable without shear reinforcement
+                cot_theta = None  # Not applicable without shear reinforcement
 
             # Calculate additional moment from shear
             # M_add = V_Ed · a_l (shift distance)
             # Convert: V_Ed in kN, a_l in mm -> M_add in kN·m
-            M_add = abs(V_Ed) * shift_distance_a_l / 1000.0  # Convert mm to m
+            
+            # 1. Calculate the additive moment magnitude
+            # V_Ed should be absolute as the shift is always additive to the demand
+            M_add = abs(V_Ed) * (shift_distance_a_l / 1000.0)
 
-            # Apply moment cap
-            M_Ed = min(M_cap, M_Ed_original + M_add)
+            # 2. Work with the magnitude (absolute value)
+            # This ensures the 'cap' and 'addition' logic works the same for +/-
+            abs_M_Ed_orig = abs(M_Ed_original)
+            abs_M_cap = abs(M_cap)
+
+            # 3. Add the shift and apply the cap to the magnitude
+            # The moment cannot exceed the maximum moment in the span (M_cap)
+            abs_M_Ed_shifted = min(abs_M_cap, abs_M_Ed_orig + M_add)
+
+            # 4. Restore the original sign
+            M_Ed = copysign(abs_M_Ed_shifted, M_Ed_original)
 
         # Use cached diagram for capacity check (created in model_post_init)
-        assert self._diagram is not None, "Diagram should be initialized in model_post_init"
-
         # Perform capacity check with (potentially modified) M_Ed
-        N_Rd, M_Rd, is_safe, utilization = self._diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed, return_details=False)  # type: ignore[misc]
+        capacity = self._diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed, return_details=False)
+        N_Rd, M_Rd, is_safe, utilization = capacity.N_Rd, capacity.M_Rd, capacity.is_safe, capacity.utilization
 
         demand_components = {"N": float(N_Ed), "M": float(M_Ed_original)}  # Show original demand
         units_components = {"N": "kN", "M": "kN·m"}
@@ -281,9 +319,9 @@ class BendingCheck(BaseCodeCheck):
                 "M_Ed_design": float(M_Ed),
                 "M_add": float(M_add) if apply_tension_shift else None,
                 "V_Ed": float(V_Ed) if V_Ed is not None else None,
-                "cot_theta": float(cot_theta_used) if cot_theta_used is not None else None,
+                "cot_theta": float(cot_theta) if cot_theta is not None else None,
                 "shift_distance_a_l_mm": float(shift_distance_a_l) if shift_distance_a_l is not None else None,
-                "z_lever_arm_mm": float(z_lever_arm) if z_lever_arm is not None else None,
+                "z_lever_arm_mm": float(z_ec2) if z_ec2 is not None else None,
                 "M_cap": float(M_cap) if M_cap is not None else None,
                 "tension_shift_applied": apply_tension_shift,
                 "shear_reinforcement_provided": shear_reinforcement is not None,
@@ -329,9 +367,9 @@ class BendingCheck(BaseCodeCheck):
             "M_Ed_design": float(M_Ed),
             "M_add": float(M_add) if apply_tension_shift else None,
             "V_Ed": float(V_Ed) if V_Ed is not None else None,
-            "cot_theta": float(cot_theta_used) if cot_theta_used is not None else None,
+            "cot_theta": float(cot_theta) if cot_theta is not None else None,
             "shift_distance_a_l_mm": float(shift_distance_a_l) if shift_distance_a_l is not None else None,
-            "z_lever_arm_mm": float(z_lever_arm) if z_lever_arm is not None else None,
+            "z_lever_arm_mm": float(z_ec2) if z_ec2 is not None else None,
             "M_cap": float(M_cap) if M_cap is not None else None,
             "tension_shift_applied": apply_tension_shift,
             "shear_reinforcement_provided": shear_reinforcement is not None,
@@ -369,22 +407,21 @@ class BendingCheck(BaseCodeCheck):
             Tuple of (M_Rd_positive, M_Rd_negative) in kN·m
             Returns (None, None) if N_Ed is outside the interaction diagram bounds.
         """
-        # Use cached diagram
-        assert self._diagram is not None, "Diagram should be initialized in model_post_init"
         N_cap, M_Rd_pos, M_Rd_neg = self._diagram.get_capacity_fixed_n(N_Ed=N_Ed)
 
         if N_cap is not None:
-            if N_cap >=0:
-                if N_Ed > N_cap:
+            if N_cap >= 0:  # N_cap is positive
+                if N_Ed > N_cap:  # N_Ed outside upper bound
                     M_Rd_pos = None
                     M_Rd_neg = None
-            else:
-                if N_Ed < N_cap:
+            else:  # N_cap is negative
+                if N_Ed < N_cap:  # N_Ed outside lower bound
                     M_Rd_pos = None
                     M_Rd_neg = None
         return (M_Rd_pos, M_Rd_neg)
 
-    def generate_interaction_diagram(self, n_points: int = 100) -> tuple["np.ndarray", "np.ndarray"]:
+
+    def generate_interaction_diagram_arrays(self, n_points: int = 120) -> tuple["np.ndarray", "np.ndarray"]:
         """
         Generate complete M-N interaction diagram for visualization.
 
@@ -394,6 +431,4 @@ class BendingCheck(BaseCodeCheck):
         Returns:
             Tuple of (N_array, M_array) for plotting
         """
-        # Use cached diagram
-        assert self._diagram is not None, "Diagram should be initialized in model_post_init"
         return self._diagram.get_diagram_arrays(n_points=n_points)

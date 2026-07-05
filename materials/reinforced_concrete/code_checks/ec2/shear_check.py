@@ -18,9 +18,11 @@ from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
     CheckResult,
 )
+from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
 from materials.reinforced_concrete.code_checks.ec2.shear_utils import (
+    calculate_section_breadth,
     find_cot_theta_for_V_Ed,
     find_alpha_cw,
     find_nu_factor,
@@ -28,11 +30,10 @@ from materials.reinforced_concrete.code_checks.ec2.shear_utils import (
     find_v_min,
     sigma_cp_from_N_and_area,
     cap_sigma_cp_upper,
+    clamp_cot_theta,
 )
 from materials.reinforced_concrete.analysis.interaction_diagram import (
     MNInteractionDiagram,
-    ConcreteModelType,
-    SteelBranchType,
 )
 
 
@@ -158,6 +159,22 @@ class ShearCheck(BaseCodeCheck):
         ),
     )
 
+    allow_negative_sigma_cp: bool = Field(
+        default=True,
+        description=(
+            "Allow negative σ_cp from tensile axial forces (default: True). "
+            "If True, negative σ_cp reduces shear capacity. "
+            "If False, σ_cp is limited to a minimum of 0.0 MPa."
+        ),
+    )
+
+    use_transformed_area_for_sigma_cp: bool = Field(
+        default=True,
+        description=(
+            "Use transformed area (concrete + n·steel) for σ_cp calculation (default: True). "
+        ),
+    )
+
     cap_lever_arm: bool = Field(
         default=True,
         description=(
@@ -174,12 +191,12 @@ class ShearCheck(BaseCodeCheck):
     # ==================================
 
     concrete_model_type: ConcreteModelType = Field(
-        default="parabola-rectangle",
+        default=ConcreteModelType.PARABOLA_RECTANGLE,
         description="Concrete stress-strain model type (used if use_rigorous=True)",
     )
 
-    steel_branch_type: SteelBranchType = Field(
-        default="inclined",
+    steel_model_type: SteelModelType = Field(
+        default=SteelModelType.INCLINED,
         description="Steel stress-strain branch type (used if use_rigorous=True)",
     )
 
@@ -188,7 +205,7 @@ class ShearCheck(BaseCodeCheck):
     # Internal state (private)
     # =========================
 
-    _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
+    _diagram: MNInteractionDiagram = PrivateAttr()
 
     # Constants from EC2
     MIN_COT_THETA: ClassVar[float] = 1.0  # θ = 45°
@@ -212,10 +229,14 @@ class ShearCheck(BaseCodeCheck):
             section=self.section,
             concrete=self.concrete,
             concrete_model_type=self.concrete_model_type,
-            steel_branch_type=self.steel_branch_type,
+            steel_model_type=self.steel_model_type,
             use_characteristic=False,  # Use design strengths
             use_accidental=self.use_accidental,  # Match limit state
         )
+
+        # cached properties to save time later
+        self._A_transformed = self.section.get_transformed_area(self.concrete.E_cm)  # mm²
+        self._A_gross = self.section.get_area()  # mm²
 
     # ===============================================
     # Properties (immutable - don't depend on loads)
@@ -224,10 +245,7 @@ class ShearCheck(BaseCodeCheck):
     @computed_field
     @property
     def breadth(self) -> float:
-        """Web breadth in mm."""
-        # TODO FOR WEB BEAMS FIND THE BREADTH USED FOR SHEAR AREA
-        # For simple sections, use width. For T-beams, would use web width
-        return self.section.outline.bounds[2] - self.section.outline.bounds[0]
+        return calculate_section_breadth(self.section)
 
     @property
     def f_cd_design(self) -> float:
@@ -288,7 +306,7 @@ class ShearCheck(BaseCodeCheck):
             return min(d_top, d_bot)
 
         # If strains missing, try to solve if you can (robust helper)
-        if (eps_top is None or eps_bottom is None) and getattr(self, "_diagram", None) is not None:
+        if (eps_top is None or eps_bottom is None) and self._diagram:
             try:
                 eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
             except Exception:
@@ -416,8 +434,6 @@ class ShearCheck(BaseCodeCheck):
     def _find_sigma_cp(
             self,
             N_Ed: float,
-            allow_negative: bool = True,
-            use_transformed_area: bool = True
         ) -> float:
         """
         Compressive stress in concrete due to axial force (§6.2.2(1)).
@@ -428,26 +444,16 @@ class ShearCheck(BaseCodeCheck):
 
         Args:
             N_Ed: Design axial force in kN (compression positive)
-            allow_negative:
-                (bool: default True)
-                If True, allows for negative values of N_Ed which returns negative sigma_cp.
-                This has the affect of reducing shear capacity in presence of tension.
-            use_transformed_area:
-                (bool: default True)
-                If True computes the cross-sectional area using transformed properties of rebar.
-                This has the affect of increasing area, which reduces sigma_cp and is 
-                conservative for positive N_Ed.
 
         Returns:
             Stress in MPa
         """
-        if N_Ed <= 0 and not allow_negative:
+        # 1. Check policy for tension
+        if N_Ed <= 0 and not self.allow_negative_sigma_cp:
             return 0.0
         
-        if use_transformed_area:
-            A_eff = self.section.get_transformed_area(self.concrete.E_cm)  # mm²
-        else:
-            A_eff = self.section.get_area()  # mm² (gross concrete area)
+        # 2. Check policy for area calculation
+        A_eff = self._A_transformed if self.use_transformed_area_for_sigma_cp else self._A_gross
 
         sigma_cp_uncapped = sigma_cp_from_N_and_area(N_Ed, A_eff)
         return cap_sigma_cp_upper(sigma_cp_uncapped, self.f_cd_design)
@@ -467,8 +473,8 @@ class ShearCheck(BaseCodeCheck):
         Compute rho_l using actual neutral axis from strain profile.
 
         Args:
-            eps_top: Strain at top fiber
-            eps_bottom: Strain at bottom fiber
+            eps_top: Strain at top fibre
+            eps_bottom: Strain at bottom fibre
             d: Effective depth in mm
 
         Returns:
@@ -591,7 +597,6 @@ class ShearCheck(BaseCodeCheck):
         self,
         *,
         load_case: ShearLoadCase,
-        allow_negative_sigma_cp: bool = True,
         cot_theta_override: Optional[float] = None,
         warning_threshold: float = 0.95,
         **kwargs,
@@ -610,7 +615,6 @@ class ShearCheck(BaseCodeCheck):
 
         Args:
             load_case: Single load case to check
-            allow_negative_sigma_cp: If True, reduces shear capacity for tension
             warning_threshold: Utilization threshold for warning
             cot_theta_override: User provided cot theta value to use
 
@@ -633,7 +637,6 @@ class ShearCheck(BaseCodeCheck):
             V_Ed=load_case.V_Ed,
             M_Ed=load_case.M_Ed,
             N_Ed=load_case.N_Ed,
-            allow_negative_sigma_cp=allow_negative_sigma_cp,
             cot_theta_override=cot_theta_override,
             warning_threshold=warning_threshold,
         )
@@ -644,7 +647,6 @@ class ShearCheck(BaseCodeCheck):
         V_Ed: float,
         M_Ed: float,
         N_Ed: float,
-        allow_negative_sigma_cp: bool,
         cot_theta_override: Optional[float],
         warning_threshold: float,
     ) -> CheckResult:
@@ -663,13 +665,22 @@ class ShearCheck(BaseCodeCheck):
 
         # Compute load-dependent geometric parameters (pass strains to avoid re-solving)
         d = self.find_effective_depth(M_Ed, N_Ed, eps_top, eps_bottom)
-        sigma_cp = self._find_sigma_cp(N_Ed, allow_negative_sigma_cp)
+        sigma_cp = self._find_sigma_cp(N_Ed)
         rho_l = self._find_rho_l(M_Ed, N_Ed, d, eps_top, eps_bottom)
+
+        # 1. Initialize variables that might not be reached
+        V_Rd_s: Optional[float] = None
+        V_Rd_max: Optional[float] = None
+        cot_theta: Optional[float] = None
+        z_ec2: Optional[float] = None
+        z_mech: Optional[float] = None
 
         # Compute capacities (use z_ec2 for design checks per EC2)
         V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
 
-        if self.shear_reinforcement is not None:
+        reinforcement = self.shear_reinforcement
+
+        if reinforcement:
 
             z_ec2, z_mech = self.find_lever_arm(M_Ed, N_Ed, d, eps_top, eps_bottom)
 
@@ -699,7 +710,7 @@ class ShearCheck(BaseCodeCheck):
                 cot_theta = find_cot_theta_for_V_Ed(
                     V_Ed=V_Ed,
                     K=K,
-                    link_angle_degrees=self.shear_reinforcement.angle,
+                    link_angle_degrees=reinforcement.angle,
                     cot_min=self.MIN_COT_THETA,
                     cot_max=self.MAX_COT_THETA,
                 )
@@ -714,7 +725,10 @@ class ShearCheck(BaseCodeCheck):
             V_Rd = V_Rd_c
             governing_mode = "concrete (no shear reinforcement)"
             code_ref = "EC2 §6.2.2"
-        else:  # TODO fix unbound values
+        else:
+
+            assert V_Rd_s is not None and V_Rd_max is not None
+
             if V_Ed > V_Rd_c:
                 # Shear reinforcement is engaged
                 V_Rd = min(V_Rd_s, V_Rd_max)
@@ -761,7 +775,7 @@ class ShearCheck(BaseCodeCheck):
             "V_Rd_max": V_Rd_max if self.shear_reinforcement else None,
             "governing_mode": governing_mode,
             "cot_theta": cot_theta if self.shear_reinforcement else None,
-            "theta_deg": degrees(atan(1 / cot_theta)) if self.shear_reinforcement else None,
+            "theta_deg": degrees(atan(1 / cot_theta)) if cot_theta else None,
             "section_name": self.section.section_name or "unnamed",
             "d": d,
             "z": z_ec2 if self.shear_reinforcement else None,  # Lever arm used in EC2 check (capped if cap_lever_arm=True)
@@ -833,7 +847,11 @@ class ShearCheck(BaseCodeCheck):
             else:
                 f_ywd = ShearRebar.f_yd_for()
 
-        cot_theta_limited = max(self.MIN_COT_THETA, min(self.MAX_COT_THETA, cot_theta))
+        cot_theta_limited = clamp_cot_theta(
+            cot_theta=cot_theta,
+            cot_min=self.MIN_COT_THETA,
+            cot_max=self.MAX_COT_THETA
+        )
 
         A_sw_over_s = (V_Ed * 1000) / (z_ec2 * f_ywd * cot_theta_limited)
         return A_sw_over_s

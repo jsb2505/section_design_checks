@@ -1,5 +1,5 @@
 """
-M-N interaction diagram generator using fiber-based strain compatibility.
+M-N interaction diagram generator using fibre-based strain compatibility.
 
 Implements EC2 ultimate limit state analysis for combined axial force and bending
 about a single axis (major axis in this 2D implementation).
@@ -30,7 +30,7 @@ Tension stiffening (optional):
 
 Closed envelope:
 - The returned diagram is a closed loop: pure compression → (+M branch) → pure tension → (-M branch) → back to pure compression.
-- Closing points (pure compression and pure tension) are computed via the SAME fiber integration used elsewhere for consistency.
+- Closing points (pure compression and pure tension) are computed via the SAME fibre integration used elsewhere for consistency.
 
 Notes on confinement:
 - If confined_concrete=True, a Mander-style confined concrete response is applied in compression.
@@ -41,41 +41,29 @@ Notes on confinement:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, NamedTuple, Sequence
 
 import csv
 import json
 import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field
-from scipy.optimize import least_squares, root_scalar
+from scipy.optimize import least_squares
 
+from materials.utils.helpers import as_float
 from materials.reinforced_concrete.constitutive import (
     create_concrete_stress_strain,
     create_steel_stress_strain,
+    SteelModelType,
+    ConcreteModelType,
 )
-from materials.reinforced_concrete.geometry import FiberMesh, RCSection
+from materials.reinforced_concrete.geometry import FibreMesh, RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial
 
 
 # ----------------------------
 # Types / small utilities
 # ----------------------------
-
-ConcreteModelType = Literal["parabola-rectangle", "bilinear", "schematic"]
-SteelBranchType = Literal["inclined", "horizontal"]
-
-
-def _as_float(x: Any) -> float:
-    """
-    Convert numpy scalars cleanly to Python float.
-
-    For complex-step differentiation, extracts real part.
-    """
-    if np.iscomplexobj(x):
-        return float(np.real(x))
-    return float(x)  # raises if not convertible (good)
-
 
 def _ray_segment_intersection_alpha(
     ray_dir: Tuple[float, float],
@@ -146,12 +134,24 @@ class InteractionPoint(BaseModel):
 
 
 # ----------------------------
+# Results Class
+# ----------------------------
+
+class CapacityResult(NamedTuple):
+    N_Rd: Optional[float]
+    M_Rd: Optional[float]
+    is_safe: bool
+    utilization: float
+    details: Optional[dict] = None # Default value for the 5th item
+
+
+# ----------------------------
 # Main solver
 # ----------------------------
 
 class MNInteractionDiagram:
     """
-    M-N interaction diagram generator using fiber-based strain compatibility (2D single-axis).
+    M-N interaction diagram generator using fibre-based strain compatibility (2D single-axis).
 
     Generates two branches:
     - Compression from TOP (typically +M)
@@ -165,10 +165,10 @@ class MNInteractionDiagram:
         self,
         section: RCSection,
         concrete: ConcreteMaterial,
-        concrete_model_type: ConcreteModelType = "parabola-rectangle",
-        steel_branch_type: SteelBranchType = "inclined",
-        n_fibers_width: int = 20,
-        n_fibers_height: int = 30,
+        concrete_model_type: ConcreteModelType = ConcreteModelType.PARABOLA_RECTANGLE,
+        steel_model_type: SteelModelType = SteelModelType.INCLINED,
+        n_fibres_width: int = 20,
+        n_fibres_height: int = 30,
         tension_stiffening: bool = False,
         use_characteristic: bool = False,
         use_accidental: bool = False,
@@ -202,7 +202,7 @@ class MNInteractionDiagram:
         self.steel_models = [
             create_steel_stress_strain(
                 steel=g.rebar,
-                branch_type=steel_branch_type,
+                branch_type=steel_model_type,
                 use_characteristic=use_characteristic,
                 use_accidental=use_accidental
             )
@@ -223,11 +223,11 @@ class MNInteractionDiagram:
             if self.confinement_f_yh <= 0:
                 raise ValueError(f"confinement_f_yh must be > 0, got {self.confinement_f_yh}")
 
-        # Fiber mesh
-        self.mesh = FiberMesh(
+        # Fibre mesh
+        self.mesh = FibreMesh(
             section=section,
-            n_fibers_width=n_fibers_width,
-            n_fibers_height=n_fibers_height,
+            n_fibres_width=n_fibres_width,
+            n_fibres_height=n_fibres_height,
             exclude_steel_area=True,
         )
 
@@ -240,12 +240,17 @@ class MNInteractionDiagram:
         if self.section_height <= 0:
             raise ValueError("Section height must be > 0")
 
-        # Cache fiber arrays for performance (avoid repeated allocation/copy in residual/Jacobian)
-        self._fiber_x, self._fiber_y, self._fiber_area, self._fiber_mat, self._fiber_mi = self.mesh.get_fiber_arrays()
-        self._fiber_mat = self._fiber_mat.astype("U8", copy=False)  # Ensure consistent dtype
+        # Cache fibre arrays for performance (avoid repeated allocation/copy in residual/Jacobian)
+        self._fibre_x, self._fibre_y, self._fibre_area, self._fibre_mat, self._fibre_mi = self.mesh.get_fibre_arrays()
+        self._fibre_mat = self._fibre_mat.astype("U8", copy=False)  # Ensure consistent dtype
 
         # Cache section centroid (avoid repeated Shapely geometry access)
         _, self._section_cy = self.section.get_centroid()
+
+        # Cache diagram points to avoid repeated generation
+        self._dense_diagram_points: Optional[tuple[InteractionPoint, ...]] = None
+        self._dense_diagram_n: int = 0
+        self._diagram_points_cache: dict[int, tuple[InteractionPoint, ...]] = {}
 
 
     # ----------------------------
@@ -259,10 +264,10 @@ class MNInteractionDiagram:
         use_section_centroid: bool = True,
     ) -> Tuple[float, float]:
         """
-        Calculate resultant axial force and single-axis bending moment from fiber stresses.
+        Calculate resultant axial force and single-axis bending moment from fibre stresses.
 
         Args:
-            stresses: Stress at each fiber (MPa = N/mm²), same order as mesh.get_fiber_arrays()
+            stresses: Stress at each fibre (MPa = N/mm²), same order as mesh.get_fibre_arrays()
             use_section_centroid: If True, take moments about gross concrete centroid (section.get_centroid()).
                                  This matches the rest of the solver and plotting conventions.
 
@@ -271,9 +276,9 @@ class MNInteractionDiagram:
                 N in kN (positive compression)
                 M in kN·m about the section centroid, using y-offset (single-axis)
         """
-        # Use cached fiber arrays for performance
-        y = self._fiber_y
-        area = self._fiber_area
+        # Use cached fibre arrays for performance
+        y = self._fibre_y
+        area = self._fibre_area
 
         # Axial force: sum(σ * A) in N, convert to kN
         N = np.sum(stresses * area) / 1000.0
@@ -287,7 +292,7 @@ class MNInteractionDiagram:
         y_offset = y - cy
         M = np.sum(stresses * area * y_offset) / 1_000_000.0  # N·mm -> kN·m
 
-        return (_as_float(N), _as_float(M))
+        return (as_float(N), as_float(M))
 
 
     def _concrete_stress_with_options(
@@ -447,14 +452,14 @@ class MNInteractionDiagram:
         eps_bottom: float,
     ) -> npt.NDArray[np.float64]:
         """
-        Plane-sections strain field defined by strains at the extreme top/bottom fibers
+        Plane-sections strain field defined by strains at the extreme top/bottom fibres
         (compression positive), linear over y.
 
         eps_top: strain at y = section_top
         eps_bottom: strain at y = section_bottom
         """
-        # Use cached fiber y-coordinates and section geometry
-        y = self._fiber_y
+        # Use cached fibre y-coordinates and section geometry
+        y = self._fibre_y
 
         y_bot = float(self.section_bottom)
         h = float(self.section_height)  # Use cached value
@@ -477,9 +482,9 @@ class MNInteractionDiagram:
         - neutral_axis_depth and compression_from_bottom become *derived metadata* only.
         - This method is globally valid across sign changes (no branch switching).
         """
-        # Use cached fiber arrays for performance
-        material_type = self._fiber_mat  # Already converted to U8 in __init__
-        material_index = self._fiber_mi
+        # Use cached fibre arrays for performance
+        material_type = self._fibre_mat  # Already converted to U8 in __init__
+        material_index = self._fibre_mi
 
         strains = self._strain_field_from_end_strains(eps_top=eps_top, eps_bottom=eps_bottom)
         stresses = np.zeros_like(strains)
@@ -540,8 +545,8 @@ class MNInteractionDiagram:
         max_steel = float(np.real(np.max(np.abs(strains[steel_mask])))) if np.any(steel_mask) else 0.0
 
         return InteractionPoint(
-            N=_as_float(N),
-            M=_as_float(M),
+            N=as_float(N),
+            M=as_float(M),
             neutral_axis_depth=float(na_depth),
             compression_from_bottom=bool(comp_from_bottom),
             max_concrete_strain=max_conc,
@@ -549,54 +554,54 @@ class MNInteractionDiagram:
         )
 
 
-    def get_fiber_forces_from_end_strains(
+    def get_fibre_forces_from_end_strains(
         self,
         eps_top: float,
         eps_bottom: float,
     ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """
-        Compute fiber-level forces from strain profile (public helper for external tools).
+        Compute fibre-level forces from strain profile (public helper for external tools).
 
         This is a PUBLIC interface for computing detailed force distributions, intended
-        for use by code checks and other analyses that need fiber-level data without
+        for use by code checks and other analyses that need fibre-level data without
         accessing private internals.
 
         Args:
-            eps_top: Strain at top fiber (compression positive)
-            eps_bottom: Strain at bottom fiber (compression positive)
+            eps_top: Strain at top fibre (compression positive)
+            eps_bottom: Strain at bottom fibre (compression positive)
 
         Returns:
             Tuple of (forces, y_coords, areas):
-                - forces: Force in each fiber (N), compression positive
-                - y_coords: Y-coordinate of each fiber (mm)
-                - areas: Area of each fiber (mm²)
+                - forces: Force in each fibre (N), compression positive
+                - y_coords: Y-coordinate of each fibre (mm)
+                - areas: Area of each fibre (mm²)
 
         Example:
             >>> diagram = MNInteractionDiagram(section, concrete)
             >>> eps_top, eps_bottom = diagram.find_strains_for_MN(M=50.0, N=100.0)
-            >>> forces, y_coords, areas = diagram.get_fiber_forces_from_end_strains(eps_top, eps_bottom)
+            >>> forces, y_coords, areas = diagram.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
             >>> # Compute tension/compression centroids for lever arm
             >>> tension_mask = forces < 0
             >>> y_T = np.sum(-forces[tension_mask] * y_coords[tension_mask]) / np.sum(-forces[tension_mask])
         """
-        # Use cached fiber arrays for performance
-        y = self._fiber_y
-        area = self._fiber_area
-        material_type = self._fiber_mat  # Already converted to U8 in __init__
-        material_index = self._fiber_mi
+        # Use cached fibre arrays for performance
+        y = self._fibre_y
+        area = self._fibre_area
+        material_type = self._fibre_mat  # Already converted to U8 in __init__
+        material_index = self._fibre_mi
 
-        # Compute strains at all fibers
+        # Compute strains at all fibres
         strains = self._strain_field_from_end_strains(eps_top=eps_top, eps_bottom=eps_bottom)
 
         # Compute stresses
         stresses = np.zeros_like(strains)
 
-        # Concrete fibers - use internal method that handles confinement/tension stiffening
+        # Concrete fibres - use internal method that handles confinement/tension stiffening
         conc_mask = material_type == "concrete"
         if np.any(conc_mask):
             stresses[conc_mask] = self._concrete_stress_with_options(strains[conc_mask])
 
-        # Steel fibers
+        # Steel fibres
         steel_mask = material_type == "steel"
         if np.any(steel_mask):
             steel_strains = strains[steel_mask]
@@ -608,7 +613,7 @@ class MNInteractionDiagram:
                     steel_stresses[m] = sm.get_stress_array(steel_strains[m])
             stresses[steel_mask] = steel_stresses
 
-        # Forces per fiber (compression positive): Force = stress × area
+        # Forces per fibre (compression positive): Force = stress × area
         forces = stresses * area
 
         return (forces, y, area)
@@ -649,7 +654,7 @@ class MNInteractionDiagram:
 
     @staticmethod
     def _resample_closed_polyline_by_chord(
-        points: List[InteractionPoint],
+        points: Sequence[InteractionPoint],
         n_out: int,
     ) -> List[InteractionPoint]:
         """
@@ -661,13 +666,15 @@ class MNInteractionDiagram:
         """
         if n_out < 3:
             raise ValueError("n_out must be >= 3")
-        if len(points) < 4:
-            return points
+        
+        pts = list(points)
+
+        if len(pts) < 4:
+            return pts
 
         # Ensure closed
-        pts = points
         if (pts[0].M != pts[-1].M) or (pts[0].N != pts[-1].N):
-            pts = pts + [pts[0]]
+            pts.append(pts[0])
 
         M = np.array([p.M for p in pts], dtype=float)
         N = np.array([p.N for p in pts], dtype=float)
@@ -850,8 +857,8 @@ class MNInteractionDiagram:
         2D root-finding problem:
             calculate_point_from_end_strains(ε_top, ε_bottom) = (N_target, M_target)
 
-        This method does NOT require generate_diagram() to have been called - it only
-        needs the fiber mesh and constitutive models (created in __init__).
+        This method does NOT require generate_diagram_points() to have been called - it only
+        needs the fibre mesh and constitutive models (created in __init__).
 
         Args:
             M_target: Target moment (kN·m)
@@ -954,7 +961,7 @@ class MNInteractionDiagram:
                  [∂M/∂eps_top,    ∂M/∂eps_bottom]]
 
         Derivation:
-            For each fiber at height y:
+            For each fibre at height y:
                 strain(y) = eps_bottom + (eps_top - eps_bottom) * (y - y_bot) / h
 
             Define:
@@ -965,7 +972,7 @@ class MNInteractionDiagram:
                 ∂strain/∂eps_top = α(y)
                 ∂strain/∂eps_bottom = β(y)
 
-            Force contribution from fiber i:
+            Force contribution from fibre i:
                 F_i = σ_i * A_i = σ(ε_i) * A_i
 
             Derivative:
@@ -979,34 +986,34 @@ class MNInteractionDiagram:
                 M = Σ F_i * (y_i - c_y)  →  ∂M/∂eps = Σ [∂F_i/∂eps * (y_i - c_y)]
 
         Args:
-            eps_top: Top fiber strain (compression positive)
-            eps_bottom: Bottom fiber strain (compression positive)
+            eps_top: Top fibre strain (compression positive)
+            eps_bottom: Bottom fibre strain (compression positive)
 
         Returns:
             2×2 Jacobian matrix [[dN_deps_top, dN_deps_bottom],
                                  [dM_deps_top, dM_deps_bottom]]
         """
-        # Use cached fiber arrays for performance
-        y_coords = self._fiber_y
-        areas = self._fiber_area
-        material_type = self._fiber_mat  # Already converted to U8 in __init__
-        material_index = self._fiber_mi
+        # Use cached fibre arrays for performance
+        y_coords = self._fibre_y
+        areas = self._fibre_area
+        material_type = self._fibre_mat  # Already converted to U8 in __init__
+        material_index = self._fibre_mi
 
         y_bot = float(self.section_bottom)
         h = float(self.section_height)
 
-        # Compute strain at each fiber
+        # Compute strain at each fibre
         strains = eps_bottom + (eps_top - eps_bottom) * (y_coords - y_bot) / h
 
-        # Compute tangent modulus E_t = dσ/dε at each fiber
+        # Compute tangent modulus E_t = dσ/dε at each fibre
         E_t = np.zeros_like(strains)
 
-        # Concrete fibers - use method with tension stiffening support
+        # Concrete fibres - use method with tension stiffening support
         conc_mask = material_type == "concrete"
         if np.any(conc_mask):
             E_t[conc_mask] = self._concrete_tangent_modulus_with_options(strains[conc_mask])
 
-        # Steel fibers
+        # Steel fibres
         steel_mask = material_type == "steel"
         if np.any(steel_mask):
             steel_strains = strains[steel_mask]
@@ -1069,7 +1076,7 @@ class MNInteractionDiagram:
         Sign convention (critical!):
             - Compression strain = POSITIVE (concrete model)
             - Tension strain = NEGATIVE (steel in tension)
-            - This matches the fiber-based calculation in calculate_point_from_end_strains
+            - This matches the fibre-based calculation in calculate_point_from_end_strains
 
         Loading cases:
             - Pure compression (N>0, M≈0): Both faces compressed → (+eps, +eps)
@@ -1264,7 +1271,7 @@ class MNInteractionDiagram:
         Mechanical lever arm from force resultant centroids.
         Returns None if either tension or compression resultant is absent.
         """
-        forces, y_coords, _ = self.get_fiber_forces_from_end_strains(eps_top, eps_bottom)
+        forces, y_coords, _ = self.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
 
         tension_mask = forces < 0
         compression_mask = forces > 0
@@ -1294,10 +1301,42 @@ class MNInteractionDiagram:
     # Diagram generation
     # ----------------------------
 
-    def generate_diagram(
+    def _get_dense_diagram_points(self, n_dense: int) -> tuple[InteractionPoint, ...]:
+        if self._dense_diagram_points is not None and self._dense_diagram_n == n_dense:
+            return self._dense_diagram_points
+        
+        # --- Compression-side strain limit (concrete-controlled)
+        eps_cu = float(self.concrete_model.get_ultimate_strain())
+
+        # --- Tension-side strain limit (steel-controlled, finite by design)
+        eps_t = self._eps_tension_limit()
+
+        # --- Build a closed loop in strain space
+        #     (ε_top, ε_bottom) pairs covering:
+        #     pure compression → bending → pure tension → reverse bending → closure
+        # Oversample in strain space (5–10x is typical)
+        strain_pairs_dense = self._strain_limit_loop(
+            n_points=n_dense,
+            eps_cu=eps_cu,
+            eps_t=eps_t,
+        )
+
+        dense_pts = tuple(
+            self.calculate_point_from_end_strains(eps_top=et, eps_bottom=eb)
+            for (et, eb) in strain_pairs_dense
+        )
+
+        self._dense_diagram_points = dense_pts
+        self._dense_diagram_n = int(n_dense)
+        self._diagram_points_cache.clear()
+        return dense_pts
+    
+
+    def generate_diagram_points(
         self,
         n_points: int = 120,
-    ) -> List[InteractionPoint]:
+        n_dense: int = 800,
+    ) -> tuple[InteractionPoint, ...]:
         """
         Generate a closed M–N interaction envelope using end-strain parameterisation.
 
@@ -1310,32 +1349,18 @@ class MNInteractionDiagram:
             - eliminates artificial kinks near pure tension
             - produces a smooth, convex interaction envelope
         """
-        # --- Compression-side strain limit (concrete-controlled)
-        eps_cu = float(self.concrete_model.get_ultimate_strain())
+        n_points = int(max(n_points, 40))
 
-        # --- Tension-side strain limit (steel-controlled, finite by design)
-        eps_t = self._eps_tension_limit()
+        cached = self._diagram_points_cache.get(n_points)
+        if cached is not None:
+            return cached
 
-        # --- Build a closed loop in strain space
-        #     (ε_top, ε_bottom) pairs covering:
-        #     pure compression → bending → pure tension → reverse bending → closure
-        # Oversample in strain space (5–10x is typical)
-        n_dense = int(max(5 * n_points, 300))
-        strain_pairs_dense = self._strain_limit_loop(
-            n_points=n_dense,
-            eps_cu=eps_cu,
-            eps_t=eps_t,
-        )
+        dense_pts = self._get_dense_diagram_points(n_dense=n_dense)
+        pts = self._resample_closed_polyline_by_chord(dense_pts, n_out=n_points)
 
-        dense_pts: List[InteractionPoint] = [
-            self.calculate_point_from_end_strains(eps_top=et, eps_bottom=eb)
-            for (et, eb) in strain_pairs_dense
-        ]
-
-        # Resample to uniform chord-length in (M,N)
-        pts = self._resample_closed_polyline_by_chord(dense_pts, n_out=int(max(n_points, 40)))
-
-        return pts
+        out = tuple(pts)
+        self._diagram_points_cache[n_points] = out
+        return out
 
 
     # ----------------------------
@@ -1348,10 +1373,7 @@ class MNInteractionDiagram:
         M_Ed: float,
         n_points: int = 120,
         return_details: bool = False,
-    ) -> Union[
-        Tuple[Optional[float], Optional[float], bool, float],
-        Tuple[Optional[float], Optional[float], bool, float, Optional[dict]]
-    ]:
+    ) -> CapacityResult:
         """
         Get capacity point (N_Rd, M_Rd) on the M-N boundary using ray intersection (vector method).
 
@@ -1376,8 +1398,8 @@ class MNInteractionDiagram:
                 (N_Rd, M_Rd, is_safe, utilization, details_dict)
 
                 where details_dict contains exact metadata at capacity:
-                    - 'eps_top': Top fiber strain
-                    - 'eps_bottom': Bottom fiber strain
+                    - 'eps_top': Top fibre strain
+                    - 'eps_bottom': Bottom fibre strain
                     - 'neutral_axis_depth': NA depth from section bottom (mm)
                     - 'compression_from_bottom': True if compression is at bottom
                     - 'max_concrete_strain': Maximum concrete compressive strain
@@ -1394,12 +1416,10 @@ class MNInteractionDiagram:
             but strain metadata is approximate (from nearest dense point). When you need exact
             strains, stresses, NA depth, or lever arm at capacity, use return_details=True.
         """
-        diagram = self.generate_diagram(n_points=n_points)
-        pts = [(p.M, p.N) for p in diagram]
+        diagram_points = self.generate_diagram_points(n_points=n_points)
+        pts = [(p.M, p.N) for p in diagram_points]
         if len(pts) < 3:
-            if return_details:
-                return (None, None, False, float("inf"), None)
-            return (None, None, False, float("inf"))
+            return CapacityResult(N_Rd=None, M_Rd=None, is_safe=False, utilization=float("inf"))
 
         # Special case: origin (no load)
         if abs(M_Ed) < 1e-18 and abs(N_Ed) < 1e-18:
@@ -1413,8 +1433,9 @@ class MNInteractionDiagram:
                     'max_concrete_strain': 0.0,
                     'max_steel_strain': 0.0,
                 }
-                return (0.0, 0.0, True, 0.0, zero_details)
-            return (0.0, 0.0, True, 0.0)
+            else:
+                zero_details = None
+            return CapacityResult(N_Rd=0.0, M_Rd=0.0, is_safe=True, utilization=0.0, details=zero_details)
 
         ray_dir = (float(M_Ed), float(N_Ed))  # IMPORTANT: do NOT normalize
 
@@ -1436,9 +1457,7 @@ class MNInteractionDiagram:
         # Keep only forward intersections (positive t)
         ts = [t for t in intersections if t > 1e-12]
         if not ts:
-            if return_details:
-                return (None, None, False, float("inf"), None)
-            return (None, None, False, float("inf"))
+            return CapacityResult(N_Rd=None, M_Rd=None, is_safe=False, utilization=float("inf"))
 
         # CRITICAL: Use MINIMUM t (first boundary hit as we move outward from origin)
         # This is the correct, conservative choice for capacity checks:
@@ -1467,7 +1486,7 @@ class MNInteractionDiagram:
 
         # Fast return if details not requested
         if not return_details:
-            return (float(N_Rd), float(M_Rd), bool(is_safe), float(utilization))
+            return CapacityResult(N_Rd=float(N_Rd), M_Rd=float(M_Rd), is_safe=bool(is_safe), utilization=float(utilization))
 
         # Recompute exact strain state and metadata at capacity point
         try:
@@ -1486,9 +1505,9 @@ class MNInteractionDiagram:
                 compression_from_bottom = eps_bottom > 0
 
             # Get max strains - use absolute values of end strains as approximation
-            # (exact fiber-level analysis would require iterating through mesh)
+            # (exact fibre-level analysis would require iterating through mesh)
             max_concrete_strain = max(abs(eps_top), abs(eps_bottom))
-            max_steel_strain = max_concrete_strain  # Same strain field applies to all fibers
+            max_steel_strain = max_concrete_strain  # Same strain field applies to all fibres
 
             details = {
                 'eps_top': float(eps_top),
@@ -1499,7 +1518,7 @@ class MNInteractionDiagram:
                 'max_steel_strain': float(max_steel_strain),
             }
 
-            return (float(N_Rd), float(M_Rd), bool(is_safe), float(utilization), details)
+            return CapacityResult(N_Rd=float(N_Rd), M_Rd=float(M_Rd), is_safe=bool(is_safe), utilization=float(utilization), details=details)
 
         except Exception as e:
             # If exact computation fails, return None for details
@@ -1510,7 +1529,7 @@ class MNInteractionDiagram:
                 f"Returning None for details.",
                 stacklevel=2
             )
-            return (float(N_Rd), float(M_Rd), bool(is_safe), float(utilization), None)
+            return CapacityResult(N_Rd=float(N_Rd), M_Rd=float(M_Rd), is_safe=bool(is_safe), utilization=float(utilization))
 
 
     def get_utilization_vector(
@@ -1520,8 +1539,8 @@ class MNInteractionDiagram:
         n_points: int = 120,
     ) -> Tuple[bool, float]:
         """Convenience wrapper returning (is_safe, utilization) using vector method."""
-        _, _, is_safe, util = self.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points, return_details=False)
-        return (bool(is_safe), float(util))
+        capacity = self.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points, return_details=False)
+        return (bool(capacity.is_safe), float(capacity.utilization))
 
 
     @staticmethod
@@ -1592,11 +1611,11 @@ class MNInteractionDiagram:
 
         If intersections cannot be found, returns (None, None, None).
         """
-        diagram = self.generate_diagram(n_points=n_points)  # should be closed already
-        if len(diagram) < 4:
+        diagram_points = self.generate_diagram_points(n_points=n_points)  # should be closed already
+        if len(diagram_points) < 4:
             return (None, None, None)
 
-        pts = [(float(p.M), float(p.N)) for p in diagram]
+        pts = [(float(p.M), float(p.N)) for p in diagram_points]
 
         # Ensure closed
         if pts[0] != pts[-1]:
@@ -1628,7 +1647,7 @@ class MNInteractionDiagram:
         self,
         n_points: int = 120,
     ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-        pts = self.generate_diagram(n_points=n_points)
+        pts = self.generate_diagram_points(n_points=n_points)
         N = np.array([p.N for p in pts], dtype=float)
         M = np.array([p.M for p in pts], dtype=float)
         return (N, M)
@@ -1641,7 +1660,7 @@ class MNInteractionDiagram:
         include_metadata: bool = True,
         indent: int = 2,
     ) -> None:
-        points = self.generate_diagram(n_points=n_points)
+        points = self.generate_diagram_points(n_points=n_points)
         data: Dict[str, Any] = {"diagram_points": [p.to_dict() for p in points]}
 
         if include_metadata:
@@ -1651,7 +1670,7 @@ class MNInteractionDiagram:
                 "concrete_fck": self.concrete.f_ck,
                 "concrete_fcd": self.concrete.f_cd,
                 "n_rebar_groups": len(self.section.rebar_groups),
-                "n_fibers": self.mesh.total_fibers,
+                "n_fibres": self.mesh.total_fibres,
                 "concrete_model": type(self.concrete_model).__name__,
                 "steel_models": [type(sm).__name__ for sm in self.steel_models],
                 "tension_stiffening": self.tension_stiffening,
@@ -1669,7 +1688,7 @@ class MNInteractionDiagram:
         n_points: int = 120,
         include_strains: bool = True,
     ) -> None:
-        points = self.generate_diagram(n_points=n_points)
+        points = self.generate_diagram_points(n_points=n_points)
 
         file_path = Path(file_path)
         with open(file_path, "w", newline="", encoding="utf-8") as f:
@@ -1697,7 +1716,7 @@ class MNInteractionDiagram:
         n_points: int = 120,
         include_metadata: bool = True,
     ) -> Dict[str, Any]:
-        points = self.generate_diagram(n_points=n_points)
+        points = self.generate_diagram_points(n_points=n_points)
         data: Dict[str, Any] = {
             "points": [p.to_dict() for p in points],
             "N_array": [p.N for p in points],
@@ -1710,7 +1729,7 @@ class MNInteractionDiagram:
                 "concrete_fck": self.concrete.f_ck,
                 "concrete_fcd": self.concrete.f_cd,
                 "n_rebar_groups": len(self.section.rebar_groups),
-                "n_fibers": self.mesh.total_fibers,
+                "n_fibres": self.mesh.total_fibres,
                 "concrete_model": type(self.concrete_model).__name__,
                 "steel_models": [type(sm).__name__ for sm in self.steel_models],
                 "tension_stiffening": self.tension_stiffening,
@@ -1768,157 +1787,126 @@ class MNInteractionDiagram:
                 "Plotly is required for plotting. Install with: pip install plotly"
             ) from e
 
-        # Generate diagram
-        diagram_points = self.generate_diagram(n_points=n_points)
+        # 1. Generate core diagram data
+        diagram_points = self.generate_diagram_points(n_points=n_points)
         M_curve = [p.M for p in diagram_points]
         N_curve = [p.N for p in diagram_points]
 
         fig = go.Figure()
 
-        # Capacity curve
-        if show_metadata:
-            hover = (
-                "M: %{x:.3g} kN·m<br>"
-                "N: %{y:.3g} kN<br>"
-                "<extra></extra>"
-            )
-        else:
-            hover = "M: %{x:.3g}<br>N: %{y:.3g}<extra></extra>"
+        # Initialize tracking for axis limits to avoid re-calculating later
+        xs = list(M_curve) + [0.0]
+        ys = list(N_curve) + [0.0]
 
+        # 2. Plot Capacity Curve
         fig.add_trace(go.Scatter(
-            x=M_curve,
-            y=N_curve,
+            x=M_curve, y=N_curve,
             mode="lines",
             name="M-N Capacity",
             line=dict(color="black", width=2),
-            hovertemplate=hover,
+            hovertemplate="M: %{x:.3g} kN·m<br>N: %{y:.3g} kN<extra></extra>",
         ))
 
-        # Origin
+        # 3. Restore the Origin Marker
         fig.add_trace(go.Scatter(
-            x=[0.0],
-            y=[0.0],
+            x=[0.0], y=[0.0],
             mode="markers",
             name="Origin",
             marker=dict(color="black", size=4, symbol="circle"),
-            hovertemplate="Origin<extra></extra>",
+            hovertemplate="Origin (0,0)<extra></extra>",
         ))
 
-        # Load points
+        # 4. Process Load Points
         if load_points:
             for idx, lp in enumerate(load_points):
                 N_Ed = float(lp.get("N_Ed", 0.0))
                 M_Ed = float(lp.get("M_Ed", 0.0))
                 name_lp = str(lp.get("name", f"Load Case {idx + 1}"))
 
-                N_Rd, M_Rd, is_safe, utilization = self.get_capacity_vector(
+                # Calculate capacity ONCE per load case
+                capacity = self.get_capacity_vector(
                     N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points, return_details=False
                 )
 
-                if utilization <= 0.8:
+                # Update bounds trackers
+                xs.append(M_Ed)
+                ys.append(N_Ed)
+                if capacity.M_Rd is not None and capacity.N_Rd is not None:
+                    xs.append(capacity.M_Rd)
+                    ys.append(capacity.N_Rd)
+
+                # Color logic based on utilization
+                if capacity.utilization <= 0.8:
                     color = "green"
-                elif utilization <= 1.0:
+                elif capacity.utilization <= 1.0:
                     color = "orange"
                 else:
                     color = "red"
 
-                if show_metadata:
-                    hover_text = (
-                        f"<b>{name_lp}</b><br>"
-                        f"N_Ed: {N_Ed:.3g} kN<br>"
-                        f"M_Ed: {M_Ed:.3g} kN·m<br>"
-                    )
-                    if N_Rd is not None and M_Rd is not None:
-                        hover_text += (
-                            f"N_Rd: {N_Rd:.3g} kN<br>"
-                            f"M_Rd: {M_Rd:.3g} kN·m<br>"
-                            f"Utilization: {utilization:.1%}<br>"
-                            f"Status: {'✓ PASS' if is_safe else '✗ FAIL'}"
-                        )
-                    else:
-                        hover_text += "Status: Outside boundary"
-                else:
-                    hover_text = name_lp
-
-                fig.add_trace(go.Scatter(
-                    x=[M_Ed],
-                    y=[N_Ed],
-                    mode="markers",
-                    name=name_lp,
-                    marker=dict(color=color, size=7, symbol="circle", line=dict(color="black", width=1)),
-                    hovertemplate=hover_text + "<extra></extra>",
-                    showlegend=True,
-                ))
-
-                if show_vectors and (N_Rd is not None) and (M_Rd is not None):
-                    # Origin -> load
+                # 5. Draw Vectors (if requested and valid)
+                if show_vectors and capacity.M_Rd is not None and capacity.N_Rd is not None:
+                    # Demand Vector: Origin to Load (Solid)
                     fig.add_trace(go.Scatter(
-                        x=[0.0, M_Ed],
-                        y=[0.0, N_Ed],
+                        x=[0.0, M_Ed], y=[0.0, N_Ed],
                         mode="lines",
                         line=dict(color=color, width=1.5, dash="solid"),
                         showlegend=False,
                         hoverinfo="skip",
                     ))
-                    # Load -> capacity point
+                    # Reserve Vector: Load to Capacity (Dashed)
                     fig.add_trace(go.Scatter(
-                        x=[M_Ed, M_Rd],
-                        y=[N_Ed, N_Rd],
+                        x=[M_Ed, capacity.M_Rd], y=[N_Ed, capacity.N_Rd],
                         mode="lines",
                         line=dict(color=color, width=1.5, dash="dash"),
                         showlegend=False,
                         hoverinfo="skip",
                     ))
 
-        plot_title = title if title else "M-N Interaction Diagram"
-        fig.update_layout(
-            title=dict(text=plot_title, font=dict(size=16, color="black")),
-            xaxis_title="Moment M (kN·m)",
-            yaxis_title="Axial Force N (kN)",
-            hovermode="closest",
-            template="plotly_white",
-            showlegend=True,
-            legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
-            width=900,
-            height=700,
-        )
-        fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
-        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
-
-        # ---- Force axes to include everything (capacity + loads + vectors) ----
-        # Collect all x/y values you actually plotted
-        xs = list(M_curve) + [0.0]
-        ys = list(N_curve) + [0.0]
-
-        if load_points:
-            for lp in load_points:
-                xs.append(float(lp.get("M_Ed", 0.0)))
-                ys.append(float(lp.get("N_Ed", 0.0)))
-
-                if show_vectors:
-                    N_Rd, M_Rd, _, _ = self.get_capacity_vector(
-                        N_Ed=float(lp.get("N_Ed", 0.0)),
-                        M_Ed=float(lp.get("M_Ed", 0.0)),
-                        n_points=n_points,
-                        return_details=False
+                # 6. Build Hover Metadata (Respecting show_metadata arg)
+                if show_metadata:
+                    hover_text = (
+                        f"<b>{name_lp}</b><br>"
+                        f"N_Ed: {N_Ed:.3g} kN<br>"
+                        f"M_Ed: {M_Ed:.3g} kN·m<br>"
                     )
-                    if (M_Rd is not None) and (N_Rd is not None):
-                        xs.append(float(M_Rd))
-                        ys.append(float(N_Rd))
+                    if capacity.N_Rd is not None:
+                        hover_text += (
+                            f"N_Rd: {capacity.N_Rd:.3g} kN<br>"
+                            f"M_Rd: {capacity.M_Rd:.3g} kN·m<br>"
+                            f"Utilization: {capacity.utilization:.1%}<br>"
+                            f"Status: {'✓ PASS' if capacity.is_safe else '✗ FAIL'}"
+                        )
+                else:
+                    hover_text = name_lp
 
+                # 7. Plot Load Point Marker
+                fig.add_trace(go.Scatter(
+                    x=[M_Ed], y=[N_Ed],
+                    mode="markers",
+                    name=name_lp,
+                    marker=dict(color=color, size=8, symbol="circle", line=dict(color="black", width=1)),
+                    hovertemplate=hover_text + "<extra></extra>",
+                ))
+
+        # 8. Axis Range and Layout
         xmin, xmax = min(xs), max(xs)
         ymin, ymax = min(ys), max(ys)
-
-        # Pad by 5% (fallback to 1.0 if range is tiny)
         xpad = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
         ypad = 0.05 * (ymax - ymin) if ymax > ymin else 1.0
 
-        fig.update_xaxes(range=[xmin - xpad, xmax + xpad], autorange=False)
-        fig.update_yaxes(range=[ymin - ypad, ymax + ypad], autorange=False)
+        fig.update_layout(
+            title=dict(text=title or "M-N Interaction Diagram"),
+            xaxis_title="Moment M (kN·m)",
+            yaxis_title="Axial Force N (kN)",
+            xaxis=dict(range=[xmin - xpad, xmax + xpad], gridcolor="lightgray", zeroline=True),
+            yaxis=dict(range=[ymin - ypad, ymax + ypad], gridcolor="lightgray", zeroline=True),
+            template="plotly_white",
+            legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
+            width=900, height=700,
+        )
 
         if save_path:
             fig.write_html(str(save_path))
-
         if show:
             fig.show()
 
@@ -1929,7 +1917,7 @@ class MNInteractionDiagram:
             f"MNInteractionDiagram("
             f"section={self.section.section_name}, "
             f"concrete={self.concrete.grade}, "
-            f"fibers={self.mesh.total_fibers}, "
+            f"fibres={self.mesh.total_fibres}, "
             f"tension_stiffening={self.tension_stiffening}, "
             f"confined={self.confined_concrete})"
         )
@@ -1946,6 +1934,18 @@ def create_interaction_diagram(
     Args:
         section: RC section with reinforcement
         concrete: Concrete material
+        concrete_model_type: Stress-strain relationship of concrete
+        steel_model_type: Stress-strain relationship of rebar
+        n_fibres_width: Number of fibres to split width of section
+        n_fibres_height: Number of fibres to split height of section
+        tension_stiffening:
+            Concrete in tension contributes post-cracking using a simplified
+            EC2-style average tension stress-strain relationship
+        use_characteristic: Enables characteristic strength limits for materials
+        use_accidental: Enables accidental limit state factors for design strengths of materials
+        confined_concrete: Enables a Mander-style confined concrete response is applied in compression
+        confinement_rho_s: Must be provided when confined_concrete=True
+        confinement_f_yh: Characteristic transverse steel yield strength for confinement
         **kwargs: Additional arguments passed to MNInteractionDiagram
 
     Returns:

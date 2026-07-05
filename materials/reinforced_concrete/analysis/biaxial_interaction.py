@@ -1,5 +1,5 @@
 """
-Biaxial M-M-N interaction surface generator using fiber-based strain compatibility.
+Biaxial M-M-N interaction surface generator using fibre-based strain compatibility.
 
 Implements EC2 ultimate limit state analysis for combined axial force and biaxial bending.
 """
@@ -13,10 +13,12 @@ from pydantic import BaseModel, Field, ConfigDict
 from scipy.optimize import brentq
 from scipy.spatial import ConvexHull
 
-from materials.reinforced_concrete.geometry import RCSection, FiberMesh
+from materials.reinforced_concrete.geometry import RCSection, FibreMesh
 from materials.reinforced_concrete.constitutive import (
     create_concrete_stress_strain,
     create_steel_stress_strain,
+    SteelModelType,
+    ConcreteModelType,
 )
 from materials.reinforced_concrete.materials import ConcreteMaterial
 
@@ -61,7 +63,7 @@ class BiaxialInteractionPoint(BaseModel):
 
 class BiaxialMNInteractionSurface:
     """
-    Biaxial M-M-N interaction surface generator using fiber-based strain compatibility.
+    Biaxial M-M-N interaction surface generator using fibre-based strain compatibility.
 
     The surface represents all combinations of axial force (N) and biaxial moments (My, Mz)
     that bring the section to its ultimate limit state per EC2.
@@ -78,7 +80,7 @@ class BiaxialMNInteractionSurface:
     2. Calculate strain distribution (plane sections remain plane)
     3. Strains perpendicular to the neutral axis
     4. Get stresses from constitutive models
-    5. Integrate forces over fibers
+    5. Integrate forces over fibres
     6. Result is one (N, My, Mz) point on the surface
     7. Repeat for different neutral axis depths and angles
     """
@@ -87,10 +89,10 @@ class BiaxialMNInteractionSurface:
         self,
         section: RCSection,
         concrete: ConcreteMaterial,
-        concrete_model_type: Literal["parabola-rectangle", "bilinear"] = "parabola-rectangle",
-        steel_branch_type: Literal["inclined", "horizontal"] = "inclined",
-        n_fibers_width: int = 20,
-        n_fibers_height: int = 30,
+        concrete_model_type: ConcreteModelType = ConcreteModelType.PARABOLA_RECTANGLE,
+        steel_model_type: SteelModelType = SteelModelType.INCLINED,
+        n_fibres_width: int = 20,
+        n_fibres_height: int = 30,
     ):
         """
         Initialize biaxial M-M-N surface generator.
@@ -99,9 +101,9 @@ class BiaxialMNInteractionSurface:
             section: RC section with reinforcement
             concrete: Concrete material properties
             concrete_model_type: Stress-strain model for concrete
-            steel_branch_type: Stress-strain model for steel
-            n_fibers_width: Fiber mesh resolution (width)
-            n_fibers_height: Fiber mesh resolution (height)
+            steel_model_type: Stress-strain model for steel
+            n_fibres_width: Fibre mesh resolution (width)
+            n_fibres_height: Fibre mesh resolution (height)
         """
         self.section = section
         self.concrete = concrete
@@ -121,16 +123,16 @@ class BiaxialMNInteractionSurface:
         for group in section.rebar_groups:
             steel_model = create_steel_stress_strain(
                 steel=group.rebar,
-                branch_type=steel_branch_type,
+                branch_type=steel_model_type,
                 use_characteristic=False,  # Use f_yd
             )
             self.steel_models.append(steel_model)
 
-        # Generate fiber mesh
-        self.mesh = FiberMesh(
+        # Generate fibre mesh
+        self.mesh = FibreMesh(
             section=section,
-            n_fibers_width=n_fibers_width,
-            n_fibers_height=n_fibers_height,
+            n_fibres_width=n_fibres_width,
+            n_fibres_height=n_fibres_height,
             exclude_steel_area=True,
         )
 
@@ -311,8 +313,8 @@ class BiaxialMNInteractionSurface:
         Returns:
             Tuple of (N_min, N_max) in kN
         """
-        # Get fiber data
-        _, _, area, mat_type, mat_idx = self.mesh.get_fiber_arrays()
+        # Get fibre data
+        _, _, area, mat_type, mat_idx = self.mesh.get_fibre_arrays()
 
         # EC2 strain limits
         eps_cu2 = self.concrete.epsilon_cu2  # Use ultimate compression strain for pole
@@ -380,14 +382,14 @@ class BiaxialMNInteractionSurface:
 
         Three zones per EC2:
         - Zone A: Tension failure (pivot at extreme rebar ε_ud) when na_depth <= x_bal
-        - Zone B: Bending failure (pivot at extreme concrete fiber ε_cu2) when x_bal < na_depth <= h
+        - Zone B: Bending failure (pivot at extreme concrete fibre ε_cu2) when x_bal < na_depth <= h
         - Zone C: Compression failure (pivot at depth z_p with ε_c2) when na_depth > h
 
         Args:
             y: Coordinate to evaluate strain at
             na_depth: Neutral axis depth from y_max (positive downward)
-            y_max: Maximum y coordinate (top fiber, compression side)
-            y_min: Minimum y coordinate (bottom fiber, tension side)
+            y_max: Maximum y coordinate (top fibre, compression side)
+            y_min: Minimum y coordinate (bottom fibre, tension side)
             h: Total height (y_max - y_min)
             rebar_y_min: Position of extreme tension rebar
             d_eff: Effective depth to extreme tension rebar (y_max - rebar_y_min)
@@ -418,14 +420,14 @@ class BiaxialMNInteractionSurface:
             return slope * (y - y_na)
 
         # ZONE B: Bending Failure (most common)
-        # Pivot at top fiber with ε_cu2
+        # Pivot at top fibre with ε_cu2
         elif na_depth <= h:
             # Strain profile: ε_cu2 at y_max, 0 at y_na
             slope = eps_cu2 / na_depth
             return slope * (y - y_na)
 
         # ZONE C: Compression Failure
-        # Pivot at z_p from top fiber with ε_c2
+        # Pivot at z_p from top fibre with ε_c2
         else:  # na_depth > h
             # Strain profile: ε_c2 at (y_max - z_p), 0 at y_na
             slope = eps_c2 / (na_depth - z_p)
@@ -443,16 +445,16 @@ class BiaxialMNInteractionSurface:
         Includes vectorization for 10-100x speedup over loop-based approach.
 
         Args:
-            na_depth: Neutral axis depth from top fiber (mm, positive = deeper)
+            na_depth: Neutral axis depth from top fibre (mm, positive = deeper)
             neutral_axis_angle: Angle of neutral axis from horizontal (degrees)
 
         Returns:
             Point on the failure surface
         """
-        # Get fiber coordinates
-        x, y, area, material_type, material_index = self.mesh.get_fiber_arrays()
+        # Get fibre coordinates
+        x, y, area, material_type, material_index = self.mesh.get_fibre_arrays()
 
-        # Fiber positions relative to centroid
+        # Fibre positions relative to centroid
         x_rel = x - self.section_centroid_x
         y_rel = y - self.section_centroid_y
 
@@ -504,7 +506,7 @@ class BiaxialMNInteractionSurface:
             # ZONE C: Compression Failure
             slope = eps_c2 / (na_depth - z_p)
 
-        # Vectorized strain calculation (all fibers at once!)
+        # Vectorized strain calculation (all fibres at once!)
         strains = slope * (dist_perp - y_na)
 
         # Get stresses from constitutive models
@@ -699,7 +701,7 @@ class BiaxialMNInteractionSurface:
         My_grid = np.hstack([My_raw, My_raw[:, :1]])
         Mz_grid = np.hstack([Mz_raw, Mz_raw[:, :1]])
 
-        # Add pole points to close the tips using actual fiber integration (non-zero for asymmetric sections)
+        # Add pole points to close the tips using actual fibre integration (non-zero for asymmetric sections)
         n_cols = n_angles + 1
         angles = np.linspace(0, 360, n_angles, endpoint=False)
         max_dim = max(self.section_width, self.section_height)
@@ -964,7 +966,7 @@ class BiaxialMNInteractionSurface:
                 "concrete_fck": self.concrete.f_ck,
                 "concrete_fcd": self.concrete.f_cd,
                 "n_rebar_groups": len(self.section.rebar_groups),
-                "n_fibers": self.mesh.total_fibers,
+                "n_fibres": self.mesh.total_fibres,
                 "concrete_model": type(self.concrete_model).__name__,
                 "steel_models": [type(sm).__name__ for sm in self.steel_models],
                 "n_angles": n_angles,

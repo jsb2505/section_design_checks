@@ -1,5 +1,27 @@
+# utils.py
+'''
+Docstring for materials.reinforced_concrete.code_checks.ec2.shear_utils
+
+Utility functions for shear design checks according to Eurocode 2 (EC2).
+'''
 from math import sqrt, isfinite, radians
 from materials.utils.helpers import cot
+from materials.reinforced_concrete.geometry import RCSection
+
+
+def calculate_section_breadth(section: RCSection) -> float:
+    """
+    Web breadth in mm.
+
+    Args:
+        section: RCSection object
+
+    Returns:
+        shear breadth in mm
+    """
+    # TODO FOR WEB BEAMS FIND THE BREADTH USED FOR SHEAR AREA
+    bounds = section.outline.bounds
+    return bounds[2] - bounds[0]
 
 
 def find_cot_theta_for_V_Ed(
