@@ -174,7 +174,7 @@ class MNDiagramViewer:
             xaxis=dict(range=[xmin - xpad, xmax + xpad], gridcolor="lightgray", zeroline=True),
             yaxis=dict(range=[ymin - ypad, ymax + ypad], gridcolor="lightgray", zeroline=True),
             template="plotly_white",
-            legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
+            legend=dict(yanchor="top", y=1, xanchor="left", x=1.02),
             width=width, height=height,
         )
 

@@ -72,6 +72,12 @@ class _StressStrainPlotState:
     equilibrium_error_N: float  # |N_achieved - N_Ed| in kN
     equilibrium_error_M: float  # |M_achieved - M_Ed| in kN·m
 
+    # Capacity at the applied axial force level
+    M_Rd_pos: float | None  # positive moment capacity (kN·m)
+    M_Rd_neg: float | None  # negative moment capacity (kN·m)
+    N_Rd: float | None  # capped axial level used (kN)
+    utilisation: float | None  # utilisation ratio
+
 
 class StressStrainViewer:
     def __init__(self, diagram: "MNInteractionDiagram") -> None:
@@ -132,6 +138,16 @@ class StressStrainViewer:
             fig.show()
 
         return fig
+
+    def _get_capacity(self, *, M_Ed: float, N_Ed: float) -> dict:
+        """Get M_Rd, N_Rd and utilisation via the capacity vector method."""
+        result = self.diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed)
+        return dict(
+            M_Rd_pos=float(result.M_Rd) if result.M_Rd is not None else None,
+            M_Rd_neg=None,
+            N_Rd=float(result.N_Rd) if result.N_Rd is not None else None,
+            utilisation=float(result.utilization) if result.utilization is not None and result.utilization != float("inf") else None,
+        )
 
     # -----------------------------
     # Build plot state
@@ -281,6 +297,7 @@ class StressStrainViewer:
             achieved_M_kNm=achieved_M_kNm,
             equilibrium_error_N=equilibrium_error_N,
             equilibrium_error_M=equilibrium_error_M,
+            **self._get_capacity(M_Ed=M_Ed, N_Ed=N_Ed),
         )
 
 
@@ -680,7 +697,7 @@ class StressStrainViewer:
             text=self._build_annotation_text(s),
             showarrow=False,
             font=dict(size=10),
-            align="center",
+            align="left",
         )
 
         # Increase bottom margin when section fails to accommodate warning text
@@ -1048,6 +1065,13 @@ class StressStrainViewer:
 
         txt += (
             f"<b>Load Case:</b> M<sub>Ed</sub> = {s.M_Ed:.1f} kN·m, N<sub>Ed</sub> = {s.N_Ed:.1f} kN<br>"
+        )
+        if s.M_Rd_pos is not None and s.N_Rd is not None:
+            cap_parts = f"M<sub>Rd</sub> = {s.M_Rd_pos:.1f} kN·m, N<sub>Rd</sub> = {s.N_Rd:.1f} kN"
+            if s.utilisation is not None:
+                cap_parts += f", Utilisation = {s.utilisation:.2f}"
+            txt += f"<b>Capacity:</b> {cap_parts}<br>"
+        txt += (
             f"<b>Strains:</b> ε<sub>top</sub> = {s.eps_top*1000:.3f}‰, ε<sub>bot</sub> = {s.eps_bottom*1000:.3f}‰<br>"
         )
         if s.y_na is not None:
