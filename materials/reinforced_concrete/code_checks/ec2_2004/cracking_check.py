@@ -662,7 +662,7 @@ class CrackingCheck(BaseCodeCheck):
 
         # Concrete stress from axial force
         A_eff = self.section.get_transformed_area(self.concrete.E_cm)
-        sigma_c = N_Ed * 1000 / A_eff  # MPa
+        sigma_c = N_Ed * 1000 / A_eff  # MPa  # TODO use unit conversion here
 
         f_ct_eff = self.concrete.f_ctm
 
@@ -752,8 +752,6 @@ class CrackingCheck(BaseCodeCheck):
         Returns:
             Maximum tensile stress in reinforcement (MPa, always positive)
         """
-        # TODO may need to check SteelModelType before passing k
-        # If HORIZONTAL the stress does not go higher than f_yk.
         bounds = self.section.outline.bounds
         h = bounds[3] - bounds[1]
         y_min = bounds[1]
@@ -763,8 +761,9 @@ class CrackingCheck(BaseCodeCheck):
         for group in self.section.rebar_groups:
             E_s = group.rebar.E_s
             f_yk = group.rebar.f_yk
+            epsilon_uk = group.rebar.epsilon_uk
             k_ratio = group.rebar.grade.ft_ratio_min  # Hardening ratio
-
+            
             for pos in group.positions:
                 # Strain at bar location
                 y_rel = (pos.y - y_min) / h
@@ -772,11 +771,13 @@ class CrackingCheck(BaseCodeCheck):
 
                 # Only consider tension (negative strain)
                 if strain_at_bar < 0:
-                    stress = flexure_utils.calculate_rebar_stress_from_strain(
+                    stress = flexure_utils.calculate_rebar_characteristic_stress_from_strain(
                         strain=strain_at_bar,
+                        steel_model_type=self.steel_model_type,
                         E_s=E_s,
                         f_yk=f_yk,
                         k=k_ratio,
+                        epsilon_uk=epsilon_uk,
                     )
                     max_tension_stress = max(max_tension_stress, abs(stress))
 

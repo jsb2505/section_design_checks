@@ -523,7 +523,7 @@ def calculate_tension_shift_envelope_simplified(
         V = node.V_kN
 
         # M_add = |V| * a_l / 1000 (convert mm to m)
-        M_add = abs(V) * a_l_mm / 1000
+        M_add = abs(V) * a_l_mm / 1000  # TODO use unit conversion here
 
         # Apply shift: increase magnitude, then cap
         sign = 1 if M_orig >= 0 else -1
@@ -561,7 +561,7 @@ def apply_tension_shift_to_beam(
     exercising the full tension shift implementation including strain solving for z.
 
     Args:
-        beam: Analyzed Beam object with M and V at each node
+        beam: Analysed Beam object with M and V at each node
         diagram: MNInteractionDiagram instance for the section
         N_Ed: Axial force (kN), constant along beam (default 0.0)
         shear_reinforcement: ShearRebar instance, or None for no shear reinforcement

@@ -596,7 +596,7 @@ class ShearCheck(BaseCodeCheck):
         # Minimum value (Eq. 6.2b)
         v_min = find_v_min(f_ck, k)
         V_Rd_c_min = (v_min + k_1 * sigma_cp) * b_w * d
-
+        # TODO use unit conversion here
         V_Rd_c_kN = max(V_Rd_c, V_Rd_c_min) / 1000  # Convert to kN
 
         return max(V_Rd_c_kN, 0)  # Prevents negative values if sigma_cp is large negative
@@ -623,7 +623,7 @@ class ShearCheck(BaseCodeCheck):
         link_angle_rads = radians(self.shear_reinforcement.angle)
 
         V_Rd_s = A_sw_over_s * z * f_ywd * (cot_theta + cot(link_angle_rads)) * sin(link_angle_rads)
-        return V_Rd_s / 1000
+        return V_Rd_s / 1000  # TODO use unit conversion here
 
 
     def find_V_Rd_max(self, cot_theta: float, z: float, sigma_cp: float) -> float:
@@ -651,7 +651,7 @@ class ShearCheck(BaseCodeCheck):
 
         link_angle_rads = radians(self.shear_reinforcement.angle)
         V_Rd_max = (alpha_cw * b_w * z * nu * f_cd) * (cot_theta + cot(link_angle_rads)) / (1 + cot_theta**2)
-        return V_Rd_max / 1000
+        return V_Rd_max / 1000  # TODO use unit conversion here
 
 
     # ===========================
@@ -919,6 +919,7 @@ class ShearCheck(BaseCodeCheck):
         )
         
         A_sw_over_s_min = self._find_min_a_sw_over_s()
+        # TODO use unit conversion here
         A_sw_over_s = (V_Ed * 1000) / (z_ec2 * f_ywd * cot_theta_limited)
         return max(A_sw_over_s, A_sw_over_s_min)
 

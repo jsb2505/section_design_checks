@@ -174,7 +174,7 @@ class ReinforcingSteel(BaseMaterial):
     @cached_property
     def k_ratio(self) -> float:
         """Ratio f_t/f_yk for ductility classification (§C.1)."""
-        return self.f_t / self.f_yk
+        return self.grade.ft_ratio_min
 
     @property
     def ductility_class(self) -> Literal["A", "B", "C"]:

@@ -8,6 +8,8 @@ BendingCheck and CrackingCheck.
 from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
 import warnings
 
+from materials.reinforced_concrete.constitutive import SteelModelType
+
 if TYPE_CHECKING:
     from materials.reinforced_concrete.geometry import RCSection
     from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
@@ -347,10 +349,12 @@ def get_tension_rebars_from_strain_state(
     return tension_rebars
 
 
-def calculate_rebar_stress_from_strain(
+def calculate_rebar_characteristic_stress_from_strain(
     strain: float,
-    E_s: float,
-    f_yk: float,
+    *,
+    steel_model_type: SteelModelType = SteelModelType.INCLINED,
+    E_s: float = 200_000,
+    f_yk: float = 500,
     k: float = 1.0,
     epsilon_uk: float = 0.05,
 ) -> float:
@@ -361,19 +365,15 @@ def calculate_rebar_stress_from_strain(
 
     Args:
         strain: Strain at rebar location (tension negative, compression positive)
+        steel_model_type: SteelModelType.INCLINED or SteelModelType.HORIZONTAL
         E_s: Steel elastic modulus in MPa
         f_yk: Characteristic yield strength in MPa
-        k: Hardening ratio (f_t/f_y, typically 1.0 to 1.08)
-        epsilon_uk: Ultimate strain (typically 0.05 for Class B)
+        k: Hardening ratio (f_t/f_y, typically 1.0 to 1.08) - only used if steel model type is 'inclined'
+        epsilon_uk: Ultimate strain (typically 0.05 for Class B) - only used if steel model type is 'inclined'
 
     Returns:
         Stress in MPa (tension negative, compression positive)
     """
-    # TODO I think this function may only apply if the SteelModelType
-    # used in SteelStressStrainEC2 is INCLINED. SteelStressStrainEC2 is
-    # passed when making an MNInteractionDiagram instance. As it uses k.
-    # To investigate more.
-
     # Yield strain
     epsilon_yk = f_yk / E_s
 
@@ -383,13 +383,55 @@ def calculate_rebar_stress_from_strain(
     if abs_strain <= epsilon_yk:
         # Elastic region
         stress = E_s * abs_strain
-    elif abs_strain <= epsilon_uk:
-        # Plastic region with hardening
-        f_t = k * f_yk
-        stress = f_yk + (f_t - f_yk) * (abs_strain - epsilon_yk) / (epsilon_uk - epsilon_yk)
     else:
-        # Beyond ultimate - cap at ultimate stress
-        stress = k * f_yk
+        if steel_model_type is SteelModelType.HORIZONTAL:
+            # perfectly plastic post-yield
+            stress = f_yk
+
+        elif steel_model_type is SteelModelType.INCLINED:
+            # hardening up to k*f_yk at epsilon_uk
+            if abs_strain <= epsilon_uk:
+                # Plastic region with hardening
+                f_t = k * f_yk
+                stress = f_yk + (f_t - f_yk) * (abs_strain - epsilon_yk) / (epsilon_uk - epsilon_yk)
+            else:
+                # Beyond ultimate - cap at ultimate stress
+                stress = k * f_yk
+        else:
+            raise ValueError(f"Unsupported steel model type: {steel_model_type!r}")
 
     # Apply sign (tension negative, compression positive)
     return stress if strain >= 0 else -stress
+
+
+def find_area_of_steel_minimum(b: float, d: float, f_ctm: float, f_yk: float) -> float:
+    '''
+    Minimum area of longitudinal tension reinforcement in mm².
+    Ref: EC2 §9.2.1.1(1) (9.1N)
+
+    Args:
+        b: Mean breadth of the section in the tensile zone
+        d: Effective depth to tensile reinforcement
+        f_ctm: The mean tensile strength of concrete
+        f_yk: The characteristic yield strength of the rebar
+
+    Returns:
+        A_s,min: The minimum amount of longitudinal reinforcement allowed
+    '''
+    A_s_min = max(0.0013, 0.26 * (f_ctm / f_yk))
+    return A_s_min * b * d
+
+
+def find_area_of_steel_maximum(section_area: float) -> float:
+    '''
+    Maximum area of longitudinal tension or compression reinforcement in mm².
+    Ref: EC2 §9.2.1.1(3)
+
+    Args:
+        section_area: The cross-sectional area of the section
+    
+    Returns:
+        A_s,max: The maximum amount of longitudinal reinforcement allowed
+    '''
+    return 0.04 * section_area
+

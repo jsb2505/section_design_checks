@@ -916,8 +916,8 @@ class RCSection(BaseGeometry):
         d = float(d)
 
         return d
-
-
+    
+    
     def __repr__(self) -> str:
         name_str = f"'{self.section_name}'" if self.section_name else "unnamed"
         return (
