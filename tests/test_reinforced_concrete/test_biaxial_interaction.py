@@ -27,8 +27,8 @@ class TestBiaxialInteractionPoint:
         """Test creating a biaxial interaction point."""
         point = BiaxialInteractionPoint(
             N=500.0,
-            Mx=150.0,
-            My=100.0,
+            My=150.0,
+            Mz=100.0,
             neutral_axis_depth=250.0,
             neutral_axis_angle=45.0,
             max_concrete_strain=0.0035,
@@ -36,8 +36,8 @@ class TestBiaxialInteractionPoint:
         )
 
         assert point.N == 500.0
-        assert point.Mx == 150.0
-        assert point.My == 100.0
+        assert point.My == 150.0
+        assert point.Mz == 100.0
         assert point.neutral_axis_depth == 250.0
         assert point.neutral_axis_angle == 45.0
 
@@ -45,8 +45,8 @@ class TestBiaxialInteractionPoint:
         """Test that BiaxialInteractionPoint is immutable."""
         point = BiaxialInteractionPoint(
             N=500.0,
-            Mx=150.0,
-            My=100.0,
+            My=150.0,
+            Mz=100.0,
             neutral_axis_depth=250.0,
             neutral_axis_angle=45.0,
             max_concrete_strain=0.0035,
@@ -60,8 +60,8 @@ class TestBiaxialInteractionPoint:
         """Test converting point to dictionary."""
         point = BiaxialInteractionPoint(
             N=500.0,
-            Mx=150.0,
-            My=100.0,
+            My=150.0,
+            Mz=100.0,
             neutral_axis_depth=250.0,
             neutral_axis_angle=45.0,
             max_concrete_strain=0.0035,
@@ -72,8 +72,8 @@ class TestBiaxialInteractionPoint:
 
         assert isinstance(data, dict)
         assert data["N_kN"] == 500.0
-        assert data["Mx_kNm"] == 150.0
-        assert data["My_kNm"] == 100.0
+        assert data["My_kNm"] == 150.0
+        assert data["Mz_kNm"] == 100.0
         assert data["neutral_axis_angle_deg"] == 45.0
 
 
@@ -143,35 +143,40 @@ class TestBiaxialMNInteractionSurface:
         assert surface.section is not None
         assert surface.concrete is not None
         assert surface.mesh is not None
+        # Verify steel_models is a list with one model per rebar group
+        assert isinstance(surface.steel_models, list)
+        assert len(surface.steel_models) == len(square_column.rebar_groups)
 
     def test_calculate_point_zero_angle(self, square_column, concrete_c30):
-        """Test calculating point with neutral axis at 0° (bending about y-axis)."""
+        """Test calculating point with neutral axis at 0° (bending about y-axis, major)."""
         surface = BiaxialMNInteractionSurface(
             section=square_column,
             concrete=concrete_c30,
         )
 
-        # NA at 0° means bending about y-axis (moment Mx)
+        # NA at 0° (horizontal) means bending about y-axis (moment My, major axis)
+        # Forces act vertically (z-direction), creating moment about y-axis
         point = surface.calculate_point(neutral_axis_depth=200.0, neutral_axis_angle=0.0)
 
         assert isinstance(point, BiaxialInteractionPoint)
         assert point.N != 0  # Should have axial force
-        # At 0°, should have Mx dominant, My should be small
-        assert abs(point.Mx) > abs(point.My) * 0.5  # Mx should be significant
+        # At 0°, should have My dominant, Mz should be small
+        assert abs(point.My) > abs(point.Mz) * 0.5  # My should be significant
 
     def test_calculate_point_90_degree_angle(self, square_column, concrete_c30):
-        """Test calculating point with neutral axis at 90° (bending about x-axis)."""
+        """Test calculating point with neutral axis at 90° (bending about z-axis, minor)."""
         surface = BiaxialMNInteractionSurface(
             section=square_column,
             concrete=concrete_c30,
         )
 
-        # NA at 90° means bending about x-axis (moment My)
+        # NA at 90° (vertical) means bending about z-axis (moment Mz, minor axis)
+        # Forces act horizontally (y-direction), creating moment about z-axis
         point = surface.calculate_point(neutral_axis_depth=200.0, neutral_axis_angle=90.0)
 
         assert isinstance(point, BiaxialInteractionPoint)
         assert point.N != 0
-        # At 90°, should have My dominant
+        # At 90°, should have Mz dominant
         # For square section, magnitudes should be similar to 0° case
 
     def test_calculate_point_45_degree_angle(self, square_column, concrete_c30):
@@ -185,9 +190,9 @@ class TestBiaxialMNInteractionSurface:
 
         assert isinstance(point, BiaxialInteractionPoint)
         assert point.N != 0
-        # At 45°, both Mx and My should be non-zero
-        assert point.Mx != 0
+        # At 45°, both My and Mz should be non-zero
         assert point.My != 0
+        assert point.Mz != 0
 
     def test_generate_surface_returns_points(self, square_column, concrete_c30):
         """Test that generate_surface returns list of points."""
@@ -242,8 +247,8 @@ class TestBiaxialMNInteractionSurface:
             concrete=concrete_c30,
         )
 
-        # 0° = bending about y-axis (moment Mx)
-        # 90° = bending about x-axis (moment My)
+        # 0° = NA horizontal → My (major axis)
+        # 90° = NA vertical → Mz (minor axis)
         p0 = surface.calculate_point(200.0, 0.0)
         p90 = surface.calculate_point(200.0, 90.0)
 
@@ -273,8 +278,8 @@ class TestBiaxialMNInteractionSurface:
 
         assert "surface_points" in data
         assert len(data["surface_points"]) > 0
-        assert "Mx_kNm" in data["surface_points"][0]
         assert "My_kNm" in data["surface_points"][0]
+        assert "Mz_kNm" in data["surface_points"][0]
 
     def test_export_to_csv(self, square_column, concrete_c30, tmp_path):
         """Test exporting surface to CSV."""
@@ -293,8 +298,8 @@ class TestBiaxialMNInteractionSurface:
             rows = list(reader)
 
         assert len(rows) > 0
-        assert 'Mx_kNm' in rows[0]
         assert 'My_kNm' in rows[0]
+        assert 'Mz_kNm' in rows[0]
         assert 'neutral_axis_angle_deg' in rows[0]
 
     def test_no_rebar_raises_error(self, concrete_c30):

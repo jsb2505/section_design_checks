@@ -549,7 +549,7 @@ class MNInteractionDiagram:
             points_sorted = curve_positive_m + list(reversed(curve_negative_m))
             return points_sorted
 
-    def get_capacity_fixed_n(self, N_Ed: float) -> Tuple[float, float]:
+    def get_capacity_fixed_n(self, N_Ed: float) -> Tuple[Optional[float], Optional[float]]:
         """
         Get moment capacity for given axial force using fixed-N method.
 
@@ -565,8 +565,10 @@ class MNInteractionDiagram:
 
         Returns:
             Tuple of (M_Rd_pos, M_Rd_neg) - moment capacity in kN·m
-            M_Rd_pos: Maximum positive moment capacity at this N
-            M_Rd_neg: Maximum negative moment capacity at this N (negative value)
+            M_Rd_pos: Maximum positive moment capacity at this N (None if N_Ed out of bounds)
+            M_Rd_neg: Maximum negative moment capacity at this N (None if N_Ed out of bounds)
+
+            Returns (None, None) if N_Ed is outside the interaction diagram bounds.
         """
         # Generate diagram (returns closed convex hull boundary)
         diagram = self.generate_diagram(n_points=100)
@@ -574,6 +576,14 @@ class MNInteractionDiagram:
         # Extract N and M values
         N_values = np.array([p.N for p in diagram])
         M_values = np.array([p.M for p in diagram])
+
+        # Check if N_Ed is within the overall diagram bounds
+        N_min_global = np.min(N_values)
+        N_max_global = np.max(N_values)
+
+        if N_Ed < N_min_global or N_Ed > N_max_global:
+            # N_Ed is outside the interaction diagram capacity
+            return (None, None)
 
         # Split the curve into positive M and negative M sides
         # The curve is ordered as a closed loop, so we need to separate the two sides
@@ -601,12 +611,8 @@ class MNInteractionDiagram:
 
             if N_target < N_min or N_target > N_max:
                 # N_target is outside this segment's range
-                # Return 0 or nearest value
-                if len(M_seg) == 0:
-                    return 0.0
-                # Find nearest point
-                nearest_idx = np.argmin(np.abs(N_seg - N_target))
-                return M_seg[nearest_idx]
+                # Return 0 (this can happen for one side when N_Ed is near pure compression/tension)
+                return 0.0
 
             # Find the two points that bracket N_target
             # Sort by N to enable bracketing search
