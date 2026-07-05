@@ -41,8 +41,12 @@ dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "black>=23.0.0",
-    "ruff>=0.1.0",
-    "mypy>=1.5.0",
+    # ruff and mypy are PINNED exactly so the blocking CI lint/type gates resolve
+    # the same versions used locally — patch releases can add/stabilise rules and
+    # cause "green locally, red in CI" drift (e.g. UP042 went active between
+    # versions). Bump these deliberately, re-running the gates, not via float.
+    "ruff==0.14.13",
+    "mypy==1.19.1",
 ]
 
 [project.urls]
