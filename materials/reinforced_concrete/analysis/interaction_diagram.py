@@ -41,6 +41,7 @@ Notes on confinement:
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, NamedTuple, Sequence, Literal, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ import json
 import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, leastsq
 
 from materials.utils.helpers import as_float
 from materials.reinforced_concrete.constitutive import (
@@ -184,6 +185,8 @@ class MNInteractionDiagram:
         ignore_compression_steel: bool = False,
         elastic_modulus: Optional[float] = None,
         include_tension: bool = False,
+        concrete_model_override: Optional[Any] = None,
+        steel_models_override: Optional[List[Any]] = None,
     ):
         self.section = section
         self.concrete = concrete
@@ -200,34 +203,47 @@ class MNInteractionDiagram:
         self.confinement_f_yh = confinement_f_yh
 
         # Constitutive models for design-level capacity evaluation
-        self.concrete_model = create_concrete_stress_strain(
-            concrete=concrete,
-            model_type=concrete_model_type,
-            use_characteristic=use_characteristic,
-            use_accidental=use_accidental,
-            elastic_modulus=elastic_modulus,
-            include_tension=include_tension,
-        )
-
-        if len(section.rebar_groups) == 0:
-            raise ValueError("Section must have at least one rebar group")
-
-        # Steel models per group (support different grades)
-        self.steel_models = [
-            create_steel_stress_strain(
-                steel=g.rebar,
-                branch_type=steel_model_type,
+        if concrete_model_override is not None:
+            self.concrete_model = concrete_model_override
+        else:
+            self.concrete_model = create_concrete_stress_strain(
+                concrete=concrete,
+                model_type=concrete_model_type,
                 use_characteristic=use_characteristic,
-                use_accidental=use_accidental
+                use_accidental=use_accidental,
+                elastic_modulus=elastic_modulus,
+                include_tension=include_tension,
             )
-            for g in section.rebar_groups
-        ]
+
+        if steel_models_override is not None:
+            if len(steel_models_override) == 0:
+                raise ValueError("steel_models_override must contain at least one model")
+            self.steel_models = list(steel_models_override)
+        else:
+            if len(section.rebar_groups) == 0:
+                raise ValueError("Section must have at least one rebar group")
+
+            # Steel models per group (support different grades)
+            self.steel_models = [
+                create_steel_stress_strain(
+                    steel=g.rebar,
+                    branch_type=steel_model_type,
+                    use_characteristic=use_characteristic,
+                    use_accidental=use_accidental
+                )
+                for g in section.rebar_groups
+            ]
 
         # Check if concrete model already has EC2 3.1.9 confinement
         _model_has_ec2_confinement = getattr(self.concrete_model, 'is_ec2_confined', False)
 
         # Confined concrete parameter checks
         if self.confined_concrete:
+            if concrete_model_override is not None:
+                raise ValueError(
+                    "Cannot use confined_concrete=True with concrete_model_override. "
+                    "Apply confinement within your custom model instead."
+                )
             # Prevent double confinement: Mander + EC2 3.1.9
             if _model_has_ec2_confinement:
                 raise ValueError(
@@ -888,6 +904,7 @@ class MNInteractionDiagram:
         N_target: float,
         initial_guess: Optional[Tuple[float, float]] = None,
         tol: float = 1e-6,
+        strict: bool = False,
     ) -> Tuple[float, float]:
         """
         Inverse solver: Find end strains that produce target (M, N).
@@ -904,12 +921,17 @@ class MNInteractionDiagram:
             initial_guess: Optional (eps_top, eps_bottom) starting point for optimizer.
                           If None, automatically estimated from (M, N) quadrant.
             tol: Convergence tolerance for residual norm and parameter changes
+            strict:
+                If False (default), return the nearest feasible strain state when exact
+                equilibrium is not achievable (e.g., target outside M-N envelope).
+                If True, require residuals to meet tolerance and raise ValueError otherwise.
 
         Returns:
             (eps_top, eps_bottom): Tuple of end strains that produce target forces
 
         Raises:
-            ValueError: If no numerically stable solution can be found.
+            ValueError: If no numerically stable solution can be found, or if strict=True
+                and the target cannot be matched within tolerance.
 
         Performance:
             - Typical solve time: 10-50ms per unique (M,N) point
@@ -997,16 +1019,42 @@ class MNInteractionDiagram:
         ) -> Any:
             # Analytical Jacobian: exact derivatives, 5-10 iterations typical
             # Numerical Jacobian: finite difference, 30-50 iterations typical
-            return least_squares(
-                residual,
-                x0=np.array(clamp_guess(guess)),
-                bounds=(lower_bounds, upper_bounds),
-                jac=jac,  # type: ignore[arg-type]
-                ftol=tol,
-                xtol=tol,
-                gtol=tol,
-                max_nfev=max_iterations,
-            )
+            x0 = np.asarray(clamp_guess(guess), dtype=float)
+            try:
+                return least_squares(
+                    residual,
+                    x0=x0,
+                    bounds=(lower_bounds, upper_bounds),
+                    jac=jac,  # type: ignore[arg-type]
+                    ftol=tol,
+                    xtol=tol,
+                    gtol=tol,
+                    max_nfev=max_iterations,
+                )
+            except ValueError as exc:
+                # SciPy/Numpy compatibility issue observed under coverage:
+                # "_CopyMode.IF_NEEDED is neither True nor False."
+                if "_CopyMode.IF_NEEDED" not in str(exc):
+                    raise
+
+                jacobian = jac if callable(jac) else None
+                x_out, _cov_x, info, message, ier = leastsq(  # type: ignore[misc]
+                    func=residual,
+                    x0=x0,
+                    Dfun=jacobian,
+                    full_output=True,
+                    maxfev=max_iterations,
+                )
+                x_clamped = np.clip(np.asarray(x_out, dtype=float), lower_bounds, upper_bounds)
+                fun = np.asarray(residual(x_clamped), dtype=float)
+                return SimpleNamespace(
+                    x=x_clamped,
+                    fun=fun,
+                    success=bool(ier in (1, 2, 3, 4) and np.all(np.isfinite(fun))),
+                    status=int(ier),
+                    message=message,
+                    nfev=int(info.get("nfev", 0)) if isinstance(info, dict) else 0,
+                )
 
         # Build a compact set of branch-diverse candidate guesses. Keep the
         # existing heuristic as first choice, then add conservative alternatives.
@@ -1106,6 +1154,17 @@ class MNInteractionDiagram:
             raise ValueError(
                 f"Inverse solver failed for M={M_target:.2f} kN.m, N={N_target:.2f} kN. "
                 "All solver attempts were numerically unstable."
+            )
+
+        if strict and best_abs_error > acceptable_abs_error:
+            fun = np.asarray(getattr(best_result, "fun", np.array([np.nan, np.nan])), dtype=float)
+            n_err = float(fun[0]) if fun.shape == (2,) else float("nan")
+            m_err = float(fun[1]) if fun.shape == (2,) else float("nan")
+            raise ValueError(
+                f"Inverse solver could not match M={M_target:.2f} kN.m, N={N_target:.2f} kN "
+                f"within tolerance. Best residuals: dN={n_err:.3f} kN, dM={m_err:.3f} kN.m. "
+                "Target may be outside section capacity envelope. "
+                "Use strict=False to return the nearest feasible strain state."
             )
 
         return tuple(best_result.x)
@@ -1256,11 +1315,6 @@ class MNInteractionDiagram:
                 return (+eps_cu * 0.8, +eps_cu * 0.8)
             elif M > 0:  # Compression + positive moment (sagging)
                 # Top more compressed, bottom less compressed or in tension
-                # TODO: Could be improved by checking eccentricity e = M/N vs h
-                # to determine if tension develops (e > h/6 typically indicates tension).
-                # However, changing this requires extensive testing to avoid wrong local minima.
-                # See docs/INITIAL_GUESS_HEURISTIC.md for details and attempted implementation.
-                # Current simple guess works reliably for most cases.
                 return (+eps_cu * 0.8, +eps_cu * 0.2)
             else:  # Compression + negative moment (hogging)
                 # Bottom more compressed, top less compressed or in tension
@@ -1968,7 +2022,7 @@ class MNInteractionDiagram:
         show: bool = True,
         title: Optional[str] = None,
         width: int = 1200,
-        height: int = 600,
+        height: int = 1000,
         section_render: Literal["points", "filled"] = "points",
     ) -> Any:
         """

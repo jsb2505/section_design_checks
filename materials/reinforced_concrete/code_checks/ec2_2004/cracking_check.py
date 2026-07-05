@@ -74,6 +74,11 @@ class CrackingResult:
     nonlinear_creep_applied: bool = False  # Whether non-linear creep adjustment was applied
     creep_coefficient_used: float = 0.0  # Actual creep coefficient used (may be φ_NL)
     steel_yielded: bool = False  # Whether σ_s > f_yk (EC2 §7.2(4)P inelastic strain)
+    governing_face: Optional[str] = None  # "top" or "bottom" — which face governed w_k
+    # Bar diameter correction fields (for equivalent-area bar substitution)
+    actual_bar_diameter: Optional[float] = None  # User-supplied actual bar diameter (mm)
+    s_r_max_uncorrected: Optional[float] = None  # s_r,max before diameter correction (mm)
+    phi_correction_factor: Optional[float] = None  # φ_actual / φ_eq ratio applied
 
 
 class CrackingCheck(BaseCodeCheck):
@@ -213,9 +218,18 @@ class CrackingCheck(BaseCodeCheck):
         description="If True, iterate non-linear creep adjustment until convergence (max 5 iterations).",
     )
 
-    # ===========================
+    net_tension_face: Optional[Literal["top", "bottom"]] = Field(
+        default=None,
+        description=(
+            "Face-checking policy for net tension (both faces in tension). "
+            "None (default): check both faces independently and report the worst. "
+            "'top' or 'bottom': only check the specified face."
+        ),
+    )
+
+    # =========================
     # Internal state (private)
-    # ===========================
+    # =========================
 
     _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
     _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
@@ -387,12 +401,13 @@ class CrackingCheck(BaseCodeCheck):
         """
         Effective height of concrete in tension zone h_c,ef (EC2 §7.3.2(3), Fig 7.1).
 
-        h_c,ef = min(2.5(h-d), (h-x)/3, h/2)
+        h_c,ef = min(f(h,d)·(h-d), (h-x)/3, h/2)
 
         where:
         - h = section depth
         - d = effective depth to tension steel
         - x = neutral axis depth from compression face
+        - f(h,d) = 2.5 (base EC2) or NDP-dependent multiplier (e.g. German NA bilinear)
 
         Note: For sections fully in tension (both faces), use find_h_c_ef_tension_member()
         instead, which calculates separate h_c,ef values for each face.
@@ -406,8 +421,15 @@ class CrackingCheck(BaseCodeCheck):
         """
         h = self.height
 
+        # NDP-dependent multiplier on (h - d)
+        multiplier_func = get_ndp("h_c_ef_multiplier")
+        if multiplier_func is not None and callable(multiplier_func):
+            d_1_term = multiplier_func(h, d) * (h - d)
+        else:
+            d_1_term = 2.5 * (h - d)
+
         candidates = [
-            2.5 * (h - d),
+            d_1_term,
             h / 2,
         ]
 
@@ -438,11 +460,16 @@ class CrackingCheck(BaseCodeCheck):
         """
         h = self.height
 
-        # Top half: tension face at top
-        h_c_ef_top = min(2.5 * d_top, h / 2)
+        multiplier_func = get_ndp("h_c_ef_multiplier")
 
-        # Bottom half: tension face at bottom
-        h_c_ef_bottom = min(2.5 * d_bottom, h / 2)
+        if multiplier_func is not None and callable(multiplier_func):
+            # d_top is the distance from top face to bars (d_1 for top face).
+            # multiplier_func(h, d) computes from d_1 = h - d, so pass d = h - d_top.
+            h_c_ef_top = multiplier_func(h, h - d_top) * d_top
+            h_c_ef_bottom = multiplier_func(h, h - d_bottom) * d_bottom
+        else:
+            h_c_ef_top = min(2.5 * d_top, h / 2)
+            h_c_ef_bottom = min(2.5 * d_bottom, h / 2)
 
         return h_c_ef_top, h_c_ef_bottom
 
@@ -457,24 +484,29 @@ class CrackingCheck(BaseCodeCheck):
         h_c_ef: float,
         xi_1: float = 0.0,
         A_p: float = 0.0,
+        A_c_eff: Optional[float] = None,
     ) -> float:
         """
         Effective reinforcement ratio ρ_p,eff (EC2 §7.3.4(2)).
 
         ρ_p,eff = (A_s + ξ₁ × A_p') / A_c,eff
 
-        where A_c,eff = h_c,ef × b
+        where A_c,eff = h_c,ef × b (or a pre-computed value for widely-spaced bars)
 
         Args:
             A_s_tension: Area of tension reinforcement (mm²)
             h_c_ef: Effective height of concrete in tension (mm)
             xi_1: Adjusted ratio of bond strengths (ξ₁), default 0 for no prestress
             A_p: Area of prestressing tendons (mm²), default 0
+            A_c_eff: Pre-computed effective concrete area (mm²). When provided,
+                overrides h_c,ef × b. Used for widely-spaced bars where per-bar
+                zones reduce the effective area (EC2 Figure 7.2).
 
         Returns:
             Effective reinforcement ratio (dimensionless)
         """
-        A_c_eff = h_c_ef * self.breadth
+        if A_c_eff is None:
+            A_c_eff = h_c_ef * self.breadth
         if A_c_eff <= 0:
             raise ValueError("Effective concrete area A_c,eff must be > 0")
 
@@ -791,6 +823,29 @@ class CrackingCheck(BaseCodeCheck):
         return min(1.0, max(0.0, k_c))
 
 
+    def _compute_uncracked_na_depth(self, compression_face: str = "top") -> float:
+        """Neutral axis depth in State I (uncracked transformed section).
+
+        Uses the section's transformed centroid (concrete + modular ratio steel)
+        to determine the elastic NA depth from the compression face.
+
+        Args:
+            compression_face: "top" or "bottom"
+
+        Returns:
+            x_I in mm (depth from compression face to transformed centroid)
+        """
+        E_cm = self.concrete.E_cm
+        _, _, cy_tr = self.section.get_transformed_centroid(E_cm)
+        bounds = self.section.outline.bounds
+        y_min, y_max = bounds[1], bounds[3]
+
+        if compression_face == "top":
+            return y_max - cy_tr
+        else:
+            return cy_tr - y_min
+
+
     # ===============================================
     # Helper methods for rebar analysis
     # ===============================================
@@ -1105,6 +1160,118 @@ class CrackingCheck(BaseCodeCheck):
         return max_spacing
 
 
+    def _compute_A_c_eff(
+        self,
+        eps_top: float,
+        eps_bottom: float,
+        h_c_ef: float,
+        cover: float,
+        phi_eq: float,
+        bar_spacing: float,
+        face: Optional[str] = None,
+        h_c_ef_limit: Optional[float] = None,
+    ) -> float:
+        """
+        Effective concrete area in tension A_c,eff (EC2 §7.3.4, Figure 7.2).
+
+        When bar spacing <= 5(c + phi/2), uses full section width:
+            A_c,eff = h_c,ef * b
+
+        When bar spacing > 5(c + phi/2), each bar has its own effective zone
+        of width 5(c_i + phi_i/2) using per-bar cover and diameter, capped at
+        the section edges:
+            A_c,eff = h_c,ef * sum(zone widths)
+
+        Args:
+            eps_top: Top fibre strain (compression positive)
+            eps_bottom: Bottom fibre strain (compression positive)
+            h_c_ef: Effective height of concrete in tension (mm)
+            cover: Global concrete cover (mm) — used for spacing limit check
+            phi_eq: Equivalent bar diameter (mm) — used for spacing limit check
+            bar_spacing: Maximum bar spacing (mm), from _compute_max_bar_spacing
+            face: For net tension, restrict to bars near this face
+            h_c_ef_limit: Only consider bars within this distance of the face
+
+        Returns:
+            Effective concrete area in tension (mm²)
+        """
+        spacing_limit = 5 * (cover + phi_eq / 2)
+        if bar_spacing <= spacing_limit:
+            return h_c_ef * self.breadth
+
+        # --- Collect qualifying bars with per-bar properties ---
+        bounds = self.section.outline.bounds
+        x_min = bounds[0]
+        x_max = bounds[2]
+        h = bounds[3] - bounds[1]
+        y_min = bounds[1]
+        y_max = bounds[3]
+
+        comp_face = flexure_utils.calculate_compression_face_from_strains(
+            eps_top, eps_bottom,
+        )
+        if comp_face is None:
+            cover_ref = face or "bottom"
+        else:
+            cover_ref = "bottom" if comp_face == "top" else "top"
+
+        # Each entry: (bar_x, bar_diameter, bar_cover_to_tension_face)
+        qualifying: List[Tuple[float, float, float]] = []
+
+        for group in self.section.rebar_groups:
+            diameter = float(group.rebar.diameter)
+
+            for pos in group.positions:
+                # Strain filter — tension only
+                y_rel = (pos.y - y_min) / h
+                strain_at_bar = eps_bottom + (eps_top - eps_bottom) * y_rel
+                if strain_at_bar >= 0:
+                    continue
+
+                # Face filter (net tension)
+                if face is not None and comp_face is None:
+                    dist_to_bottom = pos.y - y_min
+                    dist_to_top = y_max - pos.y
+                    if face == "bottom" and dist_to_bottom > dist_to_top:
+                        continue
+                    if face == "top" and dist_to_bottom <= dist_to_top:
+                        continue
+
+                # h_c,ef filter
+                if h_c_ef_limit is not None:
+                    if cover_ref == "bottom":
+                        dist_from_face = pos.y - y_min
+                    else:
+                        dist_from_face = y_max - pos.y
+                    if dist_from_face > h_c_ef_limit:
+                        continue
+
+                # Per-bar cover to tension face
+                if cover_ref == "bottom":
+                    bar_cover = pos.y - y_min - diameter / 2
+                else:
+                    bar_cover = y_max - pos.y - diameter / 2
+                bar_cover = max(0.0, bar_cover)
+
+                qualifying.append((float(pos.x), diameter, bar_cover))
+
+        if not qualifying:
+            return h_c_ef * self.breadth
+
+        # Sum per-bar effective zone widths, capped at section edges
+        total_width = 0.0
+        for bar_x, bar_dia, bar_cover in qualifying:
+            half_zone = 2.5 * (bar_cover + bar_dia / 2)
+            left = max(x_min, bar_x - half_zone)
+            right = min(x_max, bar_x + half_zone)
+            total_width += max(0.0, right - left)
+
+        # Cap at full breadth
+        total_width = min(total_width, self.breadth)
+
+        return h_c_ef * total_width
+
+
     # ===============================================
     # Stress limitation helpers (EC2 §7.2)
     # ===============================================
@@ -1142,7 +1309,9 @@ class CrackingCheck(BaseCodeCheck):
         conc_stresses = conc_forces[nonzero] / conc_areas[nonzero]
 
         # Peak compressive stress (compression positive)
-        peak = float(conc_stresses.max()) if len(conc_stresses) > 0 else 0.0
+        # Use Python max() to avoid NumPy max() default-sentinel edge cases seen
+        # when NumPy is reloaded in some test environments.
+        peak = float(max(float(s) for s in conc_stresses)) if len(conc_stresses) > 0 else 0.0
         return max(0.0, peak)
 
 
@@ -1182,6 +1351,48 @@ class CrackingCheck(BaseCodeCheck):
         )
 
 
+    @staticmethod
+    def _compute_bar_diameter_correction(
+        s_r_max: float,
+        phi_eq: float,
+        actual_bar_diameter: float,
+        cover: float,
+        k_3: float,
+    ) -> Tuple[float, float]:
+        """
+        Correct s_r,max for equivalent-area bar substitution.
+
+        When a non-integer bar count is rounded and the diameter adjusted to
+        preserve total area, the φ-dependent term of s_r,max (Eq. 7.11) must
+        be corrected to use the real bar diameter.
+
+        s_r,max = k_3·c + (k_1·k_2·k_4·φ / ρ_p,eff)
+                  ^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  cover     φ-dependent term
+                  term
+
+        The cover term is unchanged. The φ-dependent term is scaled by
+        φ_actual / φ_eq.
+
+        Args:
+            s_r_max: Original s_r,max computed with model φ_eq (mm)
+            phi_eq: Equivalent bar diameter from the model (mm)
+            actual_bar_diameter: Real bar diameter (mm)
+            cover: Concrete cover used in s_r,max (mm)
+            k_3: NDP coefficient k_3
+
+        Returns:
+            Tuple of (corrected s_r,max, correction factor φ_actual/φ_eq)
+        """
+        if phi_eq <= 0:
+            return s_r_max, 1.0
+
+        factor = actual_bar_diameter / phi_eq
+        cover_term = k_3 * cover
+        phi_term = s_r_max - cover_term
+        s_r_max_corrected = cover_term + phi_term * factor
+        return s_r_max_corrected, factor
+
     def _get_f_yk_max(self) -> float:
         """Maximum f_yk across all rebar groups."""
         if not self.section.rebar_groups:
@@ -1201,6 +1412,7 @@ class CrackingCheck(BaseCodeCheck):
         x: Optional[float],
         is_net_tension: bool,
         suppress_warnings: bool = False,
+        actual_bar_diameter: Optional[float] = None,
     ) -> CrackingResult:
         """
         Calculate crack width for a single face using iterative h_c,ef.
@@ -1264,7 +1476,11 @@ class CrackingCheck(BaseCodeCheck):
             # Compute h_c,ef
             if is_net_tension:
                 d_face = h - d  # Distance from face to bar centroid
-                h_c_ef = min(2.5 * d_face, h / 2)
+                multiplier_func = get_ndp("h_c_ef_multiplier")
+                if multiplier_func is not None and callable(multiplier_func):
+                    h_c_ef = multiplier_func(h, d) * d_face
+                else:
+                    h_c_ef = min(2.5 * d_face, h / 2)
             else:
                 h_c_ef = self.find_h_c_ef(d=d, x=x)
 
@@ -1281,26 +1497,57 @@ class CrackingCheck(BaseCodeCheck):
 
             if new_bar_count == 0:
                 # No bars in h_c,ef zone — edge case (high compression, thin zone)
-                # Drop (h-x)/3 term and retry
                 if not is_net_tension and x is not None and x > 0:
-                    h_c_ef_relaxed = min(2.5 * (h - d), h / 2)
-                    if h_c_ef_relaxed > h_c_ef:
-                        if not suppress_warnings:
-                            warnings.warn(
-                                f"No bars within h_c,ef = {h_c_ef:.1f} mm "
-                                f"(governed by (h-x)/3). Relaxing to "
-                                f"min(2.5(h-d), h/2) = {h_c_ef_relaxed:.1f} mm.",
-                                stacklevel=3,
+                    relaxed_factor = get_ndp("h_c_ef_relaxed_na_factor")
+
+                    if relaxed_factor is not None:
+                        # German NA: first try (h - x_I) × factor
+                        comp_face_name = "top" if face == "bottom" else "bottom"
+                        x_I = self._compute_uncracked_na_depth(comp_face_name)
+                        h_c_ef_relaxed = (h - x_I) * cast(float, relaxed_factor)
+                        if h_c_ef_relaxed > h_c_ef:
+                            if not suppress_warnings:
+                                warnings.warn(
+                                    f"No bars within h_c,ef = {h_c_ef:.1f} mm "
+                                    f"(governed by (h-x)/3). Relaxing to "
+                                    f"(h-x_I)×{relaxed_factor} = {h_c_ef_relaxed:.1f} mm "
+                                    f"(x_I = {x_I:.1f} mm, State I).",
+                                    stacklevel=3,
+                                )
+                            h_c_ef = h_c_ef_relaxed
+                            A_s_filtered, mean_cover_filtered, bar_sizes_filtered = (
+                                self._get_tension_rebar_info(
+                                    eps_top, eps_bottom,
+                                    face=face if is_net_tension else None,
+                                    h_c_ef_limit=h_c_ef,
+                                )
                             )
-                        h_c_ef = h_c_ef_relaxed
-                        A_s_filtered, mean_cover_filtered, bar_sizes_filtered = (
-                            self._get_tension_rebar_info(
-                                eps_top, eps_bottom,
-                                face=face if is_net_tension else None,
-                                h_c_ef_limit=h_c_ef,
+                            new_bar_count = sum(cnt for _, cnt in bar_sizes_filtered)
+
+                    # Fallback: drop NA term, use NDP multiplier × (h-d)
+                    if new_bar_count == 0:
+                        multiplier_func = get_ndp("h_c_ef_multiplier")
+                        if multiplier_func is not None and callable(multiplier_func):
+                            h_c_ef_no_na = multiplier_func(h, d) * (h - d)
+                        else:
+                            h_c_ef_no_na = min(2.5 * (h - d), h / 2)
+                        if h_c_ef_no_na > h_c_ef:
+                            if not suppress_warnings:
+                                warnings.warn(
+                                    f"No bars within h_c,ef = {h_c_ef:.1f} mm "
+                                    f"(governed by NA term). Relaxing to "
+                                    f"{h_c_ef_no_na:.1f} mm (NA term dropped).",
+                                    stacklevel=3,
+                                )
+                            h_c_ef = h_c_ef_no_na
+                            A_s_filtered, mean_cover_filtered, bar_sizes_filtered = (
+                                self._get_tension_rebar_info(
+                                    eps_top, eps_bottom,
+                                    face=face if is_net_tension else None,
+                                    h_c_ef_limit=h_c_ef,
+                                )
                             )
-                        )
-                        new_bar_count = sum(cnt for _, cnt in bar_sizes_filtered)
+                            new_bar_count = sum(cnt for _, cnt in bar_sizes_filtered)
 
                 if new_bar_count == 0:
                     # Still no bars — use all tension bars with relaxed h_c,ef
@@ -1329,7 +1576,29 @@ class CrackingCheck(BaseCodeCheck):
 
         # --- Step 3: Compute crack width components ---
         phi_eq = flexure_utils.find_equivalent_diameter(bar_sizes)
-        rho_p_eff = self.find_rho_p_eff(A_s_tension=A_s, h_c_ef=h_c_ef)
+
+        # Cover (computed early — needed for A_c,eff)
+        try:
+            cover = self.section.get_concrete_cover(reference=face)
+        except ValueError:
+            cover = mean_cover
+
+        # Max bar spacing (computed early — needed for A_c,eff)
+        bar_spacing = self._compute_max_bar_spacing(
+            eps_top, eps_bottom,
+            face=face if is_net_tension else None,
+            h_c_ef_limit=h_c_ef,
+        )
+
+        # Effective concrete area — per-bar zones when widely spaced (EC2 Fig 7.2)
+        A_c_eff = self._compute_A_c_eff(
+            eps_top, eps_bottom, h_c_ef=h_c_ef,
+            cover=cover, phi_eq=phi_eq, bar_spacing=bar_spacing,
+            face=face if is_net_tension else None,
+            h_c_ef_limit=h_c_ef,
+        )
+
+        rho_p_eff = self.find_rho_p_eff(A_s_tension=A_s, h_c_ef=h_c_ef, A_c_eff=A_c_eff)
 
         # Steel stress (peak in the bar set for this face)
         sigma_s = self._get_steel_stress(
@@ -1338,21 +1607,8 @@ class CrackingCheck(BaseCodeCheck):
             h_c_ef_limit=h_c_ef,
         )
 
-        # Cover
-        try:
-            cover = self.section.get_concrete_cover(reference=face)
-        except ValueError:
-            cover = mean_cover
-
         # k_2 (strain distribution coefficient)
         k_2 = self.find_k_2(eps_top, eps_bottom)
-
-        # Max bar spacing for Eq. 7.14 trigger (EC2 §7.3.4(3))
-        bar_spacing = self._compute_max_bar_spacing(
-            eps_top, eps_bottom,
-            face=face if is_net_tension else None,
-            h_c_ef_limit=h_c_ef,
-        )
 
         # s_r,max
         has_tension_reinforcement = A_s > 0
@@ -1362,6 +1618,19 @@ class CrackingCheck(BaseCodeCheck):
             sigma_s=sigma_s,
             bar_spacing=bar_spacing,
         )
+
+        # Bar diameter correction for equivalent-area substitution
+        s_r_max_uncorrected: Optional[float] = None
+        phi_correction_factor: Optional[float] = None
+        if actual_bar_diameter is not None and phi_eq > 0:
+            s_r_max_uncorrected = s_r_max
+            s_r_max, phi_correction_factor = self._compute_bar_diameter_correction(
+                s_r_max=s_r_max,
+                phi_eq=phi_eq,
+                actual_bar_diameter=actual_bar_diameter,
+                cover=cover,
+                k_3=self.k_3,
+            )
 
         # Strain difference (ε_sm - ε_cm)
         E_s = self._get_tension_zone_E_s(eps_top, eps_bottom)
@@ -1387,6 +1656,9 @@ class CrackingCheck(BaseCodeCheck):
             phi_eq=phi_eq,
             cover=cover,
             steel_yielded=steel_yielded,
+            actual_bar_diameter=actual_bar_diameter,
+            s_r_max_uncorrected=s_r_max_uncorrected,
+            phi_correction_factor=phi_correction_factor,
         )
 
     # ===============================================
@@ -1402,6 +1674,7 @@ class CrackingCheck(BaseCodeCheck):
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
         suppress_warnings: bool = False,
+        actual_bar_diameter: Optional[float] = None,
         **kwargs,
     ) -> CheckResult:
         """
@@ -1416,6 +1689,11 @@ class CrackingCheck(BaseCodeCheck):
                 directly to cracked analysis. Useful for members with axial load
                 where reinforcement is always provided.
             suppress_warnings: If True, suppresses warnings
+            actual_bar_diameter: If provided, corrects s_r,max for equivalent-area
+                bar substitution. When bars are modelled with a modified diameter
+                to achieve equivalent area (e.g. rounding a non-integer bar count),
+                supply the real bar diameter here. The φ-dependent term of s_r,max
+                is scaled by φ_actual / φ_model.
 
         Returns:
             CheckResult with crack width utilization
@@ -1427,6 +1705,7 @@ class CrackingCheck(BaseCodeCheck):
             ignore_compression_steel=ignore_compression_steel,
             force_cracked=force_cracked,
             suppress_warnings=suppress_warnings,
+            actual_bar_diameter=actual_bar_diameter,
         )
 
 
@@ -1439,6 +1718,7 @@ class CrackingCheck(BaseCodeCheck):
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
         suppress_warnings: bool = False,
+        actual_bar_diameter: Optional[float] = None,
     ) -> CheckResult:
         """Internal implementation of crack check."""
         if (
@@ -1480,6 +1760,7 @@ class CrackingCheck(BaseCodeCheck):
             eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(
                 M_target=M_Ed,
                 N_target=N_Ed,
+                strict=True,
             )
         except ValueError as e:
             # Load point outside capacity - section fails
@@ -1525,7 +1806,9 @@ class CrackingCheck(BaseCodeCheck):
                     creep_coefficient_used = phi_NL
                     diagram_for_check = self._build_diagram_with_E_c_eff(E_c_eff_NL, ignore_compression_steel)
                     eps_top, eps_bottom = diagram_for_check.find_strains_for_MN(
-                        M_target=M_Ed, N_target=N_Ed,
+                        M_target=M_Ed,
+                        N_target=N_Ed,
+                        strict=True,
                     )
                     sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_for_check)
                     nonlinear_creep_applied = True
@@ -1567,15 +1850,29 @@ class CrackingCheck(BaseCodeCheck):
 
         if is_net_tension:
             # Both faces in tension (EC2 Fig 7.1, case c)
-            if abs(eps_bottom) >= abs(eps_top):
-                governing_face: Literal["top", "bottom"] = "bottom"
+            # Check both faces independently and report the worst crack width.
+            if self.net_tension_face is not None:
+                faces_to_check: list[Literal["top", "bottom"]] = [self.net_tension_face]
             else:
-                governing_face = "top"
-            cr = self._calculate_face_crack_width(
-                eps_top, eps_bottom, face=governing_face,
-                x=x, is_net_tension=True,
-                suppress_warnings=suppress_warnings,
-            )
+                faces_to_check = ["bottom", "top"]
+
+            best_cr: Optional[CrackingResult] = None
+            governing_face_result: Literal["top", "bottom"] = "bottom"
+
+            for face_candidate in faces_to_check:
+                cr_candidate = self._calculate_face_crack_width(
+                    eps_top, eps_bottom, face=face_candidate,
+                    x=x, is_net_tension=True,
+                    suppress_warnings=suppress_warnings,
+                    actual_bar_diameter=actual_bar_diameter,
+                )
+                if best_cr is None or cr_candidate.w_k > best_cr.w_k:
+                    best_cr = cr_candidate
+                    governing_face_result = face_candidate
+
+            assert best_cr is not None  # at least one face always checked
+            cr = best_cr
+            cr.governing_face = governing_face_result
         else:
             # Bending: one compression face, one tension face
             tension_face: Literal["top", "bottom"] = "bottom" if comp_face == "top" else "top"
@@ -1583,7 +1880,9 @@ class CrackingCheck(BaseCodeCheck):
                 eps_top, eps_bottom, face=tension_face,
                 x=x, is_net_tension=False,
                 suppress_warnings=suppress_warnings,
+                actual_bar_diameter=actual_bar_diameter,
             )
+            cr.governing_face = tension_face
 
         # Attach non-linear creep metadata to CrackingResult
         cr.sigma_c_peak = sigma_c_peak
@@ -1642,7 +1941,15 @@ class CrackingCheck(BaseCodeCheck):
             "steel_yielded": cr.steel_yielded,
             "nonlinear_creep_applied": nonlinear_creep_applied,
             "creep_coefficient_used": float(creep_coefficient_used),
+            "is_net_tension": is_net_tension,
+            "governing_face": cr.governing_face,
         }
+
+        # Bar diameter correction reporting
+        if cr.actual_bar_diameter is not None:
+            details["actual_bar_diameter"] = float(cr.actual_bar_diameter)
+            details["phi_correction_factor"] = float(cr.phi_correction_factor) if cr.phi_correction_factor is not None else None
+            details["s_r_max_uncorrected"] = float(cr.s_r_max_uncorrected) if cr.s_r_max_uncorrected is not None else None
 
         is_pass = w_k <= self.w_k_limit
         message = f"w_k = {w_k:.3f} mm {'<=' if is_pass else '>'} {self.w_k_limit:.2f} mm limit"
@@ -1667,6 +1974,7 @@ class CrackingCheck(BaseCodeCheck):
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
         suppress_warnings: bool = False,
+        actual_bar_diameter: Optional[float] = None,
     ) -> CrackingResult:
         """
         Calculate detailed cracking results without creating CheckResult.
@@ -1679,6 +1987,9 @@ class CrackingCheck(BaseCodeCheck):
             ignore_compression_steel: If True, ignore compression reinforcement
             force_cracked: If True, skip the cracking moment check and proceed
                 directly to cracked analysis.
+            suppress_warnings: If True, suppresses warnings
+            actual_bar_diameter: If provided, corrects s_r,max for equivalent-area
+                bar substitution. See ``perform_check`` for details.
 
         Returns:
             CrackingResult dataclass with all intermediate values
@@ -1703,7 +2014,9 @@ class CrackingCheck(BaseCodeCheck):
             )
 
         # Solve strain state
-        eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(M_Ed, N_Ed)
+        eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(
+            M_Ed, N_Ed, strict=True
+        )
 
         # Stress limitation and non-linear creep (same logic as _check_single_case)
         sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom)
@@ -1721,7 +2034,7 @@ class CrackingCheck(BaseCodeCheck):
                         break
                     creep_coefficient_used = phi_NL
                     diagram_nl = self._build_diagram_with_E_c_eff(E_c_eff_NL, ignore_compression_steel)
-                    eps_top, eps_bottom = diagram_nl.find_strains_for_MN(M_Ed, N_Ed)
+                    eps_top, eps_bottom = diagram_nl.find_strains_for_MN(M_Ed, N_Ed, strict=True)
                     sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_nl)
                     nonlinear_creep_applied = True
 
@@ -1745,16 +2058,29 @@ class CrackingCheck(BaseCodeCheck):
 
         if is_net_tension:
             # Both faces in tension (EC2 Fig 7.1, case c)
-            # Compute for the most tensile face (governs)
-            if abs(eps_bottom) >= abs(eps_top):
-                governing_face: Literal["top", "bottom"] = "bottom"
+            # Check both faces independently and report the worst crack width.
+            if self.net_tension_face is not None:
+                faces_to_check: list[Literal["top", "bottom"]] = [self.net_tension_face]
             else:
-                governing_face = "top"
-            result = self._calculate_face_crack_width(
-                eps_top, eps_bottom, face=governing_face,
-                x=x, is_net_tension=True,
-                suppress_warnings=suppress_warnings,
-            )
+                faces_to_check = ["bottom", "top"]
+
+            best_result: Optional[CrackingResult] = None
+            governing_face_result: Literal["top", "bottom"] = "bottom"
+
+            for face_candidate in faces_to_check:
+                result_candidate = self._calculate_face_crack_width(
+                    eps_top, eps_bottom, face=face_candidate,
+                    x=x, is_net_tension=True,
+                    suppress_warnings=suppress_warnings,
+                    actual_bar_diameter=actual_bar_diameter,
+                )
+                if best_result is None or result_candidate.w_k > best_result.w_k:
+                    best_result = result_candidate
+                    governing_face_result = face_candidate
+
+            assert best_result is not None  # at least one face always checked
+            result = best_result
+            result.governing_face = governing_face_result
         else:
             # Bending: one compression face, one tension face
             tension_face: Literal["top", "bottom"] = "bottom" if comp_face == "top" else "top"
@@ -1762,7 +2088,9 @@ class CrackingCheck(BaseCodeCheck):
                 eps_top, eps_bottom, face=tension_face,
                 x=x, is_net_tension=False,
                 suppress_warnings=suppress_warnings,
+                actual_bar_diameter=actual_bar_diameter,
             )
+            result.governing_face = tension_face
 
         # Attach non-linear creep metadata
         result.sigma_c_peak = sigma_c_peak

@@ -45,6 +45,7 @@ def _group(dia: float, positions: list[tuple[float, float]], layer: str | None =
 # ===================================================================
 
 class TestCrossGroupClash:
+    """Behavioral tests for clash detection across rebar groups."""
 
     def test_no_clash_separate_bars(self):
         """Non-overlapping bars in different groups pass."""
@@ -122,6 +123,7 @@ class TestCrossGroupClash:
 # ===================================================================
 
 class TestRemoveBars:
+    """Behavioral tests for `RCSection.remove_bars` filtering and counts."""
 
     def _section_with_bars(self) -> RCSection:
         sec = _square_section()
@@ -130,6 +132,7 @@ class TestRemoveBars:
         return sec
 
     def test_remove_by_group_index(self):
+        """Removing by group index should delete the full targeted group."""
         sec = self._section_with_bars()
         removed = sec.remove_bars(group_index=0)
         assert removed == 2
@@ -137,6 +140,7 @@ class TestRemoveBars:
         assert sec.rebar_groups[0].layer_name == "top"
 
     def test_remove_by_layer_name(self):
+        """Removing by layer name should delete only bars from that named layer."""
         sec = self._section_with_bars()
         removed = sec.remove_bars(layer_name="top")
         assert removed == 3
@@ -144,6 +148,7 @@ class TestRemoveBars:
         assert sec.rebar_groups[0].layer_name == "bottom"
 
     def test_remove_by_bar_indices(self):
+        """Removing selected indices should keep the remaining bars in the group."""
         sec = self._section_with_bars()
         removed = sec.remove_bars(group_index=1, bar_indices=[0, 2])
         assert removed == 2
@@ -152,6 +157,7 @@ class TestRemoveBars:
         assert sec.rebar_groups[1].positions[0].y == 450
 
     def test_remove_by_position(self):
+        """Removing by tuple position should only match bars at that coordinate."""
         sec = self._section_with_bars()
         removed = sec.remove_bars(positions=[(50, 50)])
         # Should match bar in group 0 only (group 1 has y=450)
@@ -160,23 +166,27 @@ class TestRemoveBars:
         assert len(sec.rebar_groups[0].positions) == 1
 
     def test_remove_by_position_tuple(self):
+        """Removing by Point2D position should match equivalent bar coordinates."""
         sec = self._section_with_bars()
         removed = sec.remove_bars(positions=[Point2D(x=50, y=450)])
         assert removed == 1
 
     def test_remove_all_bars_in_group_drops_group(self):
+        """If all bars in a group are removed, the empty group should be dropped."""
         sec = self._section_with_bars()
         removed = sec.remove_bars(group_index=0, bar_indices=[0, 1])
         assert removed == 2
         assert len(sec.rebar_groups) == 1
 
     def test_remove_no_match_returns_zero(self):
+        """A non-matching filter should remove nothing and return zero."""
         sec = self._section_with_bars()
         removed = sec.remove_bars(layer_name="nonexistent")
         assert removed == 0
         assert len(sec.rebar_groups) == 2
 
     def test_remove_returns_correct_count(self):
+        """Unfiltered removal should return the total number of removed bars."""
         sec = self._section_with_bars()
         total = sum(len(g.positions) for g in sec.rebar_groups)
         removed = sec.remove_bars()  # no filter = remove all

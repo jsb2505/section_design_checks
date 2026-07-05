@@ -149,6 +149,28 @@ class ConcreteAge(BaseModel):
         """
         return find_mean_flexural_tensile_strength(self.f_ctm_t, section_height)
 
+    def to_material(self) -> ConcreteMaterial:
+        """Create a ConcreteMaterial with age-adjusted properties.
+
+        The returned object has the same grade, partial factors, and alpha
+        coefficients as the base concrete, but f_ck, f_cm, and E_cm are
+        overridden with age-adjusted values from EC2 §3.1.2.
+
+        All dependent design values (f_cd, f_ctm, f_ctd, strain limits, etc.)
+        auto-recompute from the overridden strengths.
+
+        Returns:
+            ConcreteMaterial with age-adjusted properties.
+        """
+        return self.concrete.model_copy(
+            update={
+                "name": f"{self.concrete.grade} at {self.age:.0f} days ({self.cement_class})",
+                "f_ck_override": self.f_ck_t,
+                "f_cm_override": self.f_cm_t,
+                "E_cm_override": self.E_cm_t,
+            }
+        )
+
     def __str__(self) -> str:
         return (
             f"{self.concrete.grade} at {self.age:.1f} days "

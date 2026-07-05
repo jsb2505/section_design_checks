@@ -123,6 +123,28 @@ def _max_leg_spacing_eu_de(
     # Include ratio > 1.0 in the same branch (check fails anyway on utilization).
     return min(h, 600.0) if float(f_ck) <= 50.0 else min(h, 400.0)
 
+
+def _h_c_ef_multiplier_de(h: float, d: float) -> float:
+    """German NA bilinear h_c,ef multiplier (NCI Re 7.3.2(3), Figure 7.1d).
+
+    Returns the multiplier on d_1 = (h - d) for h_c,ef.
+    Bilinear graph: (h/d_1=0, mult=0) -> (5, 2.5) -> (30, 5.0).
+
+    For h/d_1 <= 5 (thin sections), gives h/2 (same as standard cap).
+    For h/d_1 > 5 (thick sections), multiplier increases linearly to 5.0.
+    """
+    d_1 = h - d
+    if d_1 <= 0:
+        return 2.5
+    ratio = h / d_1
+    if ratio <= 5.0:
+        return 0.5 * ratio
+    elif ratio <= 30.0:
+        return 2.5 + 0.1 * (ratio - 5.0)
+    else:
+        return 5.0
+
+
 # =============================================================================
 # METADATA: Descriptions and code references for all NDP parameters
 # =============================================================================
@@ -148,6 +170,14 @@ _NDP_METADATA = {
         "description": "Foundation factor for cast-in place piles without permanent casing",
         "ref": "2.4.2.5(2)",
     },
+    "f_ck_min": {
+        "description": "Minimum cylinder strength supported (inclusive)",
+        "ref": "3.1.2(2)",
+    },
+    "f_ck_cube_min": {
+        "description": "Minimum cube strength supported (inclusive)",
+        "ref": "3.1.2(2)",
+    },
     "f_ck_max": {
         "description": "Maximum cylinder strength supported (inclusive)",
         "ref": "3.1.2(2)",
@@ -162,6 +192,10 @@ _NDP_METADATA = {
     },
     "alpha_ct": {
         "description": "ULS concrete tensile strength coefficient for long-term effects",
+        "ref": "3.1.6(2)",
+    },
+    "alpha_cc_shear": {
+        "description": "ULS concrete compressive strength coefficient for shear (§3.1.6(2))",
         "ref": "3.1.6(2)",
     },
     "k_strain": {
@@ -248,6 +282,16 @@ _NDP_METADATA = {
         "description": "Upper limit for max crack spacing",
         "ref": "7.3.4(3)",
     },
+    "h_c_ef_multiplier": {
+        "description": "Multiplier function for h_c,ef = f(h, d) * (h - d). "
+                       "None uses default 2.5.",
+        "ref": "7.3.2(3)",
+    },
+    "h_c_ef_relaxed_na_factor": {
+        "description": "When bars are not within (h-x)/3, use (h-x_I) * factor "
+                       "with x in State I. None uses default relaxation (drop NA term).",
+        "ref": "7.3.2(3)",
+    },
     "rho_w_min": {
         "description": "Minimum shear reinforcement ratio",
         "ref": "9.2.2(5) (9.5N)",
@@ -285,10 +329,13 @@ EN1992_1_1_2004 = {
         "gamma_c_accidental": 1.2,
         "gamma_s_accidental": 1.0,
         "k_f": 1.1,
+        "f_ck_min": 12,
+        "f_ck_cube_min": 15,
         "f_ck_max": 90,
         "f_ck_cube_max": 105,
         "alpha_cc": 1.0,
         "alpha_ct": 1.0,
+        "alpha_cc_shear": 1.0,
         "k_strain": 0.9,
         "c_rd_c_coefficient": 0.18,
         "k_1_shear": 0.15,
@@ -318,6 +365,8 @@ EN1992_1_1_2004 = {
         "k_3_crack": 3.4,
         "k_4_crack": 0.425,
         "s_r_max_lim": None,  # No additional limit in base EC2
+        "h_c_ef_multiplier": None,  # Standard 2.5 factor
+        "h_c_ef_relaxed_na_factor": None,  # Drop (h-x)/3 term on relaxation
         "rho_w_min": lambda f_ck, f_yk, f_ctm: 0.08 * sqrt(f_ck) / f_yk,
         "max_link_spacing": _max_link_spacing_ec2,
         "max_leg_spacing": _max_leg_spacing_ec2,
@@ -330,6 +379,7 @@ EN1992_1_1_2004 = {
     # -------------------------------------------------------------------------
     "EU_UK": {
         "alpha_cc": 0.85,
+        "alpha_cc_shear": 1.0,
         "nu_1": lambda f_ck, angle_deg: (
             (0.6 * (1 - f_ck / 250)) * (1 - 0.5 * cos(radians(angle_deg)))
         ),
@@ -351,6 +401,7 @@ EN1992_1_1_2004 = {
         "f_ck_cube_max": 115,
         "alpha_cc": 0.85,
         "alpha_ct": 0.85,
+        "alpha_cc_shear": 0.85,
         "c_rd_c_coefficient": 0.15,
         "k_1_shear": 0.12,
         "v_min_coefficient": lambda d, gamma_c: (
@@ -376,6 +427,8 @@ EN1992_1_1_2004 = {
         "k_3_crack": 0.0,
         "k_4_crack": 1.0 / 3.6,
         "s_r_max_lim": lambda sigma_s, diameter, f_ct_eff: (sigma_s * diameter) / (3.6 * f_ct_eff),
+        "h_c_ef_multiplier": _h_c_ef_multiplier_de,
+        "h_c_ef_relaxed_na_factor": 0.5,  # (h - x_I) / 2
         "rho_w_min": lambda f_ck, f_yk, f_ctm: 0.16 * f_ctm / f_yk,  # (9.5aDE)
         "max_link_spacing": _max_link_spacing_eu_de,
         "max_leg_spacing": _max_leg_spacing_eu_de,
@@ -398,10 +451,13 @@ EN1992_2_2005 = {
         "gamma_c_accidental": 1.2,
         "gamma_s_accidental": 1.0,
         "k_f": 1.1,
-        "f_ck_max": 90,
-        "f_ck_cube_max": 105,
+        "f_ck_min": 30,
+        "f_ck_cube_min": 37,
+        "f_ck_max": 70,
+        "f_ck_cube_max": 85,
         "alpha_cc": 1.0,
         "alpha_ct": 1.0,
+        "alpha_cc_shear": 1.0,
         "k_strain": 0.9,
         "c_rd_c_coefficient": 0.18,
         "k_1_shear": 0.15,
@@ -431,6 +487,8 @@ EN1992_2_2005 = {
         "k_3_crack": 3.4,
         "k_4_crack": 0.425,
         "s_r_max_lim": None,  # No additional limit in base EC2
+        "h_c_ef_multiplier": None,  # Standard 2.5 factor
+        "h_c_ef_relaxed_na_factor": None,  # Drop (h-x)/3 term on relaxation
         "max_link_spacing": _max_link_spacing_ec2,
         "max_leg_spacing": _max_leg_spacing_ec2,
         "as_min_flexural_ratio": lambda f_ctm, f_yk: max(0.0013, 0.26 * (f_ctm / f_yk)),
@@ -441,7 +499,10 @@ EN1992_2_2005 = {
     # EU_UK (UK National Annex) - Only parameters that differ from EU
     # -------------------------------------------------------------------------
     "EU_UK": {
+        "f_ck_min": 25,
+        "f_ck_cube_min": 30,
         "alpha_cc": 0.85,
+        "alpha_cc_shear": 1.0,
         "nu_1": lambda f_ck, angle_deg: (
             (0.6 * (1 - f_ck / 250)) * (1 - 0.5 * cos(radians(angle_deg)))
         ),
@@ -459,10 +520,13 @@ EN1992_2_2005 = {
     # -------------------------------------------------------------------------
     "EU_DE": {
         "gamma_c_accidental": 1.3,
-        "f_ck_max": 100,
-        "f_ck_cube_max": 115,
+        "f_ck_min": 12,
+        "f_ck_cube_min": 15,
+        "f_ck_max": 50,
+        "f_ck_cube_max": 60,
         "alpha_cc": 0.85,
         "alpha_ct": 0.85,
+        "alpha_cc_shear": 0.85,
         "c_rd_c_coefficient": 0.15,
         "k_1_shear": 0.12,
         "v_min_coefficient": lambda d, gamma_c: (
@@ -488,6 +552,8 @@ EN1992_2_2005 = {
         "k_3_crack": 0.0,
         "k_4_crack": 1.0 / 3.6,
         "s_r_max_lim": lambda sigma_s, diameter, f_ct_eff: (sigma_s * diameter) / (3.6 * f_ct_eff),
+        "h_c_ef_multiplier": _h_c_ef_multiplier_de,
+        "h_c_ef_relaxed_na_factor": 0.5,  # (h - x_I) / 2
         "max_link_spacing": _max_link_spacing_eu_de,
         "max_leg_spacing": _max_leg_spacing_eu_de,
         "as_min_flexural_ratio": lambda f_ctm, f_yk: 0.0,

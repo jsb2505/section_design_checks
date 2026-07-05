@@ -89,6 +89,15 @@ class BendingCheck(BaseCodeCheck):
         description="Steel post-yield behaviour (Fig 3.8)",
     )
 
+    concrete_model_override: Optional[Any] = Field(
+        default=None, exclude=True,
+        description="Pre-built custom concrete constitutive model (bypasses factory).",
+    )
+    steel_models_override: Optional[List[Any]] = Field(
+        default=None, exclude=True,
+        description="Pre-built custom steel constitutive models, one per rebar group (bypasses factory).",
+    )
+
     n_fibres_width: int = Field(
         default=20,
         description="Number of concrete fibres across width",
@@ -125,6 +134,8 @@ class BendingCheck(BaseCodeCheck):
 
     @model_validator(mode="after")
     def _validate_concrete_model_type(self) -> "BendingCheck":
+        if self.concrete_model_override is not None:
+            return self
         if self.concrete_model_type == ConcreteModelType.LINEAR_ELASTIC:
             raise ValueError(
                 "LINEAR_ELASTIC concrete model is only valid for SLS checks "
@@ -134,7 +145,7 @@ class BendingCheck(BaseCodeCheck):
 
     def _take_snapshot(self) -> dict:
         """Capture current state of inputs that affect the interaction diagram."""
-        return {
+        snapshot = {
             "section": self.section.model_dump(),
             "concrete": self.concrete.model_dump(),
             "concrete_model_type": self.concrete_model_type,
@@ -143,6 +154,15 @@ class BendingCheck(BaseCodeCheck):
             "n_fibres_height": self.n_fibres_height,
             "use_accidental": self.use_accidental,
         }
+        if self.concrete_model_override is not None:
+            snapshot["concrete_override_key"] = getattr(
+                self.concrete_model_override, "cache_key", id(self.concrete_model_override)
+            )
+        if self.steel_models_override is not None:
+            snapshot["steel_override_keys"] = [
+                getattr(sm, "cache_key", id(sm)) for sm in self.steel_models_override
+            ]
+        return snapshot
 
     def _get_diagram(self, ignore_compression_steel: bool = False) -> MNInteractionDiagram:
         """Get the cached diagram, rebuilding if inputs have changed."""
@@ -159,6 +179,8 @@ class BendingCheck(BaseCodeCheck):
                     n_fibres_height=self.n_fibres_height,
                     use_accidental=self.use_accidental,
                     ignore_compression_steel=True,
+                    concrete_model_override=self.concrete_model_override,
+                    steel_models_override=self.steel_models_override,
                 )
                 self._diagram_no_comp_snapshot = snapshot
             return self._diagram_no_comp_steel
@@ -173,6 +195,8 @@ class BendingCheck(BaseCodeCheck):
                     n_fibres_height=self.n_fibres_height,
                     use_accidental=self.use_accidental,
                     ignore_compression_steel=False,
+                    concrete_model_override=self.concrete_model_override,
+                    steel_models_override=self.steel_models_override,
                 )
                 self._diagram_snapshot = snapshot
             return self._diagram

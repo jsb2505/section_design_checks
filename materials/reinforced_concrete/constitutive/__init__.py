@@ -16,6 +16,10 @@ from materials.reinforced_concrete.constitutive.steel_stress_strain import (
     SteelModelType,
     create_steel_stress_strain,
 )
+from materials.reinforced_concrete.constitutive.custom_constitutive import (
+    CustomConcreteModel,
+    CustomSteelModel,
+)
 
 __all__ = [
     "BaseConstitutiveModel",
@@ -28,4 +32,6 @@ __all__ = [
     "SteelStressStrainEC2",
     "SteelModelType",
     "create_steel_stress_strain",
+    "CustomConcreteModel",
+    "CustomSteelModel",
 ]

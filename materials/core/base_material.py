@@ -43,7 +43,7 @@ class BaseMaterial(BaseModel, ABC):
         Returns:
             Elastic modulus (MPa)
         """
-        pass
+        pass  # pragma: no cover - abstract interface placeholder
 
     def __repr__(self) -> str:
         """String representation."""

@@ -1,14 +1,12 @@
-"""
-Tests for core.base_material module.
-"""
+"""Tests for :mod:`materials.core.base_material`."""
 
 import pytest
 from pydantic import ValidationError
 from materials.core.base_material import BaseMaterial
 
 
-class ConcreteMaterialTest(BaseMaterial):
-    """Test implementation of BaseMaterial."""
+class ExampleMaterial(BaseMaterial):
+    """Minimal concrete subclass used to test `BaseMaterial` behavior."""
 
     elastic_modulus: float = 30000.0
 
@@ -21,7 +19,7 @@ class TestBaseMaterial:
 
     def test_create_material(self):
         """Test creating a material with valid data."""
-        mat = ConcreteMaterialTest(
+        mat = ExampleMaterial(
             name="Concrete",
             density=2400.0,
             elastic_modulus=30000.0,
@@ -32,25 +30,27 @@ class TestBaseMaterial:
 
     def test_material_name_non_empty(self):
         """Test that name is required."""
-        with pytest.raises(ValidationError):
-            ConcreteMaterialTest(
+        with pytest.raises(ValidationError, match="at least 1 character"):
+            ExampleMaterial(
                 name="",  # Empty name should fail
                 density=2400.0,
                 elastic_modulus=30000.0,
             )
     
     def test_material_name_missing(self):
-        with pytest.raises(ValidationError):
-            ConcreteMaterialTest(density=2400.0, elastic_modulus=30000.0)
+        """Missing required field should raise a clear validation error."""
+        with pytest.raises(ValidationError, match="Field required"):
+            ExampleMaterial(density=2400.0, elastic_modulus=30000.0)
 
     def test_base_material_cannot_instantiate(self):
-        with pytest.raises(TypeError):
+        """The abstract base class itself must remain non-instantiable."""
+        with pytest.raises(TypeError, match="abstract class"):
             BaseMaterial(name="X", density=1.0)  # abstract
 
     def test_density_positive(self):
         """Test that density must be positive."""
-        with pytest.raises(ValidationError):
-            ConcreteMaterialTest(
+        with pytest.raises(ValidationError, match="greater than 0"):
+            ExampleMaterial(
                 name="Test",
                 density=-100.0,  # Negative density
                 elastic_modulus=30000.0,
@@ -58,8 +58,8 @@ class TestBaseMaterial:
 
     def test_density_required(self):
         """Test that density is required."""
-        with pytest.raises(ValidationError):
-            ConcreteMaterialTest(
+        with pytest.raises(ValidationError, match="Field required"):
+            ExampleMaterial(
                 name="Test",
                 elastic_modulus=30000.0,
                 # density missing
@@ -67,30 +67,31 @@ class TestBaseMaterial:
 
     def test_material_repr(self):
         """Test __repr__ method."""
-        mat = ConcreteMaterialTest(name="TestMat", density=2400.0, elastic_modulus=30000.0)
-        assert "TestMat" in repr(mat)
+        mat = ExampleMaterial(name="TestMat", density=2400.0, elastic_modulus=30000.0)
+        rep = repr(mat)
+        assert "TestMat" in rep, f"repr should include material name, got: {rep}"
 
     def test_material_str(self):
         """Test __str__ method."""
-        mat = ConcreteMaterialTest(name="TestMat", density=2400.0, elastic_modulus=30000.0)
+        mat = ExampleMaterial(name="TestMat", density=2400.0, elastic_modulus=30000.0)
         assert str(mat) == "TestMat"
 
     def test_validate_assignment(self):
         """Test that validation occurs on assignment."""
-        mat = ConcreteMaterialTest(name="Test", density=2400.0, elastic_modulus=30000.0)
+        mat = ExampleMaterial(name="Test", density=2400.0, elastic_modulus=30000.0)
 
         # Valid assignment
         mat.density = 2500.0
         assert mat.density == 2500.0
 
         # Invalid assignment
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="greater than 0"):
             mat.density = -100.0
 
     def test_extra_fields_forbidden(self):
         """Test that extra fields are not allowed."""
-        with pytest.raises(ValidationError):
-            ConcreteMaterialTest(
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            ExampleMaterial(
                 name="Test",
                 density=2400.0,
                 elastic_modulus=30000.0,

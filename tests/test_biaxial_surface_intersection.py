@@ -40,6 +40,7 @@ def _create_square_column() -> BiaxialMNInteractionSurface:
     return create_biaxial_interaction_surface(section=section, concrete=concrete)
 
 def test_surface_symmetry_square_column():
+    """Generated capacity points should show mirror symmetry for a square section."""
     surface = _create_square_column()
     points = surface.generate_surface_pivot(n_angles=24, n_axial_levels=12)
 
@@ -54,6 +55,7 @@ def test_surface_symmetry_square_column():
         assert min(mirrored_magnitudes) <= 15.0
 
 def test_surface_is_convex():
+    """The sampled 3D interaction cloud should lie within its convex hull boundary."""
     surface = _create_square_column()
     points = surface.generate_surface_pivot(n_angles=20, n_axial_levels=12)
     coords = np.array([[p.N, p.My, p.Mz] for p in points])
@@ -64,6 +66,7 @@ def test_surface_is_convex():
     assert hull.volume > 0
 
 def test_vector_intersection_on_surface():
+    """Exact vectors taken from the surface should return utilization ~= 1.0."""
     surface = _create_square_column()
     points = surface.generate_surface_pivot(n_angles=20, n_axial_levels=12)
 

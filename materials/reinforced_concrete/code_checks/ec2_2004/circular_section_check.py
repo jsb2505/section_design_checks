@@ -1,7 +1,8 @@
 """
 Circular section design checks following Orr (2012) approach.
 
-Wraps BendingCheck, ShearCheck, and CrackingCheck with circular-specific
+Wraps BendingCheck, ShearCheck, CrackingCheck, and StressLimitsCheck with
+circular-specific
 modifications for piles, columns, and other circular RC members.
 
 Key modifications from standard EC2:
@@ -19,7 +20,7 @@ Reference:
 
 import warnings
 from math import atan, degrees, pi, sqrt
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Literal, Optional, cast
 
 import numpy as np
 from pydantic import BaseModel, Field, PrivateAttr, computed_field, model_validator
@@ -33,6 +34,9 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import Shear
 from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
     CrackingCheck,
     LoadDuration,
+)
+from materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check import (
+    StressLimitsCheck,
 )
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     find_max_allowable_link_spacing,
@@ -51,7 +55,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
 from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
-from materials.reinforced_concrete.ndp import get_ndp
+from materials.reinforced_concrete.ndp import get_ndp, get_ndp_context
 from materials.core.units import ForceUnit, to_kn
 
 
@@ -59,7 +63,8 @@ class CircularSectionCheck(BaseModel):
     """
     EC2-compliant design checks for circular sections (piles/columns).
 
-    Wraps BendingCheck, ShearCheck, and CrackingCheck with circular-specific
+    Wraps BendingCheck, ShearCheck, CrackingCheck, and StressLimitsCheck with
+    circular-specific
     modifications following Orr (2012).
 
     - **Bending**: Forwarded to BendingCheck with iterate_z=True by default.
@@ -67,9 +72,11 @@ class CircularSectionCheck(BaseModel):
     - **Shear**: Custom implementation with λ1/λ2 efficiency factors, circular
       web width, and uncracked V_Rd_c per Eq.17.
     - **Cracking**: Forwarded to CrackingCheck (no circular modifications).
+    - **Stress limits**: Forwarded to StressLimitsCheck (no circular modifications).
 
-    The sub-checks are accessible via the ``bending`` and ``cracking`` properties
-    for advanced operations (plotting, capacity queries, detailed results).
+    The sub-checks are accessible via the ``bending``, ``cracking``, and
+    ``stress_limits`` properties for advanced operations (plotting, capacity
+    queries, detailed results).
 
     Attributes:
         section: Circular RC section geometry with reinforcement
@@ -102,6 +109,7 @@ class CircularSectionCheck(BaseModel):
         ...     load_case=ShearLoadCase(V_Ed=200, M_Ed=150, N_Ed=500)
         ... )
         >>> cracking_result = check.perform_cracking_check(M_Ed=80, N_Ed=300)
+        >>> stress_result = check.perform_stress_limits_check(M_Ed=80, N_Ed=300)
     """
 
     # ===========================
@@ -279,6 +287,15 @@ class CircularSectionCheck(BaseModel):
         description="EC2 §7.2(5) imposed deformation stress limit.",
     )
 
+    net_tension_face: Optional[Literal["top", "bottom"]] = Field(
+        default=None,
+        description=(
+            "Face-checking policy for net tension cracking. "
+            "None (default): check both faces, report the worst. "
+            "'top' or 'bottom': only check the specified face."
+        ),
+    )
+
     # ===========================
     # Private sub-checks
     # ===========================
@@ -311,7 +328,9 @@ class CircularSectionCheck(BaseModel):
     _bending_check: Optional[BendingCheck] = PrivateAttr(default=None)
     _shear_check: Optional[ShearCheck] = PrivateAttr(default=None)
     _cracking_check: Optional[CrackingCheck] = PrivateAttr(default=None)
+    _stress_limits_check: Optional[StressLimitsCheck] = PrivateAttr(default=None)
     _concrete_uls: Optional[ConcreteMaterial] = PrivateAttr(default=None)
+    _ndp_snapshot: tuple = PrivateAttr(default=())
 
     @model_validator(mode="after")
     def _post_init(self) -> "CircularSectionCheck":
@@ -380,10 +399,40 @@ class CircularSectionCheck(BaseModel):
             check_k3_stress=self.check_k3_stress,
             check_yielding=self.check_yielding,
             check_k4_stress=self.check_k4_stress,
+            net_tension_face=self.net_tension_face,
         )
+
+        self._stress_limits_check = StressLimitsCheck(
+            section=self.section,
+            concrete=self.concrete,  # SLS uses characteristic properties (no k_f)
+            creep_coefficient=self.creep_coefficient,
+            concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
+            steel_model_type=self.steel_model_type,
+            n_fibres_width=self.n_fibres_width,
+            n_fibres_height=self.n_fibres_height,
+            check_k1_stress=self.check_k1_stress,
+            check_k2_stress=self.check_k2_stress,
+            check_k3_stress=self.check_k3_stress,
+            check_yielding=self.check_yielding,
+            check_k4_stress=self.check_k4_stress,
+        )
+
+        self._ndp_snapshot = get_ndp_context()
 
         return self
 
+    def _check_ndp_context(self) -> None:
+        """Warn if the active NDP context differs from the one at construction."""
+        current = get_ndp_context()
+        if current != self._ndp_snapshot:
+            warnings.warn(
+                f"NDP context has changed since this CircularSectionCheck was "
+                f"constructed (was {self._ndp_snapshot}, now {current}). "
+                f"Sub-check parameters (gamma_c, f_cd, k_f, etc.) reflect the "
+                f"original context. Reconstruct the check for the new context.",
+                UserWarning,
+                stacklevel=3,
+            )
 
     # ===========================
     # Computed properties
@@ -412,12 +461,18 @@ class CircularSectionCheck(BaseModel):
         return self._cracking_check
 
     @property
+    def stress_limits(self) -> StressLimitsCheck:
+        """Direct access to the internal StressLimitsCheck."""
+        assert self._stress_limits_check is not None
+        return self._stress_limits_check
+
+    @property
     def _f_cd_design(self) -> float:
-        """Design concrete compressive strength for ULS (accounts for k_f)."""
+        """Design concrete compressive strength for shear (accounts for k_f)."""
         assert self._concrete_uls is not None
         if self.use_accidental:
-            return self._concrete_uls.f_cd_accidental
-        return self._concrete_uls.f_cd
+            return self._concrete_uls.f_cd_shear_accidental
+        return self._concrete_uls.f_cd_shear
 
     @property
     def _f_ctd_design(self) -> float:
@@ -472,7 +527,15 @@ class CircularSectionCheck(BaseModel):
         arg = np.clip(arg, 0.0, None)
 
         integrand = np.sqrt(arg)
-        lambda_1 = float(np.trapezoid(integrand, X))
+        # Avoid NumPy reduction sentinels by integrating via Python floats.
+        lambda_1 = float(
+            sum(
+                0.5
+                * (float(integrand[i]) + float(integrand[i + 1]))
+                * float(X[i + 1] - X[i])
+                for i in range(len(X) - 1)
+            )
+        )
 
         # Sanity: clamp to [0, 1]
         return max(0.0, min(1.0, lambda_1))
@@ -674,6 +737,7 @@ class CircularSectionCheck(BaseModel):
         Returns:
             CheckResult with bending utilization
         """
+        self._check_ndp_context()
         shear_reinf = (
             shear_reinforcement
             if shear_reinforcement is not None
@@ -738,6 +802,7 @@ class CircularSectionCheck(BaseModel):
         Returns:
             CheckResult with crack width utilization
         """
+        self._check_ndp_context()
         assert self._cracking_check is not None
         return self._cracking_check.perform_check(
             M_Ed=M_Ed,
@@ -745,6 +810,43 @@ class CircularSectionCheck(BaseModel):
             warning_threshold=warning_threshold,
             ignore_compression_steel=ignore_compression_steel,
             force_cracked=force_cracked,
+        )
+
+
+    def perform_stress_limits_check(
+        self,
+        *,
+        M_Ed: float,
+        N_Ed: float = 0.0,
+        warning_threshold: float = 0.95,
+        ignore_compression_steel: bool = False,
+        suppress_warnings: bool = False,
+        **kwargs,
+    ) -> CheckResult:
+        """
+        Stress limitation check for circular section (wrapper - no circular modifications).
+
+        Forwards to internal StressLimitsCheck.
+
+        Args:
+            M_Ed: Design moment at SLS (kN.m)
+            N_Ed: Design axial force at SLS (kN, compression positive)
+            warning_threshold: Utilization threshold for warnings
+            ignore_compression_steel: If True, ignore compression reinforcement
+            suppress_warnings: If True, suppress warnings emitted during this check.
+
+        Returns:
+            CheckResult with governing stress-limit utilization
+        """
+        self._check_ndp_context()
+        assert self._stress_limits_check is not None
+        return self._stress_limits_check.perform_check(
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            warning_threshold=warning_threshold,
+            ignore_compression_steel=ignore_compression_steel,
+            suppress_warnings=suppress_warnings,
+            **kwargs,
         )
 
 
@@ -789,6 +891,7 @@ class CircularSectionCheck(BaseModel):
         Returns:
             CheckResult with shear utilization and detailed breakdown
         """
+        self._check_ndp_context()
         assert self._shear_check is not None
         assert self._concrete_uls is not None
 

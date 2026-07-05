@@ -68,7 +68,7 @@ class BaseConstitutiveModel(BaseModel, ABC):
         Returns:
             Stress in MPa
         """
-        pass
+        pass  # pragma: no cover - abstract interface placeholder
 
     def get_stress_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """
@@ -93,7 +93,7 @@ class BaseConstitutiveModel(BaseModel, ABC):
         Returns:
             Ultimate strain (dimensionless)
         """
-        pass
+        pass  # pragma: no cover - abstract interface placeholder
 
     @abstractmethod
     def get_yield_stress(self) -> float:
@@ -103,7 +103,7 @@ class BaseConstitutiveModel(BaseModel, ABC):
         Returns:
             Yield stress in MPa
         """
-        pass
+        pass  # pragma: no cover - abstract interface placeholder
 
     def get_tangent_modulus(self, strain: float) -> float:
         """

@@ -932,158 +932,19 @@ class BiaxialMNInteractionSurface:
         Returns:
             Plotly Figure object
         """
-        try:
-            import plotly.graph_objects as go
-        except ImportError:
-            raise ImportError(
-                "Plotly is required for plotting. Install with: pip install plotly"
-            )
+        from materials.reinforced_concrete.analysis.biaxial_interaction_viewer import BiaxialInteractionViewer
 
-        surface_pts = self.generate_surface_pivot(
+        viewer = BiaxialInteractionViewer(self)
+        return viewer.plot(
+            load_points=load_points,
+            show_vectors=show_vectors,
+            show_metadata=show_metadata,
             n_angles=n_angles,
             n_axial_levels=n_axial_levels,
+            save_path=save_path,
+            show=show,
+            title=title,
         )
-
-        My_mat, Mz_mat, N_mat = self._prepare_surface_matrices(
-            surface_pts, n_axial_levels, n_angles
-        )
-
-        fig = go.Figure()
-
-        fig.add_trace(go.Surface(
-            x=My_mat,
-            y=Mz_mat,
-            z=N_mat,
-            colorscale='Viridis',
-            opacity=0.5,
-            name='M-M-N Surface',
-            showlegend=True,
-            showscale=False,
-            hoverinfo='skip',
-        ))
-
-        fig.add_trace(go.Scatter3d(
-            x=[0],
-            y=[0],
-            z=[0],
-            mode='markers',
-            name='Origin',
-            marker=dict(color='black', size=3, symbol='circle'),
-            hovertemplate='Origin<extra></extra>',
-        ))
-
-        if load_points:
-            for idx, lp in enumerate(load_points):
-                N_Ed = lp.get("N_Ed", 0.0)
-                My_Ed = lp.get("My_Ed", 0.0)
-                Mz_Ed = lp.get("Mz_Ed", 0.0)
-                name = lp.get("name", f"Load Case {idx + 1}")
-
-                N_Rd, My_Rd, Mz_Rd, is_safe, utilization = self.get_capacity_vector(
-                    N_Ed=N_Ed, My_Ed=My_Ed, Mz_Ed=Mz_Ed,
-                    surface_points=list(surface_pts),
-                    n_angles=n_angles,
-                    n_axial_levels=n_axial_levels
-                )
-
-                if utilization <= 0.8:
-                    color = 'green'
-                elif utilization <= 1.0:
-                    color = 'orange'
-                else:
-                    color = 'red'
-
-                if show_metadata:
-                    hover_text = (
-                        f"<b>{name}</b><br>"
-                        f"N_Ed: {N_Ed:.1f} kN<br>"
-                        f"My_Ed: {My_Ed:.1f} kN·m<br>"
-                        f"Mz_Ed: {Mz_Ed:.1f} kN·m<br>"
-                    )
-                    if N_Rd is not None and My_Rd is not None and Mz_Rd is not None:
-                        hover_text += (
-                            f"N_Rd: {N_Rd:.1f} kN<br>"
-                            f"My_Rd: {My_Rd:.1f} kN·m<br>"
-                            f"Mz_Rd: {Mz_Rd:.1f} kN·m<br>"
-                            f"Utilization: {utilization:.1%}<br>"
-                            f"Status: {'✓ PASS' if is_safe else '✗ FAIL'}"
-                        )
-                    else:
-                        hover_text += "Status: Outside boundary"
-                else:
-                    hover_text = name
-
-                legend_grp = f"lc_{idx}"
-                fig.add_trace(go.Scatter3d(
-                    x=[My_Ed],
-                    y=[Mz_Ed],
-                    z=[N_Ed],
-                    mode='markers',
-                    name=name,
-                    legendgroup=legend_grp,
-                    marker=dict(
-                        color=color,
-                        size=5,
-                        symbol='circle',
-                        line=dict(color='black', width=1)
-                    ),
-                    hovertemplate=hover_text + '<extra></extra>',
-                    showlegend=True,
-                ))
-
-                if show_vectors and N_Rd is not None and My_Rd is not None and Mz_Rd is not None:
-                    fig.add_trace(go.Scatter3d(
-                        x=[0, My_Ed],
-                        y=[0, Mz_Ed],
-                        z=[0, N_Ed],
-                        mode='lines',
-                        line=dict(color=color, width=3, dash='solid'),
-                        legendgroup=legend_grp,
-                        showlegend=False,
-                        hoverinfo='skip',
-                    ))
-
-                    fig.add_trace(go.Scatter3d(
-                        x=[My_Ed, My_Rd],
-                        y=[Mz_Ed, Mz_Rd],
-                        z=[N_Ed, N_Rd],
-                        mode='lines',
-                        line=dict(color=color, width=3, dash='dash'),
-                        legendgroup=legend_grp,
-                        showlegend=False,
-                        hoverinfo='skip',
-                    ))
-
-        plot_title = title if title else "Biaxial M-M-N Interaction Surface"
-        fig.update_layout(
-            title=dict(text=plot_title, font=dict(size=16, color='black')),
-            scene=dict(
-                xaxis_title="My - Major Axis Moment (kN·m)",
-                yaxis_title="Mz - Minor Axis Moment (kN·m)",
-                zaxis_title="N - Axial Force (kN)",
-                xaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray'),
-                yaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray'),
-                zaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray'),
-                aspectmode='cube',
-            ),
-            showlegend=True,
-            legend=dict(
-                yanchor="top",
-                y=0.99,
-                xanchor="right",
-                x=0.99
-            ),
-            width=1000,
-            height=800,
-        )
-
-        if save_path:
-            fig.write_html(save_path)
-
-        if show:
-            fig.show()
-
-        return fig
 
     def export_to_json(
         self,

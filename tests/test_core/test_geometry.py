@@ -54,7 +54,7 @@ class TestPoint2D:
     def test_point_immutable(self):
         """Test that Point2D is immutable."""
         p = Point2D(x=10.0, y=20.0)
-        with pytest.raises(Exception):  # Pydantic frozen model raises error
+        with pytest.raises(ValidationError, match="frozen"):
             p.x = 15.0
 
     def test_point_repr(self):

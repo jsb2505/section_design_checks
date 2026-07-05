@@ -7,8 +7,8 @@ and stress-strain parameters for concrete grades C12/15 to C90/105.
 
 from enum import StrEnum
 from math import log
-from typing import cast
-from pydantic import Field, ConfigDict
+from typing import Optional, cast
+from pydantic import Field, ConfigDict, model_validator
 
 from materials.core.base_material import BaseMaterial
 from materials.core.units import StressUnit, LengthUnit, to_mpa, from_mm
@@ -32,6 +32,7 @@ _GRADE_TABLE: dict[str, tuple[float, float, float]] = {
     "C70/85":  (70.0, 85.0, 78.0),
     "C80/95":  (80.0, 95.0, 88.0),
     "C90/105": (90.0, 105.0, 98.0),
+    "C100/115": (100.0, 115.0, 108.0),
 }
 
 
@@ -54,6 +55,7 @@ class ConcreteGrade(StrEnum):
         C70_85: C70/85
         C80_95: C80/95
         C90_105: C90/105
+        C100_115: C100/115
     '''
     C12_15 = "C12/15"
     C16_20 = "C16/20"
@@ -69,6 +71,7 @@ class ConcreteGrade(StrEnum):
     C70_85 = "C70/85"
     C80_95 = "C80/95"
     C90_105 = "C90/105"
+    C100_115 = "C100/115"  # Not in EC2 Table 3.1, but commonly used high grade
 
     @property
     def f_ck(self) -> float:
@@ -163,6 +166,13 @@ class ConcreteMaterial(BaseMaterial):
         le=1.0,
     )
 
+    alpha_cc_shear: float = Field(
+        default_factory=lambda: cast(float, get_ndp("alpha_cc_shear")),
+        description="Coefficient for long-term effects on shear strength (§3.1.6(2), NDP)",
+        gt=0,
+        le=1.0,
+    )
+
     aggregate_type: AggregateType = Field(
         default=AggregateType.QUARTZITE,
         description="Aggregate type for elastic modulus adjustment (§3.1.3)",
@@ -174,11 +184,80 @@ class ConcreteMaterial(BaseMaterial):
         ge=0,
     )
 
+    # ---- Optional overrides for non-standard strengths (e.g. early-age) ----
+
+    f_ck_override: Optional[float] = Field(
+        default=None,
+        description=(
+            "If set, overrides the grade-derived f_ck (MPa). All dependent "
+            "properties (f_cd, f_ctm, f_ctd, E_cm, strain limits, etc.) "
+            "will recompute from this value. Used by ConcreteAge.to_material()."
+        ),
+        gt=0,
+    )
+
+    f_cm_override: Optional[float] = Field(
+        default=None,
+        description=(
+            "If set, overrides the grade-derived f_cm (MPa). "
+            "Affects E_cm and strain limit calculations."
+        ),
+        gt=0,
+    )
+
+    E_cm_override: Optional[float] = Field(
+        default=None,
+        description=(
+            "If set, overrides the computed E_cm (MPa). "
+            "Used for age-adjusted or otherwise non-standard elastic modulus."
+        ),
+        gt=0,
+    )
+
+    @model_validator(mode="after")
+    def _validate_grade_against_ndp(self) -> "ConcreteMaterial":
+        """Validate that the concrete grade is within NDP strength limits."""
+        # Skip NDP grade validation when using strength overrides
+        # (e.g. early-age concrete from ConcreteAge.to_material())
+        if self.f_ck_override is not None:
+            return self
+        f_ck_min = get_ndp("f_ck_min")
+        f_ck_cube_min = get_ndp("f_ck_cube_min")
+        f_ck_max = get_ndp("f_ck_max")
+        f_ck_cube_max = get_ndp("f_ck_cube_max")
+
+        if f_ck_min is not None and self.f_ck < cast(float, f_ck_min):
+            raise ValueError(
+                f"Grade {self.grade} (f_ck={self.f_ck} MPa) is below the minimum "
+                f"cylinder strength f_ck_min={f_ck_min} MPa for the active National Annex."
+            )
+        if f_ck_cube_min is not None and self.f_ck_cube < cast(float, f_ck_cube_min):
+            raise ValueError(
+                f"Grade {self.grade} (f_ck,cube={self.f_ck_cube} MPa) is below the minimum "
+                f"cube strength f_ck_cube_min={f_ck_cube_min} MPa for the active National Annex."
+            )
+        if f_ck_max is not None and self.f_ck > cast(float, f_ck_max):
+            raise ValueError(
+                f"Grade {self.grade} (f_ck={self.f_ck} MPa) exceeds the maximum "
+                f"cylinder strength f_ck_max={f_ck_max} MPa for the active National Annex."
+            )
+        if f_ck_cube_max is not None and self.f_ck_cube > cast(float, f_ck_cube_max):
+            raise ValueError(
+                f"Grade {self.grade} (f_ck,cube={self.f_ck_cube} MPa) exceeds the maximum "
+                f"cube strength f_ck_cube_max={f_ck_cube_max} MPa for the active National Annex."
+            )
+        return self
+
     # ---- Derived properties (NOT included in model_dump) ----
 
     @property
     def f_ck(self) -> float:
-        """Characteristic cylinder compressive strength at 28 days (§3.1.2), MPa."""
+        """Characteristic cylinder compressive strength (MPa).
+
+        Returns f_ck_override if set, otherwise the grade-derived 28-day value.
+        """
+        if self.f_ck_override is not None:
+            return self.f_ck_override
         return self.grade.f_ck
 
     @property
@@ -188,7 +267,12 @@ class ConcreteMaterial(BaseMaterial):
 
     @property
     def f_cm(self) -> float:
-        """Mean cylinder compressive strength (§Table 3.1): f_cm = f_ck + 8 (MPa)."""
+        """Mean cylinder compressive strength (MPa).
+
+        Returns f_cm_override if set, otherwise the grade-derived value.
+        """
+        if self.f_cm_override is not None:
+            return self.f_cm_override
         return self.grade.f_cm
 
     @property
@@ -200,6 +284,16 @@ class ConcreteMaterial(BaseMaterial):
     def f_cd_accidental(self) -> float:
         """Accidental design compressive strength: f_cd,acc = α_cc · f_ck / γ_c,acc (MPa)."""
         return self.alpha_cc * self.f_ck / self.gamma_c_accidental
+
+    @property
+    def f_cd_shear(self) -> float:
+        """Design compressive strength for shear: f_cd,shear = α_cc,shear · f_ck / γ_c (MPa)."""
+        return self.alpha_cc_shear * self.f_ck / self.gamma_c
+
+    @property
+    def f_cd_shear_accidental(self) -> float:
+        """Accidental design compressive strength for shear (MPa)."""
+        return self.alpha_cc_shear * self.f_ck / self.gamma_c_accidental
 
     @property
     def f_ctm(self) -> float:
@@ -235,12 +329,13 @@ class ConcreteMaterial(BaseMaterial):
 
     @property
     def E_cm(self) -> float:
-        """
-        Secant modulus of elasticity (§Table 3.1), MPa.
+        """Secant modulus of elasticity (MPa).
 
-        E_cm = 22 · (f_cm / 10)^0.3 GPa, converted to MPa,
+        Returns E_cm_override if set, otherwise computed from f_cm per §Table 3.1,
         adjusted for aggregate type per §3.1.3(2).
         """
+        if self.E_cm_override is not None:
+            return self.E_cm_override
         e_base_gpa = 22.0 * ((self.f_cm / 10.0) ** 0.3)
         factor = self.aggregate_type.e_cm_factor
         return to_mpa(e_base_gpa * factor, StressUnit.GPA)

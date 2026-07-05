@@ -93,23 +93,18 @@ class StressStrainViewer:
         show: bool = True,
         title: Optional[str] = None,
         width: int = 1200,
-        height: int = 800,
+        height: int = 1000,
         section_render: Literal["points", "filled"] = "points",
     ) -> Any:
         """
         Visualize stress and strain distribution for a given load case.
 
         Solves for the strain state (ε_top, ε_bottom) that produces the target (M_Ed, N_Ed),
-        then displays:
-        - Left: Section cross-section with stress colour map
-        - points: fibre centroids coloured by stress
-        - filled: cell-based filled field (uses fibre i/j grid indices)
-        - Centre: Strain profile (linear distribution across depth)
-        - Right: Stress profile (showing concrete stress block and steel forces)
-
-        Also shows:
-        - Neutral axis position
-        - Resultant force annotations
+        then displays in a 2×2 quadrant layout:
+        - Top-left: Section cross-section with stress colour map (true 1:1 aspect ratio)
+        - Top-right: Results annotation (load case, capacity, resultants)
+        - Bottom-left: Strain profile (linear distribution across depth)
+        - Bottom-right: Stress profile (concrete stress block and steel forces)
 
         Args:
             M_Ed: Applied moment (kN·m)
@@ -132,17 +127,23 @@ class StressStrainViewer:
         state = self._build_stress_strain_plot_state(M_Ed=M_Ed, N_Ed=N_Ed)
 
         fig = make_subplots(
-            rows=1,
-            cols=3,
-            shared_yaxes=True,
-            column_widths=[0.33, 0.33, 0.34],
-            subplot_titles=("Section (Stress)", "Strain Profile", "Stress Profile"),
-            horizontal_spacing=0.1,
+            rows=2,
+            cols=2,
+            row_heights=[0.45, 0.55],
+            column_widths=[0.5, 0.5],
+            subplot_titles=("Section (Stress)", "", "Strain Profile", "Stress Profile"),
+            horizontal_spacing=0.08,
+            vertical_spacing=0.12,
+            shared_yaxes=False,
+            specs=[
+                [{"type": "xy"}, {"type": "xy"}],
+                [{"type": "xy"}, {"type": "xy"}],
+            ],
         )
 
-        self._add_section_subplot(fig, go, state, section_render=section_render)
-        self._add_strain_subplot(fig, go, state)
-        self._add_stress_subplot(fig, go, state)
+        self._add_section_subplot(fig, go, state, section_render=section_render, row=1, col=1)
+        self._add_strain_subplot(fig, go, state, row=2, col=1)
+        self._add_stress_subplot(fig, go, state, row=2, col=2)
 
         self._apply_stress_strain_layout(fig, state, title=title, width=width, height=height)
 
@@ -326,6 +327,8 @@ class StressStrainViewer:
         s: _StressStrainPlotState,
         *,
         section_render: Literal["points", "filled"] = "points",
+        row: int = 1,
+        col: int = 1,
     ) -> None:
         # Outline
         outline_x, outline_y = self._get_outline_xy()
@@ -338,14 +341,14 @@ class StressStrainViewer:
                 name="Section outline",
                 showlegend=False,
             ),
-            row=1,
-            col=1,
+            row=row,
+            col=col,
         )
 
         # Concrete stress map
         if np.any(s.conc_mask):
             if section_render == "filled":
-                self._add_concrete_filled_field(fig, go, s, row=1, col=1)
+                self._add_concrete_filled_field(fig, go, s, row=row, col=col)
             else:
                 # points
                 conc_x = s.x[s.conc_mask]
@@ -384,8 +387,8 @@ class StressStrainViewer:
                         name="Concrete",
                         showlegend=False,
                     ),
-                    row=1,
-                    col=1,
+                    row=row,
+                    col=col,
                 )
 
         # Steel rebars (single trace)
@@ -417,8 +420,8 @@ class StressStrainViewer:
                     name="Steel",
                     showlegend=True,
                 ),
-                row=1,
-                col=1,
+                row=row,
+                col=col,
             )
 
         # Neutral axis line on section (clipped)
@@ -434,13 +437,11 @@ class StressStrainViewer:
                         name="Neutral Axis" if i == 0 else None,
                         showlegend=(i == 0),
                     ),
-                    row=1,
-                    col=1,
+                    row=row,
+                    col=col,
                 )
 
-
-
-    def _add_strain_subplot(self, fig: Any, go: Any, s: _StressStrainPlotState) -> None:
+    def _add_strain_subplot(self, fig: Any, go: Any, s: _StressStrainPlotState, *, row: int = 2, col: int = 1) -> None:
         eps_bottom_permille = s.eps_bottom * 1000.0
         eps_top_permille = s.eps_top * 1000.0
 
@@ -468,8 +469,8 @@ class StressStrainViewer:
                 name=strain_name,
                 hovertemplate="ε: %{x:.3f} ‰<br>y: %{y:.1f} mm<extra></extra>",
             ),
-            row=1,
-            col=2,
+            row=row,
+            col=col,
         )
 
         fig.add_trace(
@@ -481,8 +482,8 @@ class StressStrainViewer:
                 showlegend=False,
                 hovertemplate="ε: %{x:.3f} ‰<br>y: %{y:.1f} mm<extra></extra>",
             ),
-            row=1,
-            col=2,
+            row=row,
+            col=col,
         )
 
         fig.add_trace(
@@ -493,8 +494,8 @@ class StressStrainViewer:
                 line=dict(color="gray", width=1, dash="dot"),
                 showlegend=False,
             ),
-            row=1,
-            col=2,
+            row=row,
+            col=col,
         )
 
         if s.y_na is not None and s.na_in_section:
@@ -508,11 +509,11 @@ class StressStrainViewer:
                     showlegend=False,
                     hovertemplate=f"Neutral Axis<br>y: {s.y_na:.1f} mm<extra></extra>",
                 ),
-                row=1,
-                col=2,
+                row=row,
+                col=col,
             )
 
-    def _add_stress_subplot(self, fig: Any, go: Any, s: _StressStrainPlotState) -> None:
+    def _add_stress_subplot(self, fig: Any, go: Any, s: _StressStrainPlotState, *, row: int = 2, col: int = 2) -> None:
         # Concrete stress profile polygon + hover markers
         if np.any(s.conc_mask):
             # Use interpolated profile for smooth stress block visualization
@@ -548,8 +549,8 @@ class StressStrainViewer:
                     hoverinfo="skip",
                     legendgroup="concrete_stress",
                 ),
-                row=1,
-                col=3,
+                row=row,
+                col=col,
             )
 
             # Add hover markers using interpolated points for smooth hover experience
@@ -571,15 +572,15 @@ class StressStrainViewer:
                     showlegend=False,
                     legendgroup="concrete_stress",
                 ),
-                row=1,
-                col=3,
+                row=row,
+                col=col,
             )
 
         # Resultant arrows
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>cc</sub>", force=s.F_c_comp, y=s.y_c_comp, force_scale=s.force_scale, line_color="red", tip_symbol="triangle-right", extra="Concrete Compression")
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>ct</sub>", force=s.F_c_tens, y=s.y_c_tens, force_scale=s.force_scale, line_color="blue", tip_symbol="triangle-left", extra="Concrete Tension")
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>sc</sub>", force=s.F_s_comp, y=s.y_s_comp, force_scale=s.force_scale, line_color="darkorange", tip_symbol="triangle-right", extra="Steel Compression")
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>st</sub>", force=s.F_s_tens, y=s.y_s_tens, force_scale=s.force_scale, line_color="green", tip_symbol="triangle-left", extra="Steel Tension")
+        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>cc</sub>", force=s.F_c_comp, y=s.y_c_comp, force_scale=s.force_scale, line_color="red", tip_symbol="triangle-right", extra="Concrete Compression")
+        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>ct</sub>", force=s.F_c_tens, y=s.y_c_tens, force_scale=s.force_scale, line_color="blue", tip_symbol="triangle-left", extra="Concrete Tension")
+        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>sc</sub>", force=s.F_s_comp, y=s.y_s_comp, force_scale=s.force_scale, line_color="darkorange", tip_symbol="triangle-right", extra="Steel Compression")
+        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>st</sub>", force=s.F_s_tens, y=s.y_s_tens, force_scale=s.force_scale, line_color="green", tip_symbol="triangle-left", extra="Steel Tension")
 
         # Zero stress line
         fig.add_trace(
@@ -590,8 +591,8 @@ class StressStrainViewer:
                 line=dict(color="gray", width=1, dash="dot"),
                 showlegend=False,
             ),
-            row=1,
-            col=3,
+            row=row,
+            col=col,
         )
 
         # NA marker on stress plot
@@ -605,84 +606,9 @@ class StressStrainViewer:
                     showlegend=False,
                     hovertemplate=f"Neutral Axis<br>y: {s.y_na:.1f} mm<extra></extra>",
                 ),
-                row=1,
-                col=3,
+                row=row,
+                col=col,
             )
-
-    def _set_section_xrange_for_equal_units(
-        self,
-        fig: Any,
-        s: _StressStrainPlotState,
-        *,
-        row: int = 1,
-        col: int = 1,
-        y_range: tuple[float, float],
-        pad_frac: float = 0.05,
-    ) -> None:
-        """
-        Make subplot (row,col) *appear* 1:1 (equal units per pixel) by adjusting ONLY its x-range.
-        Does NOT use scaleanchor (which would break shared y scaling).
-
-        Uses cached bbox from the plot state to avoid extra geometry calls.
-        """
-        # These are set in update_layout() and subplots creation
-        width = float(fig.layout.width or 1200)
-        height = float(fig.layout.height or 600)
-        margin = fig.layout.margin
-
-        plot_w = width - float(margin.l or 0) - float(margin.r or 0)
-        plot_h = height - float(margin.t or 0) - float(margin.b or 0)
-        if plot_w <= 0 or plot_h <= 0:
-            return
-
-        # Axis names for (row,col) in a 1-row layout:
-        # col=1 -> xaxis / yaxis
-        # col=2 -> xaxis2 / yaxis2 (but we match y anyway)
-        # col=3 -> xaxis3 / yaxis3
-        xaxis_name = "xaxis" if col == 1 else f"xaxis{col}"
-        yaxis_name = "yaxis" if col == 1 else f"yaxis{col}"
-
-        xaxis = getattr(fig.layout, xaxis_name, None)
-        yaxis = getattr(fig.layout, yaxis_name, None)
-        if xaxis is None or yaxis is None:
-            return
-
-        # Domain spans (fractions of plotting area)
-        x_dom = xaxis.domain or [0, 1]
-        y_dom = yaxis.domain or [0, 1]
-        x_frac = float(x_dom[1]) - float(x_dom[0])
-        y_frac = float(y_dom[1]) - float(y_dom[0])
-        if x_frac <= 0 or y_frac <= 0:
-            return
-
-        y_min, y_max = y_range
-        y_span = float(y_max - y_min)
-        if y_span <= 0:
-            return
-
-        # Desired x-span for equal units per pixel inside this subplot
-        subplot_pixel_w = plot_w * x_frac
-        subplot_pixel_h = plot_h * y_frac
-        desired_x_span = y_span * (subplot_pixel_w / subplot_pixel_h)
-
-        # Use cached bbox from state: (min_x, min_y, max_x, max_y)
-        x_min, _, x_max, _ = s.bbox
-        x_min = float(x_min)
-        x_max = float(x_max)
-        x_c = 0.5 * (x_min + x_max)
-
-        # Ensure bbox fits with a bit of padding
-        bbox_span = (x_max - x_min) * (1.0 + pad_frac)
-
-        # If bbox is too wide, we sacrifice perfect 1:1 to avoid clipping
-        x_span = max(desired_x_span, bbox_span)
-
-        fig.update_xaxes(
-            range=[x_c - 0.5 * x_span, x_c + 0.5 * x_span],
-            row=row,
-            col=col,
-        )
-
 
     # -----------------------------
     # Layout / axes / annotation
@@ -701,22 +627,19 @@ class StressStrainViewer:
             if s.section_failed:
                 title += " <span style='color:red'>(SECTION FAILS)</span>"
 
-        # Adjust annotation position based on whether we have failure warning text
-        annotation_y = -0.38 if s.section_failed else -0.30
-
+        # Annotation in top-right quadrant (row=1, col=2)
         fig.add_annotation(
-            xref="paper",
-            yref="paper",
-            x=0.5,
-            y=annotation_y,
+            xref="x2 domain",
+            yref="y2 domain",
+            x=0.0,
+            y=1.0,
             text=self._build_annotation_text(s),
             showarrow=False,
             font=dict(size=10),
             align="left",
+            xanchor="left",
+            yanchor="top",
         )
-
-        # Increase bottom margin when section fails to accommodate warning text
-        bottom_margin = 240 if s.section_failed else 200
 
         fig.update_layout(
             title=dict(text=title, x=0.5),
@@ -724,41 +647,36 @@ class StressStrainViewer:
             height=height,
             showlegend=True,
             legend=dict(x=1.02, y=1),
-            margin=dict(l=60, r=120, t=80, b=bottom_margin),
+            margin=dict(l=60, r=120, t=80, b=60),
         )
 
-        # ---- y-axes: match scale across all three ----
-        fig.update_yaxes(matches="y", row=1, col=2)
-        fig.update_yaxes(matches="y", row=1, col=3)
+        # ---- Top-left: Section with true 1:1 aspect ratio ----
+        fig.update_xaxes(title_text="x (mm)", row=1, col=1)
+        fig.update_yaxes(
+            title_text="y (mm)",
+            scaleanchor="x",
+            scaleratio=1,
+            row=1, col=1,
+        )
 
+        # ---- Top-right: Annotation only (hide axes) ----
+        fig.update_xaxes(visible=False, row=1, col=2)
+        fig.update_yaxes(visible=False, row=1, col=2)
+
+        # ---- Bottom row: Strain + Stress (shared y-axes) ----
         y_range_min = s.y_bottom - 20
         y_range_max = s.y_top + 20
-        fig.update_yaxes(title_text="y (mm)", range=[y_range_min, y_range_max], row=1, col=1)
 
-        # Optional: cleaner look—only left subplot shows y tick labels
-        fig.update_yaxes(showticklabels=False, row=1, col=2)
-        fig.update_yaxes(showticklabels=False, row=1, col=3)
+        fig.update_yaxes(title_text="y (mm)", range=[y_range_min, y_range_max], row=2, col=1)
+        fig.update_yaxes(matches="y3", showticklabels=False, row=2, col=2)
 
-        # ---- x-axes ----
-        fig.update_xaxes(title_text="x (mm)", row=1, col=1)
-        fig.update_xaxes(title_text="Strain (‰)", row=1, col=2)
+        fig.update_xaxes(title_text="Strain (‰)", row=2, col=1)
 
         stress_x_min, stress_x_max = self._stress_x_range(s)
         fig.update_xaxes(
             title_text="Stress (MPa)",
             range=[stress_x_min, stress_x_max],
-            row=1,
-            col=3,
-        )
-
-        # Make subplot 1 "look" 1:1 by adjusting ONLY its x-range
-        self._set_section_xrange_for_equal_units(
-            fig,
-            s,
-            row=1,
-            col=1,
-            y_range=(y_range_min, y_range_max),
-            pad_frac=0.05,
+            row=2, col=2,
         )
 
 

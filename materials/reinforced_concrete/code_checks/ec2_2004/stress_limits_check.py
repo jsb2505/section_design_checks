@@ -438,7 +438,9 @@ class StressLimitsCheck(BaseCodeCheck):
             return 0.0
 
         conc_stresses = conc_forces[nonzero] / conc_areas[nonzero]
-        peak = float(conc_stresses.max()) if len(conc_stresses) > 0 else 0.0
+        # Use Python max() to avoid NumPy max() default-sentinel edge cases seen
+        # when NumPy is reloaded in some test environments.
+        peak = float(max(float(s) for s in conc_stresses)) if len(conc_stresses) > 0 else 0.0
         return max(0.0, peak)
 
     def _get_max_steel_stress(
@@ -514,7 +516,7 @@ class StressLimitsCheck(BaseCodeCheck):
             StressLimitResult with all intermediate values.
         """
         diagram = self._get_diagram(ignore_compression_steel)
-        eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed)
+        eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed, strict=True)
 
         sigma_c = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram)
         sigma_s = self._get_max_steel_stress(eps_top, eps_bottom)
@@ -561,7 +563,9 @@ class StressLimitsCheck(BaseCodeCheck):
                         diagram_nl = self._build_diagram_with_E_cm_eff(
                             E_cm_eff_NL, ignore_compression_steel,
                         )
-                        eps_top, eps_bottom = diagram_nl.find_strains_for_MN(M_Ed, N_Ed)
+                        eps_top, eps_bottom = diagram_nl.find_strains_for_MN(
+                            M_Ed, N_Ed, strict=True
+                        )
                         sigma_c_nl = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_nl)
                         sigma_s_nl = self._get_max_steel_stress(eps_top, eps_bottom)
                         nonlinear_creep_applied = True

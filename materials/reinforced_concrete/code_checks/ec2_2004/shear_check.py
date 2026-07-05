@@ -8,7 +8,7 @@ N_Ed, M_Ed, and V_Ed are now parameters to perform_check(),not fields.
 This enables checking multiple load cases against the same section efficiently.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from math import atan, degrees, radians, sin, sqrt
 import warnings
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
@@ -245,6 +245,14 @@ class ShearCheck(BaseCodeCheck):
         description="Steel stress-strain branch type (used if use_rigorous=True)",
     )
 
+    concrete_model_override: Optional[Any] = Field(
+        default=None, exclude=True,
+        description="Pre-built custom concrete constitutive model (bypasses factory).",
+    )
+    steel_models_override: Optional[list] = Field(
+        default=None, exclude=True,
+        description="Pre-built custom steel constitutive models, one per rebar group (bypasses factory).",
+    )
 
 
     # =========================
@@ -258,6 +266,8 @@ class ShearCheck(BaseCodeCheck):
 
     @model_validator(mode="after")
     def _validate_concrete_model_type(self) -> "ShearCheck":
+        if self.concrete_model_override is not None:
+            return self
         if self.concrete_model_type == ConcreteModelType.LINEAR_ELASTIC:
             raise ValueError(
                 "LINEAR_ELASTIC concrete model is only valid for SLS checks "
@@ -267,13 +277,22 @@ class ShearCheck(BaseCodeCheck):
 
     def _take_snapshot(self) -> dict:
         """Capture current state of inputs that affect the interaction diagram."""
-        return {
+        snapshot = {
             "section": self.section.model_dump(),
             "concrete": self.concrete.model_dump(),
             "concrete_model_type": self.concrete_model_type,
             "steel_model_type": self.steel_model_type,
             "use_accidental": self.use_accidental,
         }
+        if self.concrete_model_override is not None:
+            snapshot["concrete_override_key"] = getattr(
+                self.concrete_model_override, "cache_key", id(self.concrete_model_override)
+            )
+        if self.steel_models_override is not None:
+            snapshot["steel_override_keys"] = [
+                getattr(sm, "cache_key", id(sm)) for sm in self.steel_models_override
+            ]
+        return snapshot
 
     def _get_diagram(self, ignore_compression_steel: bool = False) -> MNInteractionDiagram:
         """Get the cached diagram, rebuilding if inputs have changed."""
@@ -289,6 +308,8 @@ class ShearCheck(BaseCodeCheck):
                     use_characteristic=False,
                     use_accidental=self.use_accidental,
                     ignore_compression_steel=True,
+                    concrete_model_override=self.concrete_model_override,
+                    steel_models_override=self.steel_models_override,
                 )
                 self._diagram_no_comp_snapshot = snapshot
             return self._diagram_no_comp_steel
@@ -302,6 +323,8 @@ class ShearCheck(BaseCodeCheck):
                     use_characteristic=False,
                     use_accidental=self.use_accidental,
                     ignore_compression_steel=False,
+                    concrete_model_override=self.concrete_model_override,
+                    steel_models_override=self.steel_models_override,
                 )
                 self._diagram_snapshot = snapshot
             return self._diagram
@@ -335,8 +358,10 @@ class ShearCheck(BaseCodeCheck):
 
     @property
     def f_cd_design(self) -> float:
-        """Design concrete strength (accidental or persistent) in MPa."""
-        return self.concrete.f_cd_accidental if self.use_accidental else self.concrete.f_cd
+        """Design concrete compressive strength for shear (accidental or persistent) in MPa."""
+        if self.use_accidental:
+            return self.concrete.f_cd_shear_accidental
+        return self.concrete.f_cd_shear
 
     @property
     def f_ctd_design(self) -> float:
@@ -1351,7 +1376,7 @@ class ShearCheck(BaseCodeCheck):
                 message = "Shear capacity exceeded: compression strut limit V_Rd,max reached."
             elif governing_component == "V_Rd_s":
                 message = "Shear capacity exceeded: shear reinforcement limit V_Rd,s reached."
-            else:
+            else:  # pragma: no cover - defensive fallback for unforeseen future governing modes
                 message = "Shear capacity exceeded."
 
         # Details — common keys match CircularSectionCheck for consistency

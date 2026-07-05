@@ -29,7 +29,7 @@ class BaseGeometry(BaseModel, ABC):
         Returns:
             Area in mm²
         """
-        pass
+        pass  # pragma: no cover - abstract interface placeholder
 
     @abstractmethod
     def get_centroid(self) -> Tuple[float, float]:
@@ -39,7 +39,7 @@ class BaseGeometry(BaseModel, ABC):
         Returns:
             Tuple of (x, y) coordinates in mm from origin
         """
-        pass
+        pass  # pragma: no cover - abstract interface placeholder
 
     @abstractmethod
     def get_second_moment_area(self) -> Tuple[float, float, float]:
@@ -49,7 +49,7 @@ class BaseGeometry(BaseModel, ABC):
         Returns:
             Tuple of (I_xx, I_yy, I_xy) in mm⁴
         """
-        pass
+        pass  # pragma: no cover - abstract interface placeholder
 
     @abstractmethod
     def get_bounding_box(self) -> Tuple[float, float, float, float]:
@@ -59,7 +59,7 @@ class BaseGeometry(BaseModel, ABC):
         Returns:
             Tuple of (min_x, min_y, max_x, max_y) in mm
         """
-        pass
+        pass  # pragma: no cover - abstract interface placeholder
 
 
 class Point2D(BaseModel):
