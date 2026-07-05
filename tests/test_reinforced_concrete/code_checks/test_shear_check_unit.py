@@ -67,8 +67,13 @@ def _make_stub_shear_check() -> ShearCheck:
     object.__setattr__(check, "allow_negative_sigma_cp", True)
     object.__setattr__(check, "use_transformed_area_for_sigma_cp", True)
     object.__setattr__(check, "use_sigma_cp_for_alpha_cw", False)
-    object.__setattr__(check, "cap_lever_arm", True)
+    object.__setattr__(check, "z_d_ratio", 0.9)
+    object.__setattr__(check, "z_d_ratio_upper", 0.95)
+    object.__setattr__(check, "z_d_ratio_lower", 0.65)
     object.__setattr__(check, "breadth_override", None)
+    object.__setattr__(check, "breadth_policy", "minimum")
+    object.__setattr__(check, "breadth_average_height_ratio", 1.0)
+    object.__setattr__(check, "breadth_shear_direction", (0.0, 1.0))
     object.__setattr__(check, "use_increased_nu_1", False)
     object.__setattr__(check, "apply_tension_cot_theta_limit", True)
     object.__setattr__(check, "d_fallback", "ratio_of_h")
@@ -182,13 +187,22 @@ class TestValidation:
                 concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
             )
 
+    def test_zero_breadth_shear_direction_raises(self, rectangular_beam_with_rebars, concrete_c30):
+        """Test zero breadth shear direction vector raises."""
+        with pytest.raises(ValueError, match="breadth_shear_direction must be a non-zero vector"):
+            ShearCheck(
+                section=rectangular_beam_with_rebars,
+                concrete=concrete_c30,
+                breadth_shear_direction=(0.0, 0.0),
+            )
+
 
 class TestPropertiesAndDepths:
     """Tests for TestPropertiesAndDepths."""
     def test_design_properties_and_breadth_override(self, monkeypatch):
         """Test design properties and breadth override."""
         check = _make_stub_shear_check()
-        monkeypatch.setattr(sc_mod, "calculate_section_breadth", lambda section: 275.0)
+        monkeypatch.setattr(sc_mod, "calculate_section_breadth", lambda section, **kwargs: 275.0)
         assert check.breadth == pytest.approx(275.0, rel=1e-12)
         object.__setattr__(check, "breadth_override", 300.0)
         assert check.breadth == pytest.approx(300.0, rel=1e-12)
@@ -206,6 +220,62 @@ class TestPropertiesAndDepths:
 
         object.__setattr__(check, "shear_reinforcement", None)
         assert check.f_ywd_design == pytest.approx(0.0, rel=1e-12)
+
+    def test_breadth_cache_recomputes_when_section_snapshot_changes(self, monkeypatch):
+        """Breadth should be cached and invalidated when section model_dump changes."""
+        check = _make_stub_shear_check()
+
+        state = {"section": 1}
+        check.section.model_dump = lambda: dict(state)
+
+        calls = {"n": 0}
+
+        def _fake_breadth(_section, **kwargs):
+            calls["n"] += 1
+            return 250.0 + float(state["section"])
+
+        monkeypatch.setattr(sc_mod, "calculate_section_breadth", _fake_breadth)
+
+        b1 = check.breadth
+        b2 = check.breadth
+        assert b1 == pytest.approx(251.0, rel=1e-12)
+        assert b2 == pytest.approx(251.0, rel=1e-12)
+        assert calls["n"] == 1
+
+        state["section"] = 2
+        b3 = check.breadth
+        assert b3 == pytest.approx(252.0, rel=1e-12)
+        assert calls["n"] == 2
+
+    def test_breadth_cache_recomputes_when_policy_settings_change(self, monkeypatch):
+        """Breadth cache should invalidate when breadth policy inputs change."""
+        check = _make_stub_shear_check()
+        calls: list[dict] = []
+
+        def _fake_breadth(_section, **kwargs):
+            calls.append(dict(kwargs))
+            if kwargs.get("policy") == "average":
+                return 333.0
+            return 222.0
+
+        monkeypatch.setattr(sc_mod, "calculate_section_breadth", _fake_breadth)
+
+        b1 = check.breadth
+        b2 = check.breadth
+        assert b1 == pytest.approx(222.0, rel=1e-12)
+        assert b2 == pytest.approx(222.0, rel=1e-12)
+        assert len(calls) == 1
+
+        object.__setattr__(check, "breadth_policy", "average")
+        object.__setattr__(check, "breadth_average_height_ratio", 0.5)
+        object.__setattr__(check, "breadth_shear_direction", (1.0, 0.0))
+
+        b3 = check.breadth
+        assert b3 == pytest.approx(333.0, rel=1e-12)
+        assert len(calls) == 2
+        assert calls[-1]["policy"] == "average"
+        assert calls[-1]["average_height_ratio"] == pytest.approx(0.5, rel=1e-12)
+        assert calls[-1]["shear_direction"] == (1.0, 0.0)
 
     def test_find_effective_depth_and_lever_arm_branches(self):
         """Test find effective depth and lever arm branches."""
