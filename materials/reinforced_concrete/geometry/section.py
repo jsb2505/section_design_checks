@@ -3,14 +3,120 @@ Reinforced concrete section geometry using Shapely for 2D polygonal shapes.
 
 Provides flexible geometry definition with arbitrary polygonal outlines
 and rebar positioning.
+
+Supports:
+- Solid polygon sections
+- Polygon sections with voids/holes (interior rings)
 """
 
+from __future__ import annotations
+
 from typing import List, Tuple, Optional, Literal
+
 import numpy as np
 from shapely.geometry import Polygon, Point as ShapelyPoint
-from pydantic import BaseModel, Field, field_validator, computed_field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+
 from materials.core.geometry import BaseGeometry, Point2D
 from materials.reinforced_concrete.materials.rebar import Rebar
+
+
+# Small tolerance used for geometric checks (mm)
+_GEOM_TOL_MM = 1e-6
+
+
+def _ring_integrals_about_origin(coords: np.ndarray) -> Tuple[float, float, float, float, float, float]:
+    """
+    Compute signed area, centroid (about origin), and second moments (about origin)
+    for a single closed polygon ring using standard shoelace-based formulas.
+
+    Args:
+        coords: (N,2) array of ring coordinates (x,y). May be closed or open.
+
+    Returns:
+        (A, Cx, Cy, Ixx0, Iyy0, Ixy0) where:
+            A   = signed area (mm²)
+            Cx  = centroid x (mm) (only meaningful if A != 0)
+            Cy  = centroid y (mm)
+            Ixx0, Iyy0, Ixy0 = second moments/products about origin (mm⁴), signed with A
+    """
+    if coords.shape[0] < 3:
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    # Ensure ring is closed for consistent indexing
+    if not (coords[0, 0] == coords[-1, 0] and coords[0, 1] == coords[-1, 1]):
+        coords = np.vstack([coords, coords[0]])
+
+    x = coords[:, 0]
+    y = coords[:, 1]
+
+    x0 = x[:-1]
+    y0 = y[:-1]
+    x1 = x[1:]
+    y1 = y[1:]
+
+    cross = x0 * y1 - x1 * y0  # signed
+    A = 0.5 * float(np.sum(cross))
+
+    if abs(A) < 1e-18:
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    # Centroid (about origin)
+    Cx = float(np.sum((x0 + x1) * cross)) / (6.0 * A)
+    Cy = float(np.sum((y0 + y1) * cross)) / (6.0 * A)
+
+    # Second moments about origin
+    Ixx0 = float(np.sum((y0 * y0 + y0 * y1 + y1 * y1) * cross)) / 12.0
+    Iyy0 = float(np.sum((x0 * x0 + x0 * x1 + x1 * x1) * cross)) / 12.0
+    Ixy0 = float(
+        np.sum(
+            (x0 * y1 + 2.0 * x0 * y0 + 2.0 * x1 * y1 + x1 * y0) * cross
+        )
+    ) / 24.0
+
+    return (A, Cx, Cy, Ixx0, Iyy0, Ixy0)
+
+
+def _polygon_integrals_about_origin(poly: Polygon) -> Tuple[float, float, float, float, float, float]:
+    """
+    Compute signed area, centroid, and second moments about origin for a Polygon,
+    including voids/holes (interior rings).
+
+    Strategy:
+        - Compute ring integrals for exterior ring.
+        - Add ring integrals for each interior ring (holes). Orientation is handled
+          via signed area in the formulas (holes should contribute negative area).
+        - Combine to obtain polygon centroid and origin-referenced inertias.
+    """
+    # Exterior
+    ext = np.asarray(poly.exterior.coords, dtype=float)
+    A_e, Cx_e, Cy_e, Ixx_e, Iyy_e, Ixy_e = _ring_integrals_about_origin(ext)
+
+    A_total = A_e
+    Cx_num = Cx_e * A_e
+    Cy_num = Cy_e * A_e
+    Ixx0 = Ixx_e
+    Iyy0 = Iyy_e
+    Ixy0 = Ixy_e
+
+    # Interiors (holes)
+    for ring in poly.interiors:
+        coords = np.asarray(ring.coords, dtype=float)
+        A_i, Cx_i, Cy_i, Ixx_i, Iyy_i, Ixy_i = _ring_integrals_about_origin(coords)
+
+        A_total += A_i
+        Cx_num += Cx_i * A_i
+        Cy_num += Cy_i * A_i
+        Ixx0 += Ixx_i
+        Iyy0 += Iyy_i
+        Ixy0 += Ixy_i
+
+    if abs(A_total) < 1e-18:
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    Cx = Cx_num / A_total
+    Cy = Cy_num / A_total
+    return (A_total, Cx, Cy, Ixx0, Iyy0, Ixy0)
 
 
 class RebarGroup(BaseModel):
@@ -23,6 +129,8 @@ class RebarGroup(BaseModel):
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
         validate_assignment=True,
+        extra="forbid",
+        frozen=False,
     )
 
     rebar: Rebar = Field(
@@ -41,31 +149,39 @@ class RebarGroup(BaseModel):
         description="Optional layer identifier (e.g., 'bottom', 'top', 'side')"
     )
 
-    @field_validator("positions")
-    @classmethod
-    def validate_positions_unique(cls, v: List[Point2D]) -> List[Point2D]:
-        """Ensure bar positions are reasonably unique (no overlapping bars)."""
-        if len(v) < 2:
-            return v
+    @model_validator(mode="after")
+    def validate_positions_non_overlapping(self) -> "RebarGroup":
+        """
+        Ensure bar geometries do not overlap.
 
-        # Check for duplicate positions (within 1mm tolerance)
-        for i, p1 in enumerate(v):
-            for p2 in v[i+1:]:
-                distance = ((p1.x - p2.x)**2 + (p1.y - p2.y)**2) ** 0.5
-                if distance < 1.0:
+        Bars are allowed to touch (distance == diameter), but not overlap
+        (distance < diameter). All bars in the group share the same diameter.
+        """
+        if len(self.positions) < 2:
+            return self
+
+        d = float(self.rebar.diameter)
+        min_dist = d - _GEOM_TOL_MM  # allow touching (+ tiny numerical tolerance)
+        min_dist_sq = min_dist * min_dist
+
+        for i, p1 in enumerate(self.positions):
+            for p2 in self.positions[i + 1:]:
+                dx = p1.x - p2.x
+                dy = p1.y - p2.y
+                if (dx * dx + dy * dy) < min_dist_sq:
                     raise ValueError(
-                        f"Bars too close together at ({p1.x:.1f}, {p1.y:.1f}) "
-                        f"and ({p2.x:.1f}, {p2.y:.1f}). Minimum spacing 1mm."
+                        "Rebars overlap (or are closer than diameter). "
+                        f"Diameter={d:g} mm, "
+                        f"positions=({p1.x:.3f},{p1.y:.3f}) and ({p2.x:.3f},{p2.y:.3f}). "
+                        "Bars may touch, but must not overlap."
                     )
-        return v
+        return self
 
-    @computed_field
     @property
     def n_bars(self) -> int:
         """Number of bars in this group."""
         return len(self.positions)
 
-    @computed_field
     @property
     def total_area(self) -> float:
         """
@@ -96,19 +212,18 @@ class RCSection(BaseGeometry):
     Reinforced concrete section with arbitrary polygonal outline.
 
     Uses Shapely for robust geometric operations:
-    - Area, centroid, moments of inertia
-    - Containment checking (bar positions within section)
-    - Geometric transformations
+    - Area, centroid, moments of inertia (supports voids)
+    - Containment checking (rebar discs fully within section, including voids)
 
-    Coordinate system:
-    - Origin at user-defined location
-    - X-axis: typically section width direction
-    - Y-axis: typically section height direction
+    Coordinate system convention:
+    - Origin is at the *centre* of the section by default for helper constructors.
     """
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
         validate_assignment=True,
+        extra="forbid",
+        frozen=False,
     )
 
     outline: Polygon = Field(
@@ -132,37 +247,31 @@ class RCSection(BaseGeometry):
         description="Section identifier"
     )
 
-    @field_validator("outline")
-    @classmethod
-    def validate_outline(cls, v: Polygon) -> Polygon:
-        """Validate outline polygon."""
-        if not v.is_valid:
-            raise ValueError("Section outline is not a valid polygon")
-        if v.is_empty:
+    @model_validator(mode="after")
+    def validate_outline_and_rebars(self) -> "RCSection":
+        """
+        Validate geometry consistency after model creation.
+
+        - outline must be a valid, non-empty polygon with positive area
+        - all rebars (as discs) must lie fully within outline (respects voids)
+        """
+        if self.outline.is_empty:
             raise ValueError("Section outline is empty")
-        if v.area <= 0:
+        if not self.outline.is_valid:
+            raise ValueError("Section outline is not a valid polygon")
+        if self.outline.area <= 0:
             raise ValueError("Section outline has zero or negative area")
-        return v
 
-    @field_validator("rebar_groups")
-    @classmethod
-    def validate_rebars_in_section(cls, v: List[RebarGroup], info) -> List[RebarGroup]:
-        """Validate that all rebars are within the section outline."""
-        if "outline" not in info.data:
-            return v
-
-        outline: Polygon = info.data["outline"]
-
-        for group in v:
+        for group in self.rebar_groups:
+            r = float(group.rebar.diameter) / 2.0
             for pos in group.positions:
-                point = ShapelyPoint(pos.x, pos.y)
-                if not outline.contains(point):
-                    # Allow bars on the boundary
-                    if not outline.boundary.distance(point) < 1e-6:
-                        raise ValueError(
-                            f"Rebar at ({pos.x:.1f}, {pos.y:.1f}) is outside section outline"
-                        )
-        return v
+                disc = ShapelyPoint(pos.x, pos.y).buffer(r)
+                if not self.outline.covers(disc):
+                    raise ValueError(
+                        f"Rebar (ϕ{group.rebar.diameter:g}) at ({pos.x:.1f}, {pos.y:.1f}) "
+                        "is not fully within the section outline (may cross boundary or enter a void)."
+                    )
+        return self
 
     def get_area(self) -> float:
         """
@@ -170,8 +279,11 @@ class RCSection(BaseGeometry):
 
         Returns:
             Area in mm²
+
+        Note:
+            Shapely's area correctly accounts for holes/voids.
         """
-        return self.outline.area
+        return float(self.outline.area)
 
     def get_centroid(self) -> Tuple[float, float]:
         """
@@ -179,51 +291,35 @@ class RCSection(BaseGeometry):
 
         Returns:
             (x, y) coordinates in mm
+
+        Note:
+            Shapely's centroid correctly accounts for holes/voids.
         """
-        centroid = self.outline.centroid
-        return (centroid.x, centroid.y)
+        c = self.outline.centroid
+        return (float(c.x), float(c.y))
 
     def get_second_moment_area(self) -> Tuple[float, float, float]:
         """
         Second moments of area about centroidal axes (gross concrete section only).
 
-        Uses parallel axis theorem with Shapely.
+        Supports polygons with holes/voids by integrating:
+            - exterior ring contribution
+            - plus interior ring signed contributions
 
         Returns:
             (I_xx, I_yy, I_xy) in mm⁴
-
-        Note:
-            This returns the gross concrete section properties only.
-            For transformed section properties including steel, use
-            get_transformed_second_moment_area().
         """
-        # Get centroid
-        cx, cy = self.get_centroid()
+        A, Cx, Cy, Ixx0, Iyy0, Ixy0 = _polygon_integrals_about_origin(self.outline)
+        if abs(A) < 1e-18:
+            raise ValueError("Cannot compute second moments: section area is zero/degenerate")
 
-        # Get coordinates of polygon boundary
-        coords = np.array(self.outline.exterior.coords[:-1])  # Exclude last point (duplicate)
-        x = coords[:, 0] - cx  # Translate to centroid
-        y = coords[:, 1] - cy
+        # Shift to centroidal axes using parallel axis theorem:
+        Ixx_c = Ixx0 - A * (Cy ** 2)
+        Iyy_c = Iyy0 - A * (Cx ** 2)
+        Ixy_c = Ixy0 - A * (Cx * Cy)
 
-        # Calculate using shoelace formula for polygon moments
-        n = len(x)
-        I_xx = 0.0
-        I_yy = 0.0
-        I_xy = 0.0
-
-        for i in range(n):
-            j = (i + 1) % n
-            cross = x[i] * y[j] - x[j] * y[i]
-
-            I_xx += (y[i]**2 + y[i]*y[j] + y[j]**2) * cross
-            I_yy += (x[i]**2 + x[i]*x[j] + x[j]**2) * cross
-            I_xy += (x[i]*y[j] + 2*x[i]*y[i] + 2*x[j]*y[j] + x[j]*y[i]) * cross
-
-        I_xx = abs(I_xx) / 12.0
-        I_yy = abs(I_yy) / 12.0
-        I_xy = abs(I_xy) / 24.0
-
-        return (I_xx, I_yy, I_xy)
+        # Return positive magnitudes (engineering convention)
+        return (abs(Ixx_c), abs(Iyy_c), abs(Ixy_c))
 
     def get_transformed_second_moment_area(
         self,
@@ -233,77 +329,36 @@ class RCSection(BaseGeometry):
         """
         Second moments of area for transformed section including reinforcement.
 
-        Uses the transformed section method where steel is converted to equivalent
-        concrete using the modular ratio α_e = E_s / E_c. Each steel bar contributes
-        (α_e - 1) · A_s to the transformed area.
-
-        Formulation:
-            I_transformed = I_concrete + Σ[(α_e - 1) · A_s · d²]
-
-        where d is the distance from the bar to the centroid axis.
-
-        Args:
-            E_c: Concrete elastic modulus in MPa (typically E_cm from ConcreteMaterial)
-            centroid: Optional centroid to use. If None, uses gross section centroid.
-
-        Returns:
-            (I_xx, I_yy, I_xy) in mm⁴
-
-        Raises:
-            ValueError: If E_c <= 0 or no rebar groups present
-
-        Note:
-            - Uses (α_e - 1) factor to account for concrete already present at bar location
-            - Assumes bars are small relative to section (point area approximation)
-            - For uncracked section analysis, use gross section centroid
-            - For cracked section, calculate neutral axis position first
+        Uses transformed section method with modular ratio α_e = E_s / E_c.
+        Each steel bar contributes (α_e - 1) · A_s via parallel axis terms.
         """
         if E_c <= 0:
             raise ValueError(f"Concrete modulus E_c must be positive, got {E_c}")
-
         if not self.rebar_groups:
             raise ValueError("Cannot calculate transformed properties: no rebars in section")
 
-        # Use provided centroid or gross section centroid
-        if centroid is None:
-            cx, cy = self.get_centroid()
-        else:
-            cx, cy = centroid
+        cx, cy = self.get_centroid() if centroid is None else centroid
 
-        # Start with gross concrete section
-        I_xx_concrete, I_yy_concrete, I_xy_concrete = self.get_second_moment_area()
+        I_xx_conc, I_yy_conc, I_xy_conc = self.get_second_moment_area()
 
-        # Add contribution from each rebar group
         I_xx_steel = 0.0
         I_yy_steel = 0.0
         I_xy_steel = 0.0
 
         for group in self.rebar_groups:
-            # Get modular ratio for this rebar material
-            E_s = group.rebar.E_s
-            alpha_e = E_s / E_c
-
-            # Use (α_e - 1) to account for concrete already at bar location
+            alpha_e = group.rebar.E_s / E_c
             factor = alpha_e - 1.0
 
             for pos in group.positions:
-                # Distance from bar to centroid
                 dx = pos.x - cx
                 dy = pos.y - cy
-
-                # Contribution using parallel axis theorem
-                # I = Σ[A · d²] where A is the transformed area
                 A_transformed = factor * group.rebar.area
 
-                I_xx_steel += A_transformed * dy**2
-                I_yy_steel += A_transformed * dx**2
+                I_xx_steel += A_transformed * dy ** 2
+                I_yy_steel += A_transformed * dx ** 2
                 I_xy_steel += A_transformed * dx * dy
 
-        return (
-            I_xx_concrete + I_xx_steel,
-            I_yy_concrete + I_yy_steel,
-            I_xy_concrete + I_xy_steel,
-        )
+        return (I_xx_conc + I_xx_steel, I_yy_conc + I_yy_steel, I_xy_conc + I_xy_steel)
 
     def get_bounding_box(self) -> Tuple[float, float, float, float]:
         """
@@ -312,53 +367,19 @@ class RCSection(BaseGeometry):
         Returns:
             (min_x, min_y, max_x, max_y) in mm
         """
-        bounds = self.outline.bounds
-        return bounds
+        min_x, min_y, max_x, max_y = self.outline.bounds
+        return (float(min_x), float(min_y), float(max_x), float(max_y))
 
-    @computed_field
     @property
     def total_steel_area(self) -> float:
-        """
-        Total area of all reinforcement.
-
-        Returns:
-            Total steel area in mm²
-        """
+        """Total area of all reinforcement in mm²."""
         return sum(group.total_area for group in self.rebar_groups)
 
-    @computed_field
     @property
     def reinforcement_ratio(self) -> float:
-        """
-        Reinforcement ratio (ρ = A_s / A_c).
-
-        Returns:
-            Ratio (dimensionless)
-        """
-        if self.get_area() == 0:
-            return 0.0
-        return self.total_steel_area / self.get_area()
-
-    @computed_field
-    @property
-    def concrete_cover(self) -> float:
-        """
-        Minimum concrete cover (top/bottom faces only).
-
-        Convenient property for accessing cover with default settings.
-        Equivalent to get_concrete_cover(orthogonal_only=True).
-
-        Returns:
-            Minimum concrete cover in mm
-
-        Raises:
-            ValueError: If no rebars in section and no override set
-
-        Note:
-            For custom calculations (specific face, all faces), use get_concrete_cover() method.
-            This property is not cached and recalculates on each access.
-        """
-        return self.get_concrete_cover(orthogonal_only=True)
+        """Reinforcement ratio (ρ = A_s / A_c)."""
+        a_c = self.get_area()
+        return 0.0 if a_c == 0.0 else (self.total_steel_area / a_c)
 
     def get_rebar_positions(self) -> List[Tuple[float, float, float]]:
         """
@@ -367,11 +388,11 @@ class RCSection(BaseGeometry):
         Returns:
             List of (x, y, area) tuples for each bar
         """
-        positions = []
+        out: List[Tuple[float, float, float]] = []
         for group in self.rebar_groups:
             for pos in group.positions:
-                positions.append((pos.x, pos.y, group.rebar.area))
-        return positions
+                out.append((pos.x, pos.y, group.rebar.area))
+        return out
 
     def get_steel_centroid(self) -> Tuple[float, float]:
         """
@@ -380,126 +401,145 @@ class RCSection(BaseGeometry):
         Returns:
             (x, y) coordinates in mm, or (0, 0) if no reinforcement
         """
-        if self.total_steel_area == 0:
+        if self.total_steel_area == 0.0:
             return (0.0, 0.0)
 
         total_area = 0.0
-        moment_x = 0.0
-        moment_y = 0.0
+        mx = 0.0
+        my = 0.0
 
         for group in self.rebar_groups:
             for pos in group.positions:
-                area = group.rebar.area
-                total_area += area
-                moment_x += area * pos.x
-                moment_y += area * pos.y
+                a = group.rebar.area
+                total_area += a
+                mx += a * pos.x
+                my += a * pos.y
 
-        return (moment_x / total_area, moment_y / total_area)
+        return (mx / total_area, my / total_area)
 
     def add_rebar_group(self, group: RebarGroup) -> None:
         """
         Add a rebar group to the section.
 
-        Args:
-            group: RebarGroup to add
-
         Raises:
-            ValueError: If rebars are outside section
+            ValueError: If any rebar disc is not fully within the outline
         """
-        # Validate positions are within section
+        r = float(group.rebar.diameter) / 2.0
         for pos in group.positions:
-            point = ShapelyPoint(pos.x, pos.y)
-            if not self.outline.contains(point) and self.outline.boundary.distance(point) > 1e-6:
+            disc = ShapelyPoint(pos.x, pos.y).buffer(r)
+            if not self.outline.covers(disc):
                 raise ValueError(
-                    f"Rebar at ({pos.x:.1f}, {pos.y:.1f}) is outside section outline"
+                    f"Rebar (ϕ{group.rebar.diameter:g}) at ({pos.x:.1f}, {pos.y:.1f}) "
+                    "is not fully within the section outline (may cross boundary or enter a void)."
                 )
-
         self.rebar_groups.append(group)
 
     def get_concrete_cover(
         self,
+        reference: Literal["top", "bottom"] = "bottom",
         orthogonal_only: bool = True,
-        face: Optional[Literal["top", "bottom", "left", "right"]] = None
     ) -> float:
         """
-        Calculate minimum concrete cover from section boundary to rebar outer surface.
+        Calculate concrete cover to a chosen face (top or bottom) for cracking checks.
 
-        Cover is defined as the shortest distance from section boundary to the
-        outer diameter of any rebar (not centreline)
+        Cover is to the *outer surface* of rebar:
+            cover = distance(boundary, bar_centre) - bar_radius
+
+        Behaviour:
+            - If concrete_cover_override is set, returns it.
+            - If orthogonal_only=True: cover is computed orthogonally to the chosen
+              face using the section's bounding box (typical beam design).
+            - If orthogonal_only=False: cover is computed as the true minimum distance
+              from bar centres to the polygon boundary, but filtered to the chosen face
+              by selecting boundary segments on the top/bottom half relative to centroid.
 
         Args:
-            orthogonal_only: If True (default), only consider top/bottom faces.
-                           This avoids edge bars corrupting the calculation.
-            face: If specified, only calculate cover for specific face.
-                 Overrides orthogonal_only.
+            reference: "top" or "bottom" (tension face to evaluate)
+            orthogonal_only: If True (default), use bounding-box orthogonal cover.
+                            If False, use true polygon boundary distance with face filtering.
 
         Returns:
-            Minimum concrete cover in mm
-
-        Raises:
-            ValueError: If no rebars in section
-
-        Note:
-            If concrete_cover_override is set, returns that value instead.
+            Cover in mm
         """
-        # Use override if provided
         if self.concrete_cover_override is not None:
             return self.concrete_cover_override
 
         if not self.rebar_groups:
             raise ValueError("Cannot calculate cover: no rebars in section")
 
-        min_x, min_y, max_x, max_y = self.get_bounding_box()
-        min_cover = float('inf')
+        if reference not in ("top", "bottom"):
+            raise ValueError(f"Unknown reference: {reference}")
+
+        # Orthogonal-only cover to chosen face (top OR bottom, not min of both)
+        if orthogonal_only:
+            _, min_y, _, max_y = self.get_bounding_box()
+            min_cover = float("inf")
+
+            for group in self.rebar_groups:
+                r = float(group.rebar.diameter) / 2.0
+                for pos in group.positions:
+                    c = (pos.y - min_y) - r if reference == "bottom" else (max_y - pos.y) - r
+                    min_cover = min(min_cover, c)
+
+            return min_cover
+
+        # True polygon cover, but restricted to "top" or "bottom" boundary portions.
+        _, cy = self.get_centroid()
+        min_cover = float("inf")
+
+        # Include exterior and interior boundaries (void boundaries matter too)
+        rings = [self.outline.exterior, *self.outline.interiors]
+
+        segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+        for ring in rings:
+            coords = list(ring.coords)
+            for (x0, y0), (x1, y1) in zip(coords[:-1], coords[1:]):
+                ym = 0.5 * (y0 + y1)
+                if reference == "top" and ym >= cy:
+                    segments.append(((x0, y0), (x1, y1)))
+                elif reference == "bottom" and ym <= cy:
+                    segments.append(((x0, y0), (x1, y1)))
+
+        # Fallback: if segmentation yields nothing, use full boundary distance
+        if not segments:
+            boundary = self.outline.boundary
+            for group in self.rebar_groups:
+                r = float(group.rebar.diameter) / 2.0
+                for pos in group.positions:
+                    d = boundary.distance(ShapelyPoint(pos.x, pos.y))
+                    min_cover = min(min_cover, d - r)
+            return min_cover
+
+        def point_to_segment_distance(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
+            """Distance from point P to segment AB in 2D."""
+            vx = bx - ax
+            vy = by - ay
+            wx = px - ax
+            wy = py - ay
+            vv = vx * vx + vy * vy
+            if vv <= 1e-18:
+                dx = px - ax
+                dy = py - ay
+                return (dx * dx + dy * dy) ** 0.5
+            t = (wx * vx + wy * vy) / vv
+            t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+            cx_ = ax + t * vx
+            cy_ = ay + t * vy
+            dx = px - cx_
+            dy = py - cy_
+            return (dx * dx + dy * dy) ** 0.5
 
         for group in self.rebar_groups:
-            bar_radius = group.rebar.diameter / 2.0
-
+            r = float(group.rebar.diameter) / 2.0
             for pos in group.positions:
-                # Calculate distance from bar outer surface to each face
-                covers = {}
-
-                if face is None or face == "bottom":
-                    covers["bottom"] = pos.y - min_y - bar_radius
-                if face is None or face == "top":
-                    covers["top"] = max_y - pos.y - bar_radius
-                if not orthogonal_only or face == "left":
-                    covers["left"] = pos.x - min_x - bar_radius
-                if not orthogonal_only or face == "right":
-                    covers["right"] = max_x - pos.x - bar_radius
-
-                # Find minimum cover for this bar
-                bar_min_cover = min(covers.values())
-                min_cover = min(min_cover, bar_min_cover)
-
-        if min_cover == float('inf'):
-            raise ValueError("Could not calculate cover")
+                px, py = float(pos.x), float(pos.y)
+                d_min = float("inf")
+                for (a, b) in segments:
+                    d = point_to_segment_distance(px, py, a[0], a[1], b[0], b[1])
+                    d_min = min(d_min, d)
+                min_cover = min(min_cover, d_min - r)
 
         return min_cover
-
-    def get_effective_depth(self, reference: Literal["top", "bottom", "left", "right"] = "top") -> float:
-        """
-        Calculate effective depth from reference edge to steel centroid.
-
-        Args:
-            reference: Edge to measure from
-
-        Returns:
-            Effective depth in mm
-        """
-        steel_cx, steel_cy = self.get_steel_centroid()
-        min_x, min_y, max_x, max_y = self.get_bounding_box()
-
-        if reference == "top":
-            return max_y - steel_cy
-        elif reference == "bottom":
-            return steel_cy - min_y
-        elif reference == "left":
-            return steel_cx - min_x
-        elif reference == "right":
-            return max_x - steel_cx
-        else:
-            raise ValueError(f"Unknown reference: {reference}")
 
     def __repr__(self) -> str:
         name_str = f"'{self.section_name}'" if self.section_name else "unnamed"
@@ -523,32 +563,32 @@ def create_rectangular_section(
     """
     Create a rectangular RC section.
 
+    Convention:
+        origin is the CENTRE of the rectangle.
+
     Args:
         width: Section width (mm)
         height: Section height (mm)
-        origin: Bottom-left corner coordinates (default: origin)
+        origin: Centre coordinates (default: (0, 0))
         section_name: Optional section name
 
     Returns:
         RCSection with rectangular outline
-
-    Example:
-        >>> section = create_rectangular_section(300, 500)
-        >>> section.get_area()
-        150000.0
     """
-    x0, y0 = origin
+    cx, cy = origin
+    hw = width / 2.0
+    hh = height / 2.0
+
     coords = [
-        (x0, y0),
-        (x0 + width, y0),
-        (x0 + width, y0 + height),
-        (x0, y0 + height),
-        (x0, y0),  # Close the polygon
+        (cx - hw, cy - hh),
+        (cx + hw, cy - hh),
+        (cx + hw, cy + hh),
+        (cx - hw, cy + hh),
+        (cx - hw, cy - hh),
     ]
-    outline = Polygon(coords)
 
     return RCSection(
-        outline=outline,
+        outline=Polygon(coords),
         section_name=section_name or f"Rect {width}×{height}",
     )
 
@@ -562,30 +602,26 @@ def create_circular_section(
     """
     Create a circular RC section.
 
+    Convention:
+        origin is the CENTRE of the circle.
+
     Args:
         diameter: Section diameter (mm)
         n_points: Number of points to approximate circle (default: 32)
-        origin: Centre coordinates (default: origin)
+        origin: Centre coordinates (default: (0, 0))
         section_name: Optional section name
 
     Returns:
         RCSection with circular outline
-
-    Example:
-        >>> section = create_circular_section(400)
-        >>> round(section.get_area())
-        125664
     """
     cx, cy = origin
     radius = diameter / 2.0
 
-    angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
+    angles = np.linspace(0.0, 2.0 * np.pi, n_points, endpoint=False, dtype=float)
     coords = [(cx + radius * np.cos(a), cy + radius * np.sin(a)) for a in angles]
-    coords.append(coords[0])  # Close the polygon
-
-    outline = Polygon(coords)
+    coords.append(coords[0])  # close
 
     return RCSection(
-        outline=outline,
+        outline=Polygon(coords),
         section_name=section_name or f"Circular Ø{diameter}",
     )

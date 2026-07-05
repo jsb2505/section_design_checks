@@ -24,6 +24,10 @@ from shapely.geometry.base import BaseGeometry
 from materials.reinforced_concrete.geometry.section import RCSection
 
 
+from dataclasses import dataclass
+from typing import Literal
+
+
 @dataclass(frozen=True, slots=True)
 class Fiber:
     """
@@ -42,6 +46,17 @@ class Fiber:
     area: float
     material_type: Literal["concrete", "steel"]
     material_index: int = 0
+
+    def __repr__(self) -> str:
+        return (
+            "Fiber("
+            f"x={self.x:.1f}, "
+            f"y={self.y:.1f}, "
+            f"area={self.area:.1f}, "
+            f"material_type={self.material_type}, "
+            f"material_index={self.material_index}"
+            ")"
+        )
 
 
 class FiberMesh:

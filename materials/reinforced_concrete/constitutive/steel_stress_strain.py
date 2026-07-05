@@ -6,12 +6,19 @@ Implements EC2 Fig 3.8 with options for:
 - Horizontal top branch (elastic-perfectly plastic)
 """
 
+from __future__ import annotations
+
 from typing import Literal
+
 import numpy as np
 import numpy.typing as npt
-from pydantic import Field, computed_field
+from pydantic import Field, model_validator
+
 from materials.core.constitutive import BaseConstitutiveModel
 from materials.reinforced_concrete.materials.reinforcing_steel import ReinforcingSteel
+
+
+SteelModelType = Literal["inclined", "horizontal"]
 
 
 class SteelStressStrainEC2(BaseConstitutiveModel):
@@ -19,18 +26,15 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
     Steel stress-strain relationship per EC2 Fig 3.8.
 
     Bilinear model with optional strain hardening:
-    - Elastic branch: σ = E_s · ε (up to ε_yd)
-    - Plastic branch: σ = f_yd (horizontal) or linearly increases to f_t (inclined)
+    - Elastic branch: σ = E_s · ε (up to ε_y)
+    - Plastic branch:
+        - horizontal: σ = ±f_y (no strain limit)
+        - inclined:   σ increases linearly from f_y at ε_y to f_t at ε_ud
 
-    Formulation (inclined branch - §3.2.7(2), option a):
-        σ_s = E_s · ε                           for |ε| ≤ ε_yd
-        σ_s = f_yd + (f_t - f_yd)·(ε - ε_yd)/(ε_ud - ε_yd)  for ε_yd < |ε| ≤ ε_ud
-        σ_s = 0                                  for |ε| > ε_ud
-
-    Formulation (horizontal branch - §3.2.7(2), option b):
-        σ_s = E_s · ε                           for |ε| ≤ ε_yd
-        σ_s = f_yd                              for |ε| > ε_yd
-        (No strain limit - continues indefinitely at f_yd)
+    Notes on ε_ud:
+        EC2 provides a limit strain for ductility classification / model validity.
+        In section analysis it is usually safer to CLIP strains to ε_ud rather than
+        forcing stress to zero, which would be non-physical for reinforcement.
     """
 
     steel: ReinforcingSteel = Field(
@@ -38,7 +42,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         description="Reinforcing steel material"
     )
 
-    branch_type: Literal["inclined", "horizontal"] = Field(
+    branch_type: SteelModelType = Field(
         default="inclined",
         description="Top branch type (inclined=strain hardening, horizontal=perfectly plastic)"
     )
@@ -53,17 +57,30 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         description="Model name"
     )
 
-    @computed_field
     @property
     def f_y(self) -> float:
         """Yield strength (design or characteristic)."""
         return self.steel.f_yk if self.use_characteristic else self.steel.f_yd
 
-    @computed_field
     @property
     def epsilon_y(self) -> float:
-        """Yield strain."""
+        """Yield strain corresponding to f_y."""
         return self.f_y / self.steel.E_s
+
+    @model_validator(mode="after")
+    def validate_strain_limits(self) -> "SteelStressStrainEC2":
+        """
+        Ensure model parameters are consistent.
+
+        For inclined branch we need epsilon_ud > epsilon_y to interpolate.
+        """
+        if self.branch_type == "inclined":
+            if self.steel.epsilon_ud <= self.epsilon_y:
+                raise ValueError(
+                    "Invalid steel strain limits for inclined branch: "
+                    f"epsilon_ud ({self.steel.epsilon_ud:g}) must be > epsilon_y ({self.epsilon_y:g})."
+                )
+        return self
 
     def get_stress(self, strain: float) -> float:
         """
@@ -78,7 +95,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
             Stress in MPa (positive for tension, negative for compression)
         """
         abs_strain = abs(strain)
-        sign = 1.0 if strain >= 0 else -1.0
+        sign = 1.0 if strain >= 0.0 else -1.0
 
         # Elastic region
         if abs_strain <= self.epsilon_y:
@@ -88,62 +105,67 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         if self.branch_type == "horizontal":
             # Horizontal branch: no strain limit per EC2 §3.2.7(2) option b
             return sign * self.f_y
-        else:  # inclined
-            # Inclined branch: strain limit applies per EC2 §3.2.7(2) option a
-            if abs_strain > self.steel.epsilon_ud:
-                return 0.0
-            # Linear interpolation from f_y to f_t
-            strain_ratio = (abs_strain - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
-            stress = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
-            return sign * stress
+
+        # Inclined branch: strain hardening up to epsilon_ud, then clip at epsilon_ud
+        clipped = min(abs_strain, self.steel.epsilon_ud)
+        strain_ratio = (clipped - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
+        stress = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
+        return sign * stress
 
     def get_stress_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        """Vectorized stress calculation."""
+        """
+        Vectorized stress calculation.
+
+        Args:
+            strains: array of strains
+
+        Returns:
+            array of stresses in MPa
+        """
+        strains = np.asarray(strains, dtype=float)
         stresses = np.zeros_like(strains)
+
         abs_strains = np.abs(strains)
-        signs = np.sign(strains)
+        # Use sign like scalar path (treat 0 as +)
+        signs = np.where(strains >= 0.0, 1.0, -1.0)
 
         # Elastic region
         elastic = abs_strains <= self.epsilon_y
         stresses[elastic] = self.steel.E_s * strains[elastic]
 
         # Plastic region
+        plastic = ~elastic
+        if not np.any(plastic):
+            return stresses
+
         if self.branch_type == "horizontal":
-            # Horizontal branch: no strain limit (all strains beyond yield)
-            plastic = abs_strains > self.epsilon_y
             stresses[plastic] = signs[plastic] * self.f_y
-        else:  # inclined
-            # Inclined branch: only up to ultimate strain
-            plastic = (abs_strains > self.epsilon_y) & (abs_strains <= self.steel.epsilon_ud)
-            strain_ratio = (abs_strains[plastic] - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
-            stress_magnitude = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
-            stresses[plastic] = signs[plastic] * stress_magnitude
-            # Beyond ultimate: already zero
+            return stresses
+
+        # Inclined branch
+        clipped = np.minimum(abs_strains[plastic], self.steel.epsilon_ud)
+        strain_ratio = (clipped - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
+        stress_mag = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
+        stresses[plastic] = signs[plastic] * stress_mag
 
         return stresses
 
     def get_ultimate_strain(self) -> float:
         """
-        Return ultimate strain.
+        Return ultimate strain limit used by the model.
 
-        For inclined branch: ε_ud (strain limit applies)
+        For inclined branch: ε_ud (strain limit used for clipping)
         For horizontal branch: inf (no strain limit per EC2 §3.2.7(2) option b)
         """
-        if self.branch_type == "horizontal":
-            return float('inf')
-        else:
-            return self.steel.epsilon_ud
+        return float("inf") if self.branch_type == "horizontal" else float(self.steel.epsilon_ud)
 
     def get_yield_stress(self) -> float:
-        """Return yield strength."""
-        return self.f_y
+        """Return yield strength used by the model."""
+        return float(self.f_y)
 
     def get_stress_tension_only(self, strain: float) -> float:
         """
         Calculate stress for tension only (ignores compression).
-
-        Useful for tension reinforcement calculations where compression
-        contribution is negligible.
 
         Args:
             strain: Strain (positive for tension)
@@ -151,7 +173,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         Returns:
             Stress in MPa (0 if strain is negative)
         """
-        if strain <= 0:
+        if strain <= 0.0:
             return 0.0
         return self.get_stress(strain)
 
@@ -165,12 +187,9 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         Returns:
             Stress in MPa (0 if strain is positive)
         """
-        if strain >= 0:
+        if strain >= 0.0:
             return 0.0
         return self.get_stress(strain)
-
-
-SteelModelType = Literal["inclined", "horizontal"]
 
 
 def create_steel_stress_strain(
@@ -188,11 +207,6 @@ def create_steel_stress_strain(
 
     Returns:
         Steel stress-strain model
-
-    Example:
-        >>> steel = ReinforcingSteel(grade="B500B")
-        >>> model = create_steel_stress_strain(steel, "inclined")
-        >>> stress = model.get_stress(0.01)  # 1% strain
     """
     return SteelStressStrainEC2(
         steel=steel,
