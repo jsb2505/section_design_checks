@@ -24,9 +24,20 @@ def create_linear_rebar_layer(
     start_point: Tuple[float, float],
     end_point: Tuple[float, float],
     layer_name: Optional[str] = None,
+    omit_start: bool = False,
+    omit_end: bool = False,
 ) -> RebarGroup:
     """
     Create a linear layer of evenly-spaced rebars between two points.
+
+    Spacing is always calculated as if all *n_bars* are present (including
+    the endpoints).  The ``omit_start`` / ``omit_end`` flags then drop the
+    first / last bar from the returned group **without changing the spacing
+    of the remaining bars**.
+
+    This is useful when two layers share a corner point: pass the same
+    coordinates and *n_bars* to both calls, using ``omit_end=True`` on
+    one and ``omit_start=True`` on the other to avoid a duplicated bar.
 
     Notes:
         - If n_bars == 1, a single bar is placed at the midpoint.
@@ -38,6 +49,8 @@ def create_linear_rebar_layer(
         start_point: (x, y) coordinates of first bar (mm)
         end_point: (x, y) coordinates of last bar (mm)
         layer_name: Optional layer identifier
+        omit_start: If True, exclude the bar at *start_point*
+        omit_end: If True, exclude the bar at *end_point*
 
     Returns:
         RebarGroup with linear arrangement
@@ -47,6 +60,11 @@ def create_linear_rebar_layer(
         >>> layer = create_linear_rebar_layer(bar, 4, (50, 50), (250, 50))
         >>> len(layer.positions)
         4
+        >>> # Around a corner – omit the shared endpoint
+        >>> leg1 = create_linear_rebar_layer(bar, 4, (50, 50), (250, 50), omit_end=True)
+        >>> leg2 = create_linear_rebar_layer(bar, 4, (250, 50), (250, 250), omit_start=True)
+        >>> len(leg1.positions), len(leg2.positions)
+        (3, 3)
     """
     if n_bars < 1:
         raise ValueError("Number of bars must be at least 1")
@@ -63,7 +81,18 @@ def create_linear_rebar_layer(
         y_coords = np.linspace(y0, y1, n_bars, dtype=float)
         positions = [Point2D(x=float(x), y=float(y)) for x, y in zip(x_coords, y_coords)]
 
-    return RebarGroup(rebar=rebar, positions=positions, layer_name=layer_name)
+    # Trim after computing full spacing
+    if omit_start and len(positions) > 0:
+        positions = positions[1:]
+    if omit_end and len(positions) > 0:
+        positions = positions[:-1]
+
+    if len(positions) == 0:
+        raise ValueError(
+            "All bars were omitted — n_bars is too small for the requested omit_start/omit_end combination"
+        )
+
+    return RebarGroup(rebar=rebar, positions=tuple(positions), layer_name=layer_name)
 
 
 def create_rectangular_perimeter_rebars(
@@ -275,7 +304,7 @@ def create_circular_perimeter_rebars(
         for a in angles
     ]
 
-    return RebarGroup(rebar=rebar, positions=positions, layer_name="perimeter")
+    return RebarGroup(rebar=rebar, positions=tuple(positions), layer_name="perimeter")
 
 
 def create_custom_rebar_layer(
@@ -302,4 +331,4 @@ def create_custom_rebar_layer(
         ... )
     """
     point_positions = [Point2D(x=float(x), y=float(y)) for x, y in positions]
-    return RebarGroup(rebar=rebar, positions=point_positions, layer_name=layer_name)
+    return RebarGroup(rebar=rebar, positions=tuple(point_positions), layer_name=layer_name)

@@ -433,6 +433,8 @@ class BendingCheck(BaseCodeCheck):
         show: bool = True,
         title: Optional[str] = None,
         ignore_compression_steel: bool = False,
+        width: int = 900,
+        height: int = 700,
     ) -> Any:
         """
         Plot M-N interaction diagram with optional load points using Plotly.
@@ -460,6 +462,8 @@ class BendingCheck(BaseCodeCheck):
             ignore_compression_steel: If True, plot the diagram with compression
                 steel ignored (conservative, matching perform_check behaviour
                 when ignore_compression_steel=True)
+            width: Figure width in pixels
+            height: Figure height in pixels
 
         Returns:
             Plotly Figure object
@@ -484,6 +488,8 @@ class BendingCheck(BaseCodeCheck):
             save_path=save_path,
             show=show,
             title=title,
+            width=width,
+            height=height,
         )
 
     def plot_stress_strain(

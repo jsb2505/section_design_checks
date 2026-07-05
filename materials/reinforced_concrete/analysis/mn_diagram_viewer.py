@@ -17,6 +17,8 @@ class MNDiagramViewer:
         save_path: Optional[str | Path] = None,
         show: bool = True,
         title: Optional[str] = None,
+        width: int = 900,
+        height: int = 700,
     ) -> Any:
         """
         Plot M-N interaction diagram with optional load points using Plotly.
@@ -41,6 +43,8 @@ class MNDiagramViewer:
             save_path: If provided, save plot to this file path (HTML format)
             show: If True, display plot (fig.show())
             title: Custom plot title (optional)
+            width: Figure width in pixels
+            height: Figure height in pixels
 
         Returns:
             Plotly Figure object
@@ -110,11 +114,13 @@ class MNDiagramViewer:
 
                 # 5. Draw Vectors (if requested and valid)
                 if show_vectors and capacity.M_Rd is not None and capacity.N_Rd is not None:
+                    legend_grp = f"lc_{idx}"
                     # Demand Vector: Origin to Load (Solid)
                     fig.add_trace(go.Scatter(
                         x=[0.0, M_Ed], y=[0.0, N_Ed],
                         mode="lines",
                         line=dict(color=color, width=1.5, dash="solid"),
+                        legendgroup=legend_grp,
                         showlegend=False,
                         hoverinfo="skip",
                     ))
@@ -123,6 +129,7 @@ class MNDiagramViewer:
                         x=[M_Ed, capacity.M_Rd], y=[N_Ed, capacity.N_Rd],
                         mode="lines",
                         line=dict(color=color, width=1.5, dash="dash"),
+                        legendgroup=legend_grp,
                         showlegend=False,
                         hoverinfo="skip",
                     ))
@@ -149,6 +156,7 @@ class MNDiagramViewer:
                     x=[M_Ed], y=[N_Ed],
                     mode="markers",
                     name=name_lp,
+                    legendgroup=f"lc_{idx}",
                     marker=dict(color=color, size=8, symbol="circle", line=dict(color="black", width=1)),
                     hovertemplate=hover_text + "<extra></extra>",
                 ))
@@ -167,7 +175,7 @@ class MNDiagramViewer:
             yaxis=dict(range=[ymin - ypad, ymax + ypad], gridcolor="lightgray", zeroline=True),
             template="plotly_white",
             legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
-            width=900, height=700,
+            width=width, height=height,
         )
 
         if save_path:

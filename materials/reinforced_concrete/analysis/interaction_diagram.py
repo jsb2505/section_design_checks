@@ -1783,6 +1783,8 @@ class MNInteractionDiagram:
         save_path: Optional[str | Path] = None,
         show: bool = True,
         title: Optional[str] = None,
+        width: int = 900,
+        height: int = 700,
     ) -> Any:
         """
         Plot M-N interaction diagram with optional load points using Plotly.
@@ -1807,6 +1809,8 @@ class MNInteractionDiagram:
             save_path: If provided, save plot to this file path (HTML format)
             show: If True, display plot (fig.show())
             title: Custom plot title (optional)
+            width: Figure width in pixels
+            height: Figure height in pixels
 
         Returns:
             Plotly Figure object
@@ -1822,6 +1826,8 @@ class MNInteractionDiagram:
             save_path=save_path,
             show=show,
             title=title,
+            width=width,
+            height=height,
         )
 
 
