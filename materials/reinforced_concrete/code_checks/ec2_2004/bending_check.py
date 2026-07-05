@@ -279,16 +279,19 @@ class BendingCheck(BaseCodeCheck):
         # --- Step 2: capacity check against diagram ---
         diagram = self._get_diagram(ignore_compression_steel)
         capacity = diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_design, return_details=False)
-        N_Rd, M_Rd, is_safe, utilization = capacity.N_Rd, capacity.M_Rd, capacity.is_safe, capacity.utilization
+        N_Rd, M_Rd, utilization = capacity.N_Rd, capacity.M_Rd, capacity.utilization
 
         demand_components = {"N": float(N_Ed), "M": float(M_Ed_original)}
         units_components = {"N": "kN", "M": "kN·m"}
 
-        # --- Step 3: handle “no intersection / invalid” outcome ---
+        # --- Step 3: handle genuinely invalid outcomes ---
+        # Note: We do NOT check `is_safe is False` here because get_capacity_vector
+        # correctly computes utilization > 1.0 when loads exceed capacity. We only
+        # return infinite utilization when the method genuinely cannot find capacity
+        # (e.g., ray doesn't intersect curve, numerical issues).
         if (
             N_Rd is None
             or M_Rd is None
-            or is_safe is False
             or utilization is None
             or utilization == float("inf")
             or utilization != utilization  # NaN

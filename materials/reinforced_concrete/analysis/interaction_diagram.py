@@ -1771,8 +1771,29 @@ class MNInteractionDiagram:
         """
         Plot M-N interaction diagram with optional load points using Plotly.
 
-        Thin wrapper that delegates to a viewer class in a separate module
-        to keep MNInteractionDiagram focused on analysis rather than plotting.
+        Creates an interactive plot with:
+        - M-N interaction curve boundary
+        - Optional load points with color-coded utilization
+        - Optional vector projection rays from origin to boundary
+        - Interactive hover tooltips with metadata
+
+        Args:
+            load_points: List of load case dictionaries with format:
+                {
+                    "N_Ed": float,      # Axial force (kN)
+                    "M_Ed": float,      # Moment (kN·m)
+                    "name": str,        # Load case name (optional)
+                }
+            show_vectors: If True, show vector projection rays from origin through
+                            load points to capacity boundary
+            show_metadata: If True, show metadata in hover tooltips
+            n_points: Number of points to generate M-N curve
+            save_path: If provided, save plot to this file path (HTML format)
+            show: If True, display plot (fig.show())
+            title: Custom plot title (optional)
+
+        Returns:
+            Plotly Figure object
         """
         from materials.reinforced_concrete.analysis.mn_diagram_viewer import MNDiagramViewer
 

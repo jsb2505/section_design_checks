@@ -471,28 +471,38 @@ class TestPureAxialAndBending:
 
 
 class TestOutsideDiagramDomain:
-    """Tests for load points outside the interaction diagram."""
+    """Tests for load points outside the interaction diagram (but with valid utilization)."""
 
     def test_excessive_axial_compression(self, test_beam, concrete_c30):
-        """Test excessive axial compression is detected."""
+        """Test excessive axial compression returns meaningful utilization."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        # Very high axial - should be outside diagram
+        # Very high axial - well beyond capacity but still calculable
         result = check.perform_check(M_Ed=10.0, N_Ed=50000.0)
 
         assert result.status == CheckStatus.FAIL
-        assert result.utilization == float("inf")
-        assert "outside" in result.message.lower() or "no capacity" in result.message.lower()
+        # Now returns actual utilization (not inf) - load is ~16x beyond capacity
+        assert result.utilization > 1.0
+        assert result.utilization != float("inf")
+        assert "exceeded" in result.message.lower()
+        # Capacity components should be populated
+        assert result.capacity_components is not None
+        assert result.details["N_Rd"] is not None
+        assert result.details["M_Rd"] is not None
 
     def test_excessive_tension(self, test_beam, concrete_c30):
-        """Test excessive tension is detected."""
+        """Test excessive tension returns meaningful utilization."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        # Very high tension - should be outside diagram
+        # Very high tension - well beyond capacity but still calculable
         result = check.perform_check(M_Ed=10.0, N_Ed=-10000.0)
 
         assert result.status == CheckStatus.FAIL
-        assert result.utilization == float("inf")
+        # Now returns actual utilization (not inf) - load is ~16x beyond capacity
+        assert result.utilization > 1.0
+        assert result.utilization != float("inf")
+        # Capacity components should be populated
+        assert result.capacity_components is not None
 
 
 class TestCheckResultDetails:

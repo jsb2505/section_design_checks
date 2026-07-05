@@ -64,6 +64,13 @@ class _StressStrainPlotState:
     fibre_j: np.ndarray | None
     bbox: tuple[float, float, float, float]
 
+    # Equilibrium check: if solver hit bounds, the achieved forces won't match applied
+    section_failed: bool  # True if equilibrium cannot be achieved (loads exceed capacity)
+    achieved_N_kN: float  # Actual axial force from the computed strain state
+    achieved_M_kNm: float  # Actual moment from the computed strain state
+    equilibrium_error_N: float  # |N_achieved - N_Ed| in kN
+    equilibrium_error_M: float  # |M_achieved - M_Ed| in kN·m
+
 
 class StressStrainViewer:
     def __init__(self, diagram: "MNInteractionDiagram") -> None:
@@ -174,6 +181,24 @@ class StressStrainViewer:
         F_s_comp = float(np.sum(steel_forces_kN[steel_forces_kN > 0.0])) if steel_forces_kN.size else 0.0
         F_s_tens = float(np.sum(steel_forces_kN[steel_forces_kN < 0.0])) if steel_forces_kN.size else 0.0
 
+        # 5b) Equilibrium check: compute achieved N and M from the strain state
+        # This tells us if the solver hit bounds and couldn't find an exact solution
+        achieved_N_kN = float(np.sum(forces_N)) / 1000.0
+        # Moment about centroid (using section centroid y-coordinate)
+        centroid_x, centroid_y = d.section.get_centroid()
+        achieved_M_Nm = float(np.sum(forces_N * (y_coords - centroid_y)))
+        achieved_M_kNm = achieved_M_Nm / 1e6  # N·mm to kN·m
+
+        equilibrium_error_N = abs(achieved_N_kN - N_Ed)
+        equilibrium_error_M = abs(achieved_M_kNm - M_Ed)
+
+        # Determine if section failed: if errors exceed small tolerance, the solver
+        # hit strain bounds and couldn't achieve equilibrium with the applied loads
+        # Use relative tolerance where possible, absolute for near-zero values
+        tol_N = max(1.0, 0.01 * abs(N_Ed))  # 1% or 1 kN
+        tol_M = max(1.0, 0.01 * abs(M_Ed))  # 1% or 1 kN·m
+        section_failed = equilibrium_error_N > tol_N or equilibrium_error_M > tol_M
+
         # 6) Centroids (mm) — weight by forces in N
         conc_comp_mask = conc_mask & (forces_N > 0.0)
         conc_tens_mask = conc_mask & (forces_N < 0.0)
@@ -249,7 +274,12 @@ class StressStrainViewer:
             force_scale=force_scale,
             fibre_i=fibre_i,
             fibre_j=fibre_j,
-            bbox=bbox
+            bbox=bbox,
+            section_failed=section_failed,
+            achieved_N_kN=achieved_N_kN,
+            achieved_M_kNm=achieved_M_kNm,
+            equilibrium_error_N=equilibrium_error_N,
+            equilibrium_error_M=equilibrium_error_M,
         )
 
 
@@ -384,15 +414,25 @@ class StressStrainViewer:
         strain_polygon_x = [0.0, eps_bottom_permille, eps_top_permille, 0.0, 0.0]
         strain_polygon_y = [s.y_bottom, s.y_bottom, s.y_top, s.y_top, s.y_bottom]
 
+        # Use red when section fails (bounded solution), blue otherwise
+        if s.section_failed:
+            strain_line_color = "red"
+            strain_fill_color = "rgba(255, 0, 0, 0.15)"
+            strain_name = "Strain (FAILED)"
+        else:
+            strain_line_color = "blue"
+            strain_fill_color = "rgba(0, 0, 255, 0.15)"
+            strain_name = "Strain"
+
         fig.add_trace(
             go.Scatter(
                 x=strain_polygon_x,
                 y=strain_polygon_y,
                 mode="lines",
-                line=dict(color="blue", width=2),
+                line=dict(color=strain_line_color, width=2),
                 fill="toself",
-                fillcolor="rgba(0, 0, 255, 0.15)",
-                name="Strain",
+                fillcolor=strain_fill_color,
+                name=strain_name,
                 hovertemplate="ε: %{x:.3f} ‰<br>y: %{y:.1f} mm<extra></extra>",
             ),
             row=1,
@@ -404,7 +444,7 @@ class StressStrainViewer:
                 x=[eps_bottom_permille, eps_top_permille],
                 y=[s.y_bottom, s.y_top],
                 mode="markers",
-                marker=dict(size=8, color="blue"),
+                marker=dict(size=8, color=strain_line_color),
                 showlegend=False,
                 hovertemplate="ε: %{x:.3f} ‰<br>y: %{y:.1f} mm<extra></extra>",
             ),
@@ -612,6 +652,8 @@ class StressStrainViewer:
     ) -> None:
         if title is None:
             title = f"Stress-Strain Distribution: M_Ed = {s.M_Ed:.1f} kN·m, N_Ed = {s.N_Ed:.1f} kN"
+            if s.section_failed:
+                title += " <span style='color:red'>(SECTION FAILS)</span>"
 
         fig.add_annotation(
             xref="paper",
@@ -938,7 +980,17 @@ class StressStrainViewer:
         )
 
     def _build_annotation_text(self, s: _StressStrainPlotState) -> str:
-        txt = (
+        txt = ""
+
+        # Show prominent warning if section fails
+        if s.section_failed:
+            txt += (
+                '<span style="color:red; font-size:12px"><b>⚠ SECTION FAILS: '
+                'Applied loads exceed capacity. Strains shown are bounded '
+                'approximation NOT in equilibrium with applied forces.</b></span><br><br>'
+            )
+
+        txt += (
             f"<b>Load Case:</b> M = {s.M_Ed:.1f} kN·m, N = {s.N_Ed:.1f} kN<br>"
             f"<b>Strains:</b> ε_top = {s.eps_top*1000:.3f}‰, ε_bot = {s.eps_bottom*1000:.3f}‰<br>"
         )
@@ -964,6 +1016,18 @@ class StressStrainViewer:
 
         F_total = s.F_c_comp + s.F_c_tens + s.F_s_comp + s.F_s_tens
         txt += f"<br><b>ΣF = {F_total:.1f} kN</b> (≈ N_Ed = {s.N_Ed:.1f} kN)"
+
+        # Show equilibrium error if section failed
+        if s.section_failed:
+            txt += (
+                f'<br><span style="color:red"><b>Equilibrium Error:</b> '
+                f"ΔN = {s.equilibrium_error_N:.1f} kN, "
+                f"ΔM = {s.equilibrium_error_M:.1f} kN·m</span>"
+            )
+            txt += (
+                f'<br><span style="color:red"><b>Achieved:</b> '
+                f"N = {s.achieved_N_kN:.1f} kN, M = {s.achieved_M_kNm:.1f} kN·m</span>"
+            )
         return txt
 
     def _stress_x_range(self, s: _StressStrainPlotState) -> Tuple[float, float]:
