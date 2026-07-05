@@ -14,13 +14,12 @@ Hook Reference Convention (shared by all functions):
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from collections.abc import Sequence
 
 import numpy as np
 
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.geometry.section import RCSection
-
 
 # ---------------------------------------------------------------------------
 # Internal helper
@@ -29,9 +28,9 @@ from materials.reinforced_concrete.geometry.section import RCSection
 def _resolve_hook_ref(
     width: float,
     height: float,
-    origin: Tuple[float, float],
+    origin: tuple[float, float],
     hook_ref: int,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """Convert (origin, hook_ref) into the bottom-left corner (x0, y0).
 
     ``width`` and ``height`` are the overall bounding-box dimensions.
@@ -57,7 +56,7 @@ def _resolve_hook_ref(
         raise ValueError(f"hook_ref must be 0, 1, 2, 3, or 4, got {hook_ref}")
 
 
-def _points_to_outline(coords: Sequence[Tuple[float, float]]) -> Tuple[Point2D, ...]:
+def _points_to_outline(coords: Sequence[tuple[float, float]]) -> tuple[Point2D, ...]:
     """Convert a sequence of (x, y) tuples to a tuple of Point2D."""
     return tuple(Point2D(x=x, y=y) for x, y in coords)
 
@@ -69,9 +68,9 @@ def _points_to_outline(coords: Sequence[Tuple[float, float]]) -> Tuple[Point2D, 
 def create_rectangular_section(
     width: float,
     height: float,
-    origin: Tuple[float, float] = (0.0, 0.0),
+    origin: tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 1,
-    section_name: Optional[str] = None,
+    section_name: str | None = None,
 ) -> RCSection:
     """
     Create a rectangular RC section.
@@ -132,9 +131,9 @@ def create_rectangular_section(
 def create_circular_section(
     diameter: float,
     n_points: int = 60,
-    origin: Tuple[float, float] = (0.0, 0.0),
+    origin: tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 0,
-    section_name: Optional[str] = None,
+    section_name: str | None = None,
 ) -> RCSection:
     """
     Create a circular RC section.
@@ -192,9 +191,9 @@ def create_t_beam_section(
     h_f: float,
     b_w: float,
     h_w: float,
-    origin: Tuple[float, float] = (0.0, 0.0),
+    origin: tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 1,
-    section_name: Optional[str] = None,
+    section_name: str | None = None,
 ) -> RCSection:
     """
     Create a T-beam RC section (flange at top).
@@ -260,9 +259,9 @@ def create_inverted_t_beam_section(
     h_f: float,
     b_w: float,
     h_w: float,
-    origin: Tuple[float, float] = (0.0, 0.0),
+    origin: tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 1,
-    section_name: Optional[str] = None,
+    section_name: str | None = None,
 ) -> RCSection:
     """
     Create an inverted T-beam RC section (flange at bottom).
@@ -328,9 +327,9 @@ def create_i_beam_section(
     h_f_bot: float,
     b_w: float,
     h_w: float,
-    origin: Tuple[float, float] = (0.0, 0.0),
+    origin: tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 1,
-    section_name: Optional[str] = None,
+    section_name: str | None = None,
 ) -> RCSection:
     """
     Create an I-beam RC section with potentially asymmetric flanges.
@@ -413,10 +412,10 @@ def create_box_section(
     height: float,
     t_web: float,
     t_flange_top: float,
-    t_flange_bot: Optional[float] = None,
-    origin: Tuple[float, float] = (0.0, 0.0),
+    t_flange_bot: float | None = None,
+    origin: tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 1,
-    section_name: Optional[str] = None,
+    section_name: str | None = None,
 ) -> RCSection:
     """
     Create a box (hollow rectangular) RC section.
@@ -480,11 +479,11 @@ def create_voided_deck_section(
     height: float,
     void_diameter: float,
     n_voids: int,
-    void_spacing: Optional[float] = None,
+    void_spacing: float | None = None,
     n_points: int = 32,
-    origin: Tuple[float, float] = (0.0, 0.0),
+    origin: tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 1,
-    section_name: Optional[str] = None,
+    section_name: str | None = None,
 ) -> RCSection:
     """
     Create a rectangular deck slab with circular voids at mid-height.
@@ -521,7 +520,7 @@ def create_voided_deck_section(
 
     cy_void = y0 + height / 2.0  # mid-height
 
-    void_centres_x: List[float] = []
+    void_centres_x: list[float] = []
     if void_spacing is None:
         for i in range(n_voids):
             void_centres_x.append(x0 + spacing * (i + 1))
@@ -549,7 +548,7 @@ def create_voided_deck_section(
 
     # Circular voids
     angles = np.linspace(0.0, 2.0 * np.pi, n_points, endpoint=False, dtype=float)
-    voids: List[Tuple[Point2D, ...]] = []
+    voids: list[tuple[Point2D, ...]] = []
     for cx_v in void_centres_x:
         circle = [
             (cx_v + radius * np.cos(a), cy_void + radius * np.sin(a))
@@ -574,9 +573,9 @@ def create_channel_section(
     t_web: float,
     t_flange: float,
     open_side: str = "top",
-    origin: Tuple[float, float] = (0.0, 0.0),
+    origin: tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 1,
-    section_name: Optional[str] = None,
+    section_name: str | None = None,
 ) -> RCSection:
     """
     Create a channel (U-shape) RC section.
@@ -646,9 +645,9 @@ def create_trapezoidal_section(
     b_top: float,
     b_bot: float,
     height: float,
-    origin: Tuple[float, float] = (0.0, 0.0),
+    origin: tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 1,
-    section_name: Optional[str] = None,
+    section_name: str | None = None,
 ) -> RCSection:
     """
     Create a trapezoidal RC section.

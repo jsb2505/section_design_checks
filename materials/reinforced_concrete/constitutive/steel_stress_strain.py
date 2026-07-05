@@ -9,6 +9,7 @@ Implements EC2 Fig 3.8 with options for:
 from __future__ import annotations
 
 from enum import StrEnum
+
 import numpy as np
 import numpy.typing as npt
 from pydantic import Field, model_validator
@@ -104,7 +105,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
 
 
     @model_validator(mode="after")
-    def validate_strain_limits(self) -> "SteelStressStrainEC2":
+    def validate_strain_limits(self) -> SteelStressStrainEC2:
         """
         Ensure model parameters are consistent.
 

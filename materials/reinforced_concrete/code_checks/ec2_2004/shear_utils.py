@@ -7,20 +7,19 @@ Utility functions for shear design checks according to Eurocode 2 (EC2).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import sqrt, isfinite, radians, copysign, tan, sin
-from typing import TYPE_CHECKING, Literal, Optional, cast
+from math import copysign, isfinite, radians, sin, sqrt, tan
+from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.analysis.strain_state import StrainState
 
 from shapely.geometry import GeometryCollection, LineString, MultiLineString, Point
 
-from materials.utils.helpers import cot
+from materials.core.units import ForceUnit, LengthUnit, from_kn, from_mm, to_kn
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ShearRebar
 from materials.reinforced_concrete.ndp import get_ndp, get_ndp_callable
-from materials.core.units import LengthUnit, ForceUnit, from_mm, from_kn, to_kn
-
+from materials.utils.helpers import cot
 
 # ==============================================================================
 # Tension Shift Rule (EC2 §9.2.1.3)
@@ -48,7 +47,7 @@ class TensionShiftResult:
     M_design: float
     M_add: float
     shift_distance_a_l: float
-    cot_theta: Optional[float]
+    cot_theta: float | None
     capped_by_M_cap: bool
     z: float
     d: float
@@ -60,16 +59,16 @@ def calculate_tension_shift(
     V_Ed: float,
     z: float,
     d: float,
-    M_cap: Optional[float] = None,
-    b_w: Optional[float] = None,
-    f_cd: Optional[float] = None,
-    f_ck: Optional[float] = None,
+    M_cap: float | None = None,
+    b_w: float | None = None,
+    f_cd: float | None = None,
+    f_ck: float | None = None,
     sigma_cp: float = 0.0,
     use_sigma_cp_for_alpha_cw: bool = False,
-    shear_reinforcement: Optional[ShearRebar] = None,
-    cot_theta_override: Optional[float] = None,
+    shear_reinforcement: ShearRebar | None = None,
+    cot_theta_override: float | None = None,
     use_v_rd_s_for_cot_theta: bool = False,
-    cot_max_override: Optional[float] = None,
+    cot_max_override: float | None = None,
 ) -> TensionShiftResult:
     """
     Apply EC2 §9.2.1.3 tension shift rule to a bending moment.
@@ -160,7 +159,7 @@ def calculate_tension_shift(
     d = float(d)
 
     # Calculate shift distance a_l and cot(θ)
-    cot_theta: Optional[float] = None
+    cot_theta: float | None = None
 
     if shear_reinforcement is not None:
         if cot_theta_override is not None:
@@ -390,7 +389,7 @@ def find_rho_l_from_strains(
     d: float,
     eps_top: float,
     eps_bottom: float,
-    strain_state: Optional["StrainState"] = None,
+    strain_state: StrainState | None = None,
     rho_l_max: float = 0.02,
 ) -> float:
     """
@@ -456,7 +455,7 @@ def find_max_allowable_link_spacing(
     f_ck: float,
     V_Ed: float,
     V_Rd_max: float,
-    V_Rd_c: Optional[float],
+    V_Rd_c: float | None,
     link_angle_degrees: float = 90.0,
 ) -> float:
     """
@@ -497,7 +496,7 @@ def find_max_allowable_leg_spacing(
     f_ck: float,
     V_Ed: float,
     V_Rd_max: float,
-    V_Rd_c: Optional[float],
+    V_Rd_c: float | None,
     link_angle_degrees: float = 90.0,
 ) -> float:
     """
@@ -550,7 +549,7 @@ def find_cot_theta_for_V_Ed_from_V_Rd_max(
         x = cot(θ),
         C = cot(α)
         K = α_cw · b_w · z · ν₁ · f_cd
-    
+
     Then:
         Vx² - Kx + (V - KC) = 0
 
@@ -662,8 +661,8 @@ def find_cot_theta_for_V_Ed_from_V_Rd_s(
 def clamp_cot_theta(
     cot_theta: float,
     *,
-    cot_min: Optional[float] = None,
-    cot_max: Optional[float] = None,
+    cot_min: float | None = None,
+    cot_max: float | None = None,
 ) -> float:
     """
     Clamps the cotangent of the compressive strut angle to within bounds.

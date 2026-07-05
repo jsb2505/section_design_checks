@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from enum import StrEnum
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, cast
 
 from shapely.geometry import Point as ShapelyPoint
@@ -20,7 +20,7 @@ class ReinforcementInvalidPolicy(StrEnum):
         DROP_INVALID_GROUPS: Removes an entire group if any bar is invalid.
         ALLOW_INVALID: No action taken; bars remain in their original coords.
     '''
-    ERROR = "error" 
+    ERROR = "error"
     '''Raise if any bar becomes invalid'''
 
     DROP_INVALID_BARS = "drop_bars"
@@ -42,7 +42,7 @@ class ReinforcementUpdateReport:
     details: list[str]  # human-readable messages
 
 
-def find_invalid_rebars(section: "RCSection") -> tuple[list[str], list[tuple[int, int]]]:
+def find_invalid_rebars(section: RCSection) -> tuple[list[str], list[tuple[int, int]]]:
     """
     Find rebars (as discs) not fully covered by the section outline.
 
@@ -87,14 +87,14 @@ def find_invalid_rebars(section: "RCSection") -> tuple[list[str], list[tuple[int
 
 
 def prune_reinforcement_for_outline(
-    section: "RCSection",
+    section: RCSection,
     policy: ReinforcementInvalidPolicy,
 ) -> ReinforcementUpdateReport:
     details, invalid = find_invalid_rebars(section)
 
     if not invalid:
         return ReinforcementUpdateReport(0, 0, 0, 0, [])
-    
+
     invalid_groups_set = {gi for gi, _ in invalid}
     invalid_bars_count = len(invalid)
     invalid_groups_count = len(invalid_groups_set)
@@ -172,7 +172,7 @@ def prune_reinforcement_for_outline(
 
 
 def find_clashing_rebars(
-    section: "RCSection",
+    section: RCSection,
     *,
     _geom_tol: float = 1e-6,
 ) -> tuple[list[str], list[tuple[int, int, int, int]]]:
@@ -218,7 +218,7 @@ def find_clashing_rebars(
 
 
 def reconcile_after_outline_change(
-    section: "RCSection",
+    section: RCSection,
     *,
     policy: ReinforcementInvalidPolicy,
 ) -> ReinforcementUpdateReport:
@@ -230,7 +230,7 @@ def reconcile_after_outline_change(
 
 
 def update_outline(
-    section: "RCSection",
+    section: RCSection,
     *,
     outline_coords: Any,
     voids_coords: Any | None = None,
@@ -238,7 +238,7 @@ def update_outline(
 ) -> ReinforcementUpdateReport:
     """
     Update section geometry, then reconcile reinforcement according to policy.
-    
+
     NOTE:
         If RCSection auto-reconciles inside __setattr__ on outline/void assignment,
         prefer calling section.update_outline(...) to keep this atomic.

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -47,7 +46,7 @@ class StrainState:
     plane_b: float = 0.0
     plane_c: float = 0.0
     is_biaxial: bool = False
-    na_angle_deg: Optional[float] = None
+    na_angle_deg: float | None = None
 
     def strain_at(self, x: float, y: float) -> float:
         """Return strain at section coordinate (x, y) relative to centroid."""
@@ -68,7 +67,7 @@ class StrainState:
         return self.strain_at(x, y) < 0
 
     @property
-    def compression_direction(self) -> Tuple[float, float]:
+    def compression_direction(self) -> tuple[float, float]:
         """
         Unit vector pointing from tension toward compression, perpendicular to NA.
 
@@ -101,7 +100,7 @@ class StrainState:
         fibre_y: npt.NDArray[np.float64],
         cx: float,
         cy: float,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """
         Range of all fibres projected along :attr:`compression_direction`.
 
@@ -127,7 +126,7 @@ class StrainState:
             return self.na_angle_deg
         return math.degrees(math.atan2(self.plane_a, self.plane_b))
 
-    def to_end_strains(self) -> Tuple[float, float]:
+    def to_end_strains(self) -> tuple[float, float]:
         """Return (eps_top, eps_bottom) for legacy API compatibility."""
         return (self.eps_top, self.eps_bottom)
 
@@ -138,7 +137,7 @@ class StrainState:
         eps_bottom: float,
         y_top: float,
         y_bottom: float,
-    ) -> "StrainState":
+    ) -> StrainState:
         """
         Construct a 1D (horizontal NA) StrainState from end strains.
 
@@ -171,8 +170,8 @@ class StrainState:
         plane_c: float,
         y_top: float,
         y_bottom: float,
-        na_angle_deg: Optional[float] = None,
-    ) -> "StrainState":
+        na_angle_deg: float | None = None,
+    ) -> StrainState:
         """
         Construct a (possibly biaxial) StrainState from plane coefficients.
 

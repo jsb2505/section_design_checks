@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
+
 import numpy as np
 from shapely.geometry import Polygon
 
@@ -18,9 +19,9 @@ class SectionViewer:
         self,
         *,
         concrete: Optional["ConcreteMaterial"] = None,
-        save_path: Optional[str | Path] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 700,
         height: int = 700,
     ) -> Any:
@@ -64,7 +65,7 @@ class SectionViewer:
         min_x, min_y, max_x, max_y = self.section.get_bounding_box()
         cx, cy = self.section.get_centroid()
         area = self.section.get_area()
-        I_xx, I_yy, I_xy = self.section.get_second_moment_area()            
+        I_xx, I_yy, I_xy = self.section.get_second_moment_area()
 
         # Padding for plot limits
         pad_x = (max_x - min_x) * 0.1
@@ -83,7 +84,7 @@ class SectionViewer:
         if concrete is not None:
             concrete_hover_parts.append(f"Material Name: {concrete.name}")
             concrete_hover_parts.append(f"Grade: {concrete.grade}")
-            
+
         concrete_hover_parts.extend([
             f"Gross I_xx: {I_xx/10**6:,.0f} x10⁶ mm⁴",
             f"Gross I_yy: {I_yy/10**6:,.0f} x10⁶ mm⁴",
@@ -92,7 +93,7 @@ class SectionViewer:
 
         # Initialize default values
         transformed_data = None
-        
+
         # 1. Perform transformed calculations ONCE
         if self.section.rebar_groups and concrete:
             E_cm = concrete.E_cm

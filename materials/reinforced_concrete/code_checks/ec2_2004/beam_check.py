@@ -15,7 +15,7 @@ overrides and delegates directly to the underlying check classes.
 from __future__ import annotations
 
 import warnings
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
@@ -63,7 +63,7 @@ class BeamCheck(BaseModel):
         description="Concrete material properties",
     )
 
-    shear_reinforcement: Optional[ShearRebar] = Field(
+    shear_reinforcement: ShearRebar | None = Field(
         default=None,
         description="Shear links/stirrups (None if unreinforced)",
     )
@@ -115,7 +115,7 @@ class BeamCheck(BaseModel):
         gt=0.0, le=1.0,
     )
 
-    breadth_override: Optional[float] = Field(
+    breadth_override: float | None = Field(
         default=None,
         description="Optional manual web breadth override for ShearCheck",
         gt=0.0,
@@ -228,7 +228,7 @@ class BeamCheck(BaseModel):
         description="Iterate non-linear creep adjustment to convergence",
     )
 
-    net_tension_face: Optional[Literal["top", "bottom"]] = Field(
+    net_tension_face: Literal["top", "bottom"] | None = Field(
         default=None,
         description="Optional face selection policy for net-tension crack checks",
     )
@@ -237,14 +237,14 @@ class BeamCheck(BaseModel):
     # Private sub-check instances
     # ===========================
 
-    _bending_check: Optional[BendingCheck] = PrivateAttr(default=None)
-    _shear_check: Optional[ShearCheck] = PrivateAttr(default=None)
-    _cracking_check: Optional[CrackingCheck] = PrivateAttr(default=None)
-    _stress_limits_check: Optional[StressLimitsCheck] = PrivateAttr(default=None)
+    _bending_check: BendingCheck | None = PrivateAttr(default=None)
+    _shear_check: ShearCheck | None = PrivateAttr(default=None)
+    _cracking_check: CrackingCheck | None = PrivateAttr(default=None)
+    _stress_limits_check: StressLimitsCheck | None = PrivateAttr(default=None)
     _ndp_snapshot: tuple = PrivateAttr(default=())
 
     @model_validator(mode="after")
-    def _post_init(self) -> "BeamCheck":
+    def _post_init(self) -> BeamCheck:
         self._bending_check = BendingCheck(
             section=self.section,
             concrete=self.concrete,
@@ -332,7 +332,7 @@ class BeamCheck(BaseModel):
                 stacklevel=3,
             )
 
-    def with_updates(self, **changes: Any) -> "BeamCheck":
+    def with_updates(self, **changes: Any) -> BeamCheck:
         """
         Return a new BeamCheck with updated constructor fields.
 
@@ -369,13 +369,13 @@ class BeamCheck(BaseModel):
     def perform_bending_check(
         self,
         *,
-        My_Ed: Optional[float] = None,
+        My_Ed: float | None = None,
         N_Ed: float = 0.0,
         Mz_Ed: float = 0.0,
-        V_Ed: Optional[float] = None,
-        M_cap: Optional[float] = None,
-        shear_reinforcement: Optional[ShearRebar] = None,
-        cot_theta_override: Optional[float] = None,
+        V_Ed: float | None = None,
+        M_cap: float | None = None,
+        shear_reinforcement: ShearRebar | None = None,
+        cot_theta_override: float | None = None,
         use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float = 0.95,
         suppress_warnings: bool = False,
@@ -426,7 +426,7 @@ class BeamCheck(BaseModel):
         self,
         *,
         load_case: LoadCase,
-        cot_theta_override: Optional[float] = None,
+        cot_theta_override: float | None = None,
         use_v_rd_s_for_cot_theta: bool = False,
         use_uncracked_V_Rd_c: bool = False,
         warning_threshold: float = 0.95,
@@ -453,14 +453,14 @@ class BeamCheck(BaseModel):
     def perform_cracking_check(
         self,
         *,
-        My_Ed: Optional[float] = None,
+        My_Ed: float | None = None,
         N_Ed: float = 0.0,
         Mz_Ed: float = 0.0,
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         force_cracked: bool = False,
         suppress_warnings: bool = False,
-        actual_bar_diameter: Optional[float] = None,
+        actual_bar_diameter: float | None = None,
         **kwargs: Any,
     ) -> CheckResult:
         """
@@ -496,7 +496,7 @@ class BeamCheck(BaseModel):
     def perform_stress_limits_check(
         self,
         *,
-        My_Ed: Optional[float] = None,
+        My_Ed: float | None = None,
         N_Ed: float = 0.0,
         Mz_Ed: float = 0.0,
         warning_threshold: float = 0.95,

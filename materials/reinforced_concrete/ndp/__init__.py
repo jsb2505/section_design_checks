@@ -18,18 +18,19 @@ Usage::
 
 from __future__ import annotations
 
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from enum import StrEnum
-from typing import Any, Callable, Generator, Optional, Union
+from typing import Any
 
 from materials.reinforced_concrete.ndp.ndp import (
+    _NDP_METADATA,
     EN1992_1_1_2004,
     EN1992_2_2005,
-    _NDP_METADATA,
 )
 
 # Type alias for NDP values (can be constants or callables)
-NDPValue = Union[float, int, Callable[..., float]]
+NDPValue = float | int | Callable[..., float]
 
 
 class EurocodeVersion(StrEnum):
@@ -70,7 +71,7 @@ class NDPRegistry:
     created object.
     """
 
-    _instance: Optional["NDPRegistry"] = None
+    _instance: NDPRegistry | None = None
 
     def __init__(self) -> None:
         self._code: EurocodeVersion = EurocodeVersion.EN1992_1_1_2004
@@ -79,7 +80,7 @@ class NDPRegistry:
         self._custom_annexes: dict[str, dict[str, NDPValue]] = {}  # For runtime registration
 
     @classmethod
-    def instance(cls) -> "NDPRegistry":
+    def instance(cls) -> NDPRegistry:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
@@ -95,8 +96,8 @@ class NDPRegistry:
 
     def set_context(
         self,
-        code: Optional[EurocodeVersion] = None,
-        country: Optional[str] = None,
+        code: EurocodeVersion | None = None,
+        country: str | None = None,
     ) -> None:
         """
         Set the active code version and/or country code.
@@ -304,8 +305,8 @@ def get_ndp_info(param: str) -> dict[str, Any]:
 
 
 def set_ndp_context(
-    code: Optional[EurocodeVersion] = None,
-    country: Optional[str] = None,
+    code: EurocodeVersion | None = None,
+    country: str | None = None,
 ) -> None:
     """Set the active Eurocode version and/or country code (or custom annex name)."""
     NDPRegistry.instance().set_context(code=code, country=country)

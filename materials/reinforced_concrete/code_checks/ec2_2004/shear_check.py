@@ -9,50 +9,51 @@ This enables checking multiple load cases against the same section efficiently.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Union, Dict, TYPE_CHECKING
-from math import atan, atan2, cos, degrees, hypot, radians, sin, sqrt
 import warnings
+from math import atan, atan2, cos, degrees, hypot, radians, sin, sqrt
+from typing import TYPE_CHECKING, Any, Literal
+
 from pydantic import Field, PrivateAttr, model_validator
 
-from materials.core.units import ForceUnit, to_kn, from_kn
-from materials.reinforced_concrete.ndp import get_ndp
-
-from materials.utils.helpers import cot
+from materials.core.units import ForceUnit, from_kn, to_kn
+from materials.reinforced_concrete.analysis.interaction_diagram import (
+    MNInteractionDiagram,
+)
 from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
     CheckResult,
-)
-from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
-from materials.reinforced_concrete.geometry import RCSection
-from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
-    calculate_section_breadth,
-    find_rho_l_from_strains,
-    find_max_allowable_link_spacing,
-    find_max_allowable_leg_spacing,
-    find_cot_theta_for_V_Ed_from_V_Rd_max,
-    find_cot_theta_for_V_Ed_from_V_Rd_s,
-    find_alpha_cw,
-    find_V_Rd_c_cracked,
-    find_nu_1_factor,
-    find_nu_1_factor_note_2,
-    sigma_cp_from_N_and_area,
-    cap_sigma_cp_upper,
-    clamp_cot_theta,
-    find_V_Rd_c_max_unreinforced,
-    find_minimum_ratio_of_shear_reinforcement
-)
-from materials.reinforced_concrete.analysis.interaction_diagram import (
-    MNInteractionDiagram,
 )
 from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import (
     EffectiveDepthFallback,
     LoadCase,
     find_effective_depth_for_flexure,
 )
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
+    calculate_section_breadth,
+    cap_sigma_cp_upper,
+    clamp_cot_theta,
+    find_alpha_cw,
+    find_cot_theta_for_V_Ed_from_V_Rd_max,
+    find_cot_theta_for_V_Ed_from_V_Rd_s,
+    find_max_allowable_leg_spacing,
+    find_max_allowable_link_spacing,
+    find_minimum_ratio_of_shear_reinforcement,
+    find_nu_1_factor,
+    find_nu_1_factor_note_2,
+    find_rho_l_from_strains,
+    find_V_Rd_c_cracked,
+    find_V_Rd_c_max_unreinforced,
+    sigma_cp_from_N_and_area,
+)
+from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
+from materials.reinforced_concrete.geometry import RCSection
+from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
+from materials.reinforced_concrete.ndp import get_ndp
+from materials.utils.helpers import cot
 
 if TYPE_CHECKING:
     from pathlib import Path
+
     from materials.reinforced_concrete.analysis.strain_state import StrainState
 
 class ShearCheck(BaseCodeCheck):
@@ -89,7 +90,7 @@ class ShearCheck(BaseCodeCheck):
             Allow negative σ_cp from tensile axial forces (default: True)
             If True, negative σ_cp reduces shear capacity
             If False, σ_cp is limited to a minimum of 0.0 MPa
-        use_transformed_area_for_sigma_cp: 
+        use_transformed_area_for_sigma_cp:
             Use transformed area (concrete + n·steel) for σ_cp calculation (default: True)
         z_d_ratio:
             Lever arm ratio z/d for approximate mode (default: 0.9, circular ~0.77)
@@ -161,7 +162,7 @@ class ShearCheck(BaseCodeCheck):
         description="Concrete material",
     )
 
-    shear_reinforcement: Optional[ShearRebar] = Field(
+    shear_reinforcement: ShearRebar | None = Field(
         default=None,
         description="Shear links/stirrups (None if unreinforced)",
     )
@@ -240,7 +241,7 @@ class ShearCheck(BaseCodeCheck):
         le=1.0,
     )
 
-    breadth_override: Optional[float] = Field(
+    breadth_override: float | None = Field(
         default=None,
         description=(
             "User-supplied web breadth b_w (mm). If provided, overrides the automatic "
@@ -335,11 +336,11 @@ class ShearCheck(BaseCodeCheck):
         description="Steel stress-strain branch type (used if use_mechanical_lever_arm=True)",
     )
 
-    concrete_model_override: Optional[Any] = Field(
+    concrete_model_override: Any | None = Field(
         default=None, exclude=True,
         description="Pre-built custom concrete constitutive model (bypasses factory).",
     )
-    steel_models_override: Optional[list] = Field(
+    steel_models_override: list | None = Field(
         default=None, exclude=True,
         description="Pre-built custom steel constitutive models, one per rebar group (bypasses factory).",
     )
@@ -349,12 +350,12 @@ class ShearCheck(BaseCodeCheck):
     # Internal state (private)
     # =========================
 
-    _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
-    _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
-    _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
-    _diagram_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
-    _breadth_cache: Optional[float] = PrivateAttr(default=None)
-    _breadth_snapshot: Optional[dict[str, Any]] = PrivateAttr(default=None)
+    _diagram: MNInteractionDiagram | None = PrivateAttr(default=None)
+    _diagram_no_comp_steel: MNInteractionDiagram | None = PrivateAttr(default=None)
+    _diagram_snapshot: dict | None = PrivateAttr(default=None)
+    _diagram_no_comp_snapshot: dict | None = PrivateAttr(default=None)
+    _breadth_cache: float | None = PrivateAttr(default=None)
+    _breadth_snapshot: dict[str, Any] | None = PrivateAttr(default=None)
 
     def _take_section_snapshot(self) -> dict[str, Any]:
         """
@@ -388,7 +389,7 @@ class ShearCheck(BaseCodeCheck):
         }
 
     @model_validator(mode="after")
-    def _validate_z_d_ratios(self) -> "ShearCheck":
+    def _validate_z_d_ratios(self) -> ShearCheck:
         if self.z_d_ratio_lower >= self.z_d_ratio_upper:
             raise ValueError(
                 f"z_d_ratio_lower ({self.z_d_ratio_lower}) must be < "
@@ -397,7 +398,7 @@ class ShearCheck(BaseCodeCheck):
         return self
 
     @model_validator(mode="after")
-    def _validate_concrete_model_type(self) -> "ShearCheck":
+    def _validate_concrete_model_type(self) -> ShearCheck:
         if self.concrete_model_override is not None:
             return self
         if self.concrete_model_type == ConcreteModelType.LINEAR_ELASTIC:
@@ -408,7 +409,7 @@ class ShearCheck(BaseCodeCheck):
         return self
 
     @model_validator(mode="after")
-    def _validate_breadth_direction(self) -> "ShearCheck":
+    def _validate_breadth_direction(self) -> ShearCheck:
         vx, vy = self.breadth_shear_direction
         if abs(float(vx)) <= 1e-12 and abs(float(vy)) <= 1e-12:
             raise ValueError("breadth_shear_direction must be a non-zero vector")
@@ -509,8 +510,8 @@ class ShearCheck(BaseCodeCheck):
             average_height_ratio = 1.0
             shear_direction = (0.0, 1.0)
 
-        breadth_cache: Optional[float]
-        breadth_snapshot: Optional[dict[str, Any]]
+        breadth_cache: float | None
+        breadth_snapshot: dict[str, Any] | None
         try:
             breadth_cache = self._breadth_cache
             breadth_snapshot = self._breadth_snapshot
@@ -597,10 +598,10 @@ class ShearCheck(BaseCodeCheck):
         self,
         My_Ed: float,
         N_Ed: float,
-        eps_top: Optional[float] = None,
-        eps_bottom: Optional[float] = None,
+        eps_top: float | None = None,
+        eps_bottom: float | None = None,
         *,
-        strain_state: Optional["StrainState"] = None,
+        strain_state: StrainState | None = None,
         m_tol: float = 1e-6,
         strain_tol: float = 1e-15,
         warn_on_fallback: bool = True,
@@ -642,13 +643,13 @@ class ShearCheck(BaseCodeCheck):
         My_Ed: float,
         N_Ed: float,
         d: float,
-        eps_top: Optional[float] = None,
-        eps_bottom: Optional[float] = None,
+        eps_top: float | None = None,
+        eps_bottom: float | None = None,
         *,
-        strain_state: Optional["StrainState"] = None,
+        strain_state: StrainState | None = None,
         ignore_compression_steel: bool = False,
         force_virtual: bool = False,
-    ) -> tuple[float, Optional[float]]:
+    ) -> tuple[float, float | None]:
         """
         Lever arm for this load case.
 
@@ -685,12 +686,12 @@ class ShearCheck(BaseCodeCheck):
         My_Ed: float,
         N_Ed: float,
         d: float,
-        eps_top: Optional[float] = None,
-        eps_bottom: Optional[float] = None,
+        eps_top: float | None = None,
+        eps_bottom: float | None = None,
         *,
-        strain_state: Optional["StrainState"] = None,
+        strain_state: StrainState | None = None,
         ignore_compression_steel: bool = False,
-        b_w: Optional[float] = None,
+        b_w: float | None = None,
     ) -> float:
         """
         Longitudinal reinforcement ratio (§6.2.2(1)).
@@ -768,7 +769,7 @@ class ShearCheck(BaseCodeCheck):
         # 1. Check policy for tension
         if N_Ed <= 0 and not self.allow_negative_sigma_cp:
             return 0.0
-        
+
         # 2. Check policy for area calculation
         A_eff = self._A_transformed if self.use_transformed_area_for_sigma_cp else self._A_gross
 
@@ -785,8 +786,8 @@ class ShearCheck(BaseCodeCheck):
         eps_top: float,
         eps_bottom: float,
         d: float,
-        strain_state: Optional["StrainState"] = None,
-        b_w: Optional[float] = None,
+        strain_state: StrainState | None = None,
+        b_w: float | None = None,
     ) -> float:
         """
         Compute rho_l using actual neutral axis from strain profile.
@@ -817,7 +818,7 @@ class ShearCheck(BaseCodeCheck):
     # ===========================
 
     def find_V_Rd_c(
-        self, d: float, rho_l: float, sigma_cp: float, *, b_w: Optional[float] = None,
+        self, d: float, rho_l: float, sigma_cp: float, *, b_w: float | None = None,
     ) -> float:
         """
         Design shear resistance without shear reinforcement (§6.2.2, Eq. 6.2).
@@ -867,7 +868,7 @@ class ShearCheck(BaseCodeCheck):
         sigma_cp: float,
         alpha_I: float = 1.0,
         *,
-        b_w: Optional[float] = None,
+        b_w: float | None = None,
         shear_angle_deg: float = 0.0,
     ) -> float:
         """
@@ -944,7 +945,7 @@ class ShearCheck(BaseCodeCheck):
 
 
     def find_V_Rd_c_max_unreinforced(
-        self, d: float, *, b_w: Optional[float] = None,
+        self, d: float, *, b_w: float | None = None,
     ) -> float:
         """
         Maximum shear force for members without shear reinforcement (§6.2.2(6), Eq. 6.5).
@@ -1010,7 +1011,7 @@ class ShearCheck(BaseCodeCheck):
         sigma_cp: float,
         use_note_2: bool = False,
         *,
-        b_w: Optional[float] = None,
+        b_w: float | None = None,
     ) -> float:
         """
         Maximum shear resistance limited by crushing of compression struts (§6.2.3, Eq. 6.9).
@@ -1049,7 +1050,7 @@ class ShearCheck(BaseCodeCheck):
 
 
     def _calculate_K(
-        self, z: float, sigma_cp: float, use_note_2: bool = False, *, b_w: Optional[float] = None,
+        self, z: float, sigma_cp: float, use_note_2: bool = False, *, b_w: float | None = None,
     ) -> float:
         """
         Calculate K parameter for cot(θ) determination.
@@ -1095,7 +1096,7 @@ class ShearCheck(BaseCodeCheck):
         z: float,
         V_Ed: float,
         *,
-        b_w: Optional[float] = None,
+        b_w: float | None = None,
     ) -> tuple[float, float]:
         """
         Compute cot(θ) limits for this load case.
@@ -1156,7 +1157,7 @@ class ShearCheck(BaseCodeCheck):
         cot_max: float,
         use_note_2: bool = False,
         use_v_rd_s_for_cot_theta: bool = False,
-        b_w: Optional[float] = None,
+        b_w: float | None = None,
     ) -> float:
         """
         Determine cot(θ) from either V_Rd,max (Eq. 6.14) or V_Rd,s (Eq. 6.13).
@@ -1205,7 +1206,7 @@ class ShearCheck(BaseCodeCheck):
         use_v_rd_s_for_cot_theta: bool = False,
         suppress_warnings: bool = False,
         *,
-        b_w: Optional[float] = None,
+        b_w: float | None = None,
     ) -> tuple[float, bool]:
         """
         Calculate V_Rd,max with ν₁ Note 2 iteration per EC2 §6.2.3(3) Note 2.
@@ -1302,7 +1303,7 @@ class ShearCheck(BaseCodeCheck):
         self,
         *,
         load_case: LoadCase,
-        cot_theta_override: Optional[float] = None,
+        cot_theta_override: float | None = None,
         use_v_rd_s_for_cot_theta: bool = False,
         use_uncracked_V_Rd_c: bool = False,
         warning_threshold: float = 0.95,
@@ -1371,7 +1372,7 @@ class ShearCheck(BaseCodeCheck):
         V_Ed: float,
         My_Ed: float,
         N_Ed: float,
-        cot_theta_override: Optional[float],
+        cot_theta_override: float | None,
         use_v_rd_s_for_cot_theta: bool,
         use_uncracked_V_Rd_c: bool,
         warning_threshold: float,
@@ -1407,7 +1408,7 @@ class ShearCheck(BaseCodeCheck):
         # Solve for strains once (both modes need for compression face detection)
         # This avoids redundant solves and ensures consistency
         # Only solve if My_Ed is non-zero (moment determines compression face, not axial load)
-        strain_state_local: Optional["StrainState"] = None
+        strain_state_local: StrainState | None = None
         if abs(My_Ed) > 1e-6 or abs(Mz_Ed) > 1e-6:
             diagram = self._get_diagram(ignore_compression_steel)
             # Build kwargs for minor axis moment (only FreeNADiagramAdapter supports Mz_target)
@@ -1441,19 +1442,19 @@ class ShearCheck(BaseCodeCheck):
         )
 
         # 1. Initialize variables that might not be reached
-        V_Rd_s: Optional[float] = None
-        V_Rd_max: Optional[float] = None
-        V_Rd_c_max: Optional[float] = None
-        cot_theta: Optional[float] = None
-        z_ec2: Optional[float] = None
-        z_mech: Optional[float] = None
-        K: Optional[float] = None
+        V_Rd_s: float | None = None
+        V_Rd_max: float | None = None
+        V_Rd_c_max: float | None = None
+        cot_theta: float | None = None
+        z_ec2: float | None = None
+        z_mech: float | None = None
+        K: float | None = None
         used_note_2: bool = False
-        link_spacing_max_allowable: Optional[float] = None
-        link_spacing_satisfied: Optional[bool] = None
-        leg_spacing_max_allowable: Optional[float] = None
-        leg_spacing_satisfied: Optional[bool] = None
-        governing_component: Optional[str] = None
+        link_spacing_max_allowable: float | None = None
+        link_spacing_satisfied: bool | None = None
+        leg_spacing_max_allowable: float | None = None
+        leg_spacing_satisfied: bool | None = None
+        governing_component: str | None = None
 
         # Compute capacities (use z_ec2 for design checks per EC2)
 
@@ -1772,15 +1773,15 @@ class ShearCheck(BaseCodeCheck):
     def plot_cot_theta_study(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
+        load_case: LoadCase | dict[str, Any],
         n_points: int = 60,
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         use_uncracked_V_Rd_c: bool = False,
         use_note_2: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1000,
         height: int = 560,
     ) -> Any:
@@ -2024,7 +2025,7 @@ class ShearCheck(BaseCodeCheck):
         My_Ed: float,
         N_Ed: float,
         cot_theta: float = 2.5,
-        f_ywd: Optional[float] = None,
+        f_ywd: float | None = None,
         Mz_Ed: float = 0.0,
     ) -> float:
         """
@@ -2050,9 +2051,9 @@ class ShearCheck(BaseCodeCheck):
         # For biaxial loads, solve the strain state including Mz so d, rho_l and z
         # reflect the actual skewed neutral axis. For pure-My loads the strain args
         # stay None and the path is unchanged (the helpers solve internally).
-        eps_top: Optional[float] = None
-        eps_bottom: Optional[float] = None
-        strain_state_local: Optional["StrainState"] = None
+        eps_top: float | None = None
+        eps_bottom: float | None = None
+        strain_state_local: StrainState | None = None
         if abs(Mz_Ed) > 1e-9:
             diagram = self._get_diagram()
             if not hasattr(diagram, "get_capacity_biaxial"):
@@ -2103,7 +2104,7 @@ class ShearCheck(BaseCodeCheck):
             cot_min=cot_min,
             cot_max=cot_max
         )
-        
+
         A_sw_over_s_min = self._find_min_a_sw_over_s()
         A_sw_over_s = from_kn(V_Ed, ForceUnit.N) / (z_ec2 * f_ywd * cot_theta_limited)
         return max(A_sw_over_s, A_sw_over_s_min)
@@ -2111,9 +2112,9 @@ class ShearCheck(BaseCodeCheck):
 
     def _find_min_a_sw_over_s(self, use_defaults: bool = False) -> float:
         '''Minimum shear reinforcement area per unit length times sin α (§9.2.2(5)).
-        
+
         Args:
-            use_defaults: If True, assumes vertical links and grade 500 (α=90°, f_yk=500 MPa). 
+            use_defaults: If True, assumes vertical links and grade 500 (α=90°, f_yk=500 MPa).
                           If False, uses angle and f_yk from provided shear reinforcement.
                           To be used if shear reinforcement is not provided.
 

@@ -4,13 +4,14 @@ Based on CIRIA C766 methods for predicting heat generation and temperature
 development in early-age concrete under adiabatic conditions.
 """
 
-from typing import Dict, List, Callable
+from collections.abc import Callable
 from math import exp
-from pydantic import BaseModel, Field, computed_field, ConfigDict
-import numpy as np
 
-from materials.reinforced_concrete.thermal.concrete_mix import ConcreteMix
+import numpy as np
+from pydantic import BaseModel, ConfigDict, Field, computed_field
+
 from materials.reinforced_concrete.thermal.binder import BinderSubstituteType
+from materials.reinforced_concrete.thermal.concrete_mix import ConcreteMix
 
 
 class AdiabaticTemperature(BaseModel):
@@ -92,7 +93,7 @@ class AdiabaticTemperature(BaseModel):
 
         if not self.is_adjusted_for_placing_temp:
             return coefficient_b
-        
+
         t_placing = self.mix.concrete_placing_temp
         t_test = self.test_mix_temp
         adjuster = exp(0.0999 * (t_placing - t_test))
@@ -216,7 +217,7 @@ class AdiabaticTemperature(BaseModel):
                 percent = binder.substitute_percent
                 q_41 = cem_1_factor2 - 60.0 * (percent / (100.0 - percent))**0.6
                 adjuster = 1.0 + ratio * (100.0 - percent) / 100.0
-            
+
             case None | _:  # No substitute binder, so mix is 100% CEM 1
                 q_41 = cem_1_factor1
                 adjuster = 1.0
@@ -246,10 +247,10 @@ class AdiabaticTemperature(BaseModel):
                 percent = binder.substitute_percent
                 binder_mod_factor = (cem_1_factor - 0.0047 * percent +
                                     0.00003 * percent**2)
-                
+
             case None:  # No substitute binder, so mix is 100% CEM 1
                 binder_mod_factor = cem_1_factor
-            
+
             case _:
                 binder_mod_factor = cem_1_factor
 
@@ -297,13 +298,13 @@ class AdiabaticTemperature(BaseModel):
 
         Args:
             time_elapsed: Time elapsed since start in hours
-        
+
         Returns:
             Q: Total heat output after time (t) has elapsed
         """
         if time_elapsed < 0.0:
             raise ValueError("time_elapsed must be >= 0")
-    
+
         activation_time_t2 = self.activation_time_t2
 
         # Second phase adjuster (activation time delay)
@@ -366,7 +367,7 @@ class AdiabaticTemperature(BaseModel):
 
         # Add placing temperature if requested
         return adiabatic_temp_rise if is_temp_rise_only else adiabatic_temp_rise + self.mix.concrete_placing_temp
-    
+
 
     def get_total_heat_generated_q_over_time(self) -> float:
         """Total heat generated at self.time_elapsed (kJ/kg)."""
@@ -382,7 +383,7 @@ class AdiabaticTemperature(BaseModel):
             self,
             number_of_time_intervals: int = 100,
             is_temp_rise_only: bool = False
-        ) -> Dict[str, List[float]]:
+        ) -> dict[str, list[float]]:
         """
         Generate time-temperature data over the analysis period.
 
@@ -412,7 +413,7 @@ class AdiabaticTemperature(BaseModel):
     def make_time_heat_dict(
             self,
             number_of_time_intervals: int = 100
-        ) -> Dict[str, List[float]]:
+        ) -> dict[str, list[float]]:
         """
         Generate time-heat generation data over the analysis period.
 
@@ -431,7 +432,7 @@ class AdiabaticTemperature(BaseModel):
         heats = [float(self.find_total_heat_generated_q_at_time(float(t))) for t in times]
 
         return {"time": [float(t) for t in times], "heat": heats}
-    
+
 
     @staticmethod
     def _is_valid_concrete_temp(
@@ -439,7 +440,7 @@ class AdiabaticTemperature(BaseModel):
             temp_limit: float = 5.0) -> bool:
         '''
         Checks if avg_concrete_temp_during_time_interval is valid.
-        
+
         Args:
             avg_concrete_temp_during_time_interval: Average concrete temperature in °C
             temp_limit: The lower limit allowable for the concrete temperature  in °C
@@ -466,7 +467,7 @@ class AdiabaticTemperature(BaseModel):
         if not self._is_valid_concrete_temp(avg_concrete_temp_during_time_interval):
             raise ValueError("Invalid concrete temperature: "
                              f"{avg_concrete_temp_during_time_interval} °C")
-        
+
         concrete_temp = avg_concrete_temp_during_time_interval
         return ((concrete_temp + 16) / 36) ** 2
 
@@ -516,7 +517,7 @@ class AdiabaticTemperature(BaseModel):
         if not self._is_valid_concrete_temp(avg_concrete_temp_during_time_interval):
             raise ValueError("Invalid concrete temperature: "
                              f"{avg_concrete_temp_during_time_interval} °C")
-        
+
         datum_temperature = -11.0  # Temperature at which no strength development occurs
 
         return ((self.test_mix_temp - datum_temperature) /
@@ -605,8 +606,8 @@ class AdiabaticTemperature(BaseModel):
 
         Returns:
             Compressive strength in MPa
-        """    
-        return (ultimate_compressive_strength * 
+        """
+        return (ultimate_compressive_strength *
                 exp(-(characteristic_time_constant / test_age) ** shape_parameter))
 
 

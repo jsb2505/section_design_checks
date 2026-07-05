@@ -7,13 +7,13 @@ and stress-strain parameters for concrete grades C12/15 to C90/105.
 
 from enum import StrEnum
 from math import log
-from typing import Optional, cast
-from pydantic import Field, ConfigDict, model_validator
+from typing import cast
+
+from pydantic import ConfigDict, Field, model_validator
 
 from materials.core.base_material import BaseMaterial
-from materials.core.units import StressUnit, LengthUnit, to_mpa, from_mm
+from materials.core.units import LengthUnit, StressUnit, from_mm, to_mpa
 from materials.reinforced_concrete.ndp import get_ndp
-
 
 # Concrete grades according to EC2 Table 3.1 (single source of truth)
 # Table data: (f_ck, f_ck_cube, f_cm) per EC2 Table 3.1, units: MPa
@@ -186,7 +186,7 @@ class ConcreteMaterial(BaseMaterial):
 
     # ---- Optional overrides for non-standard strengths (e.g. early-age) ----
 
-    f_ck_override: Optional[float] = Field(
+    f_ck_override: float | None = Field(
         default=None,
         description=(
             "If set, overrides the grade-derived f_ck (MPa). All dependent "
@@ -196,7 +196,7 @@ class ConcreteMaterial(BaseMaterial):
         gt=0,
     )
 
-    f_cm_override: Optional[float] = Field(
+    f_cm_override: float | None = Field(
         default=None,
         description=(
             "If set, overrides the grade-derived f_cm (MPa). "
@@ -205,7 +205,7 @@ class ConcreteMaterial(BaseMaterial):
         gt=0,
     )
 
-    E_cm_override: Optional[float] = Field(
+    E_cm_override: float | None = Field(
         default=None,
         description=(
             "If set, overrides the computed E_cm (MPa). "
@@ -396,7 +396,7 @@ class ConcreteMaterial(BaseMaterial):
         if self.f_ck <= 50:
             return 0.0035
         return (2.6 + 35.0 * (((90.0 - self.f_ck) / 100.0) ** 4.0)) / 1000.0
-    
+
     def find_mean_flexural_tensile_strength(self, section_height: float) -> float:
         '''Calculates the mean flexural tensile strength of concrete (§3.1.8(1)).
 

@@ -1,5 +1,6 @@
-from typing import Any, Dict, List, Optional
 from pathlib import Path
+from typing import Any
+
 from materials.reinforced_concrete.analysis import MNInteractionDiagram
 
 
@@ -10,14 +11,14 @@ class MNDiagramViewer:
     def plot(
         self,
         *,
-        load_points: Optional[List[Dict[str, Any]]] = None,
+        load_points: list[dict[str, Any]] | None = None,
         show_vectors: bool = False,
         show_metadata: bool = True,
         n_points: int = 120,
         Mz_slice: float = 0.0,
-        save_path: Optional[str | Path] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 900,
         height: int = 700,
     ) -> Any:

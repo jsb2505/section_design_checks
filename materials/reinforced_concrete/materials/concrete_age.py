@@ -6,7 +6,8 @@ properties for early-age concrete behaviour and strength development.
 
 from enum import StrEnum
 from math import exp, sqrt
-from pydantic import BaseModel, Field, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from materials.reinforced_concrete.materials import ConcreteMaterial
 from materials.reinforced_concrete.materials.concrete import (

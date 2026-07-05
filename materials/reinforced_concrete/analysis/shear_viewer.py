@@ -10,15 +10,15 @@ Provides plotting routines for comparative studies of:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from math import radians, sin
-from typing import Any, Dict, Optional, Sequence, Tuple, TYPE_CHECKING, Union
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from materials.core.units import ForceUnit, to_kn
-from materials.reinforced_concrete.ndp import get_ndp
 from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     calculate_tension_shift,
@@ -26,6 +26,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     find_nu_1_factor,
     find_nu_1_factor_note_2,
 )
+from materials.reinforced_concrete.ndp import get_ndp
 from materials.utils.helpers import cot
 
 if TYPE_CHECKING:
@@ -63,7 +64,7 @@ class _CotThetaStudySeries:
     M_add_vals: list[float]
     V_Rd_s_design: float
     V_Rd_max_design: float
-    cot_intersection: Optional[float]
+    cot_intersection: float | None
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,7 @@ class _AxialMomentPlotDomain:
     valid_mask: np.ndarray
 
 
-def _as_load_case(load_case: Union[LoadCase, Dict[str, Any]]) -> LoadCase:
+def _as_load_case(load_case: LoadCase | dict[str, Any]) -> LoadCase:
     """Normalize supported load-case inputs to LoadCase."""
     if isinstance(load_case, LoadCase):
         return load_case
@@ -117,7 +118,7 @@ def _as_load_case(load_case: Union[LoadCase, Dict[str, Any]]) -> LoadCase:
 
 
 def _normalize_mn_loadcases(
-    loadcases: Optional[Sequence[Union[Dict[str, Any], Sequence[float]]]],
+    loadcases: Sequence[dict[str, Any] | Sequence[float]] | None,
 ) -> list[_MNPlotLoadPoint]:
     """Normalize supported M/N load-point inputs for contour overlays."""
     if not loadcases:
@@ -154,7 +155,7 @@ def _normalize_mn_loadcases(
 
 
 def _build_axial_moment_plot_domain(
-    diagram: "MNInteractionDiagram",
+    diagram: MNInteractionDiagram,
     *,
     n_diagram_points: int,
     n_moment: int,
@@ -259,7 +260,7 @@ def _axis_centers_from_edges(edges: np.ndarray) -> np.ndarray:
 
 
 def _build_outside_clip_masks(
-    diagram: "MNInteractionDiagram",
+    diagram: MNInteractionDiagram,
     *,
     y_edges: np.ndarray,
     x_min: float,
@@ -296,7 +297,7 @@ def _build_outside_clip_masks(
 
 
 def _get_closed_mn_polyline(
-    diagram: "MNInteractionDiagram",
+    diagram: MNInteractionDiagram,
     *,
     n_points: int,
 ) -> list[tuple[float, float]]:
@@ -349,7 +350,7 @@ def _intersections_with_vertical(
 def _get_force_band_fixed_m(
     pts: Sequence[tuple[float, float]],
     M_Ed: float,
-) -> tuple[Optional[float], Optional[float], Optional[float]]:
+) -> tuple[float | None, float | None, float | None]:
     """Return the vertical-line M-N slice as (M_cap, N_upper, N_lower)."""
     if len(pts) < 4:
         return (None, None, None)
@@ -392,7 +393,7 @@ def _build_horizontal_clip_masks(
     return top_mask, bottom_mask
 
 
-def _show_or_save(fig: Any, *, save_path: Optional[Union[str, Path]], show: bool) -> None:
+def _show_or_save(fig: Any, *, save_path: str | Path | None, show: bool) -> None:
     """Apply standard save/show behaviour used by viewer methods."""
     if save_path:
         fig.write_html(str(save_path))
@@ -400,7 +401,7 @@ def _show_or_save(fig: Any, *, save_path: Optional[Union[str, Path]], show: bool
         fig.show()
 
 
-def _utilization_colorscale(*, zmin: float, zmax: float) -> list[list[Union[float, str]]]:
+def _utilization_colorscale(*, zmin: float, zmax: float) -> list[list[float | str]]:
     """Return a colorscale with utilization 1.0 fixed at white."""
     if np.isclose(zmax, zmin):
         white_anchor = 0.5
@@ -418,7 +419,7 @@ def _build_slider_values(
     value_min: float,
     value_max: float,
     n_points: int,
-    step: Optional[float],
+    step: float | None,
 ) -> np.ndarray:
     """
     Build monotonic slider values.
@@ -601,7 +602,7 @@ def _build_slider_animation_controls(
 class ShearViewer:
     """Plotting utilities for ``ShearCheck`` comparative studies."""
 
-    def __init__(self, check: "ShearCheck") -> None:
+    def __init__(self, check: ShearCheck) -> None:
         self.check = check
 
     def _require_shear_reinforcement(self) -> None:
@@ -610,7 +611,7 @@ class ShearViewer:
 
     def _resolve_plot_diagram(
         self,
-    ) -> "MNInteractionDiagram":
+    ) -> MNInteractionDiagram:
         """Return the default cached interaction diagram for plotting."""
         return self.check._get_diagram(ignore_compression_steel=False)
 
@@ -620,7 +621,7 @@ class ShearViewer:
         load_case: LoadCase,
         use_uncracked_V_Rd_c: bool = False,
         ignore_compression_steel: bool = False,
-        diagram: Optional["MNInteractionDiagram"] = None,
+        diagram: MNInteractionDiagram | None = None,
     ) -> _StudyContext:
         """Compute shared parameters for a load case once."""
         V_Ed = abs(float(load_case.V_Ed))
@@ -698,7 +699,7 @@ class ShearViewer:
         cot_theta: float,
         context: _StudyContext,
         use_note_2: bool,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """
         Return (V_Rd_s, V_Rd_max) for a custom link angle at fixed cot(theta).
 
@@ -748,7 +749,7 @@ class ShearViewer:
         x_vals: np.ndarray,
         y_a_vals: Sequence[float],
         y_b_vals: Sequence[float],
-    ) -> Optional[float]:
+    ) -> float | None:
         """Return first x-position where two sampled curves intersect."""
         diff = np.asarray(y_a_vals, dtype=float) - np.asarray(y_b_vals, dtype=float)
         if diff.size < 2:
@@ -772,10 +773,10 @@ class ShearViewer:
     def _compute_cot_theta_study_series(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
+        load_case: LoadCase | dict[str, Any],
         n_points: int,
-        cot_theta_min: Optional[float],
-        cot_theta_max: Optional[float],
+        cot_theta_min: float | None,
+        cot_theta_max: float | None,
         use_uncracked_V_Rd_c: bool,
         use_note_2: bool,
     ) -> _CotThetaStudySeries:
@@ -855,15 +856,15 @@ class ShearViewer:
     def plot_cot_theta_study(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
+        load_case: LoadCase | dict[str, Any],
         n_points: int = 60,
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         use_uncracked_V_Rd_c: bool = False,
         use_note_2: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1000,
         height: int = 560,
     ) -> Any:
@@ -1072,15 +1073,15 @@ class ShearViewer:
     def plot_cot_theta_moment_shift_study(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
+        load_case: LoadCase | dict[str, Any],
         n_points: int = 60,
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         use_uncracked_V_Rd_c: bool = False,
         use_note_2: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1000,
         height: int = 560,
     ) -> Any:
@@ -1225,8 +1226,8 @@ class ShearViewer:
     def _compute_link_angle_study_series(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
-        cot_theta: Optional[float],
+        load_case: LoadCase | dict[str, Any],
+        cot_theta: float | None,
         angle_min: float,
         angle_max: float,
         n_points: int,
@@ -1301,19 +1302,19 @@ class ShearViewer:
     def plot_link_angle_study(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        load_case: LoadCase | dict[str, Any],
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         n_cot: int = 20,
-        cot_theta_step: Optional[float] = 0.05,
+        cot_theta_step: float | None = 0.05,
         angle_min: float = 45.0,
         angle_max: float = 90.0,
         n_points: int = 46,
         use_uncracked_V_Rd_c: bool = False,
         use_note_2: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1000,
         height: int = 560,
     ) -> Any:
@@ -1547,19 +1548,19 @@ class ShearViewer:
     def plot_link_angle_moment_shift_study(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        load_case: LoadCase | dict[str, Any],
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         n_cot: int = 20,
-        cot_theta_step: Optional[float] = 0.05,
+        cot_theta_step: float | None = 0.05,
         angle_min: float = 45.0,
         angle_max: float = 90.0,
         n_points: int = 46,
         use_uncracked_V_Rd_c: bool = False,
         use_note_2: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1000,
         height: int = 560,
     ) -> Any:
@@ -1788,9 +1789,9 @@ class ShearViewer:
     def plot_cot_theta_link_angle_heatmap(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        load_case: LoadCase | dict[str, Any],
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         angle_min: float = 45.0,
         angle_max: float = 90.0,
         n_cot: int = 40,
@@ -1798,9 +1799,9 @@ class ShearViewer:
         metric: str = "utilization",
         use_uncracked_V_Rd_c: bool = False,
         use_note_2: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 980,
         height: int = 760,
     ) -> Any:
@@ -1952,19 +1953,19 @@ class ShearViewer:
     def plot_force_cot_theta_contour(
         self,
         *,
-        load_case: Union[LoadCase, Dict[str, Any]],
+        load_case: LoadCase | dict[str, Any],
         n_axial: int = 31,
         n_moment: int = 31,
         moment_on_y_axis: bool = False,
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         n_cot: int = 40,
         metric: str = "utilization",
         use_uncracked_V_Rd_c: bool = False,
         use_note_2: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 980,
         height: int = 760,
     ) -> Any:
@@ -2057,7 +2058,7 @@ class ShearViewer:
         display_y_edges = _subdivide_axis(y_edges, display_oversample)
         display_y_vals = _axis_centers_from_edges(display_y_edges)
 
-        context_grid: list[list[Optional[_StudyContext]]] = [
+        context_grid: list[list[_StudyContext | None]] = [
             [None for _ in range(len(y_vals))]
             for _ in range(len(slider_vals))
         ]
@@ -2401,19 +2402,19 @@ class ShearViewer:
         self,
         *,
         V_Ed: float,
-        loadcases: Optional[Sequence[Union[Dict[str, Any], Sequence[float]]]] = None,
+        loadcases: Sequence[dict[str, Any] | Sequence[float]] | None = None,
         n_diagram_points: int = 120,
         n_moment: int = 41,
         n_axial: int = 31,
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
+        cot_theta_min: float | None = None,
+        cot_theta_max: float | None = None,
         n_cot: int = 20,
-        cot_theta_step: Optional[float] = 0.05,
+        cot_theta_step: float | None = 0.05,
         use_uncracked_V_Rd_c: bool = False,
         use_note_2: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
+        save_path: str | Path | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 1000,
         height: int = 760,
     ) -> Any:
@@ -2456,7 +2457,7 @@ class ShearViewer:
         )
         plotted_loadcases = _normalize_mn_loadcases(loadcases)
 
-        context_grid: list[list[Optional[_StudyContext]]] = [
+        context_grid: list[list[_StudyContext | None]] = [
             [None for _ in range(len(plot_domain.m_vals))]
             for _ in range(len(plot_domain.n_vals))
         ]

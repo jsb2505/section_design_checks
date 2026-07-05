@@ -4,8 +4,8 @@ Base geometric abstractions for cross-sections.
 
 import math
 from abc import ABC, abstractmethod
-from typing import Tuple
-from pydantic import BaseModel, Field, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BaseGeometry(BaseModel, ABC):
@@ -32,7 +32,7 @@ class BaseGeometry(BaseModel, ABC):
         pass  # pragma: no cover - abstract interface placeholder
 
     @abstractmethod
-    def get_centroid(self) -> Tuple[float, float]:
+    def get_centroid(self) -> tuple[float, float]:
         """
         Calculate centroid coordinates.
 
@@ -42,7 +42,7 @@ class BaseGeometry(BaseModel, ABC):
         pass  # pragma: no cover - abstract interface placeholder
 
     @abstractmethod
-    def get_second_moment_area(self) -> Tuple[float, float, float]:
+    def get_second_moment_area(self) -> tuple[float, float, float]:
         """
         Calculate second moments of area about centroidal axes.
 
@@ -52,7 +52,7 @@ class BaseGeometry(BaseModel, ABC):
         pass  # pragma: no cover - abstract interface placeholder
 
     @abstractmethod
-    def get_bounding_box(self) -> Tuple[float, float, float, float]:
+    def get_bounding_box(self) -> tuple[float, float, float, float]:
         """
         Get bounding box of the geometry.
 

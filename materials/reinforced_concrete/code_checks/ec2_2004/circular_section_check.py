@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import warnings
 from math import atan, degrees, pi, sqrt
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.analysis.strain_state import StrainState
@@ -30,40 +30,40 @@ if TYPE_CHECKING:
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, computed_field, model_validator
 
+from materials.core.units import ForceUnit, to_kn
 from materials.reinforced_concrete.code_checks.base_check import (
     CheckResult,
     CheckStatus,
 )
 from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
-from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
 from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
     CrackingCheck,
     LoadDuration,
 )
-from materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check import (
-    StressLimitsCheck,
-)
+from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import LoadCase
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearCheck
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
-    find_max_allowable_link_spacing,
-    find_max_allowable_leg_spacing,
-    find_cot_theta_for_V_Ed_from_V_Rd_max,
-    find_cot_theta_for_V_Ed_from_V_Rd_s,
-    find_alpha_cw,
-    find_nu_factor,
-    find_nu_1_factor,
-    find_nu_1_factor_note_2,
-    find_V_Rd_c_cracked,
-    find_rho_l_from_strains,
-    sigma_cp_from_N_and_area,
     cap_sigma_cp_upper,
     clamp_cot_theta,
+    find_alpha_cw,
+    find_cot_theta_for_V_Ed_from_V_Rd_max,
+    find_cot_theta_for_V_Ed_from_V_Rd_s,
+    find_max_allowable_leg_spacing,
+    find_max_allowable_link_spacing,
+    find_nu_1_factor,
+    find_nu_1_factor_note_2,
+    find_nu_factor,
+    find_rho_l_from_strains,
+    find_V_Rd_c_cracked,
+    sigma_cp_from_N_and_area,
+)
+from materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check import (
+    StressLimitsCheck,
 )
 from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
 from materials.reinforced_concrete.ndp import get_ndp, get_ndp_context
-from materials.core.units import ForceUnit, to_kn
 
 
 class CircularSectionCheck(BaseModel):
@@ -151,7 +151,7 @@ class CircularSectionCheck(BaseModel):
     # Shear reinforcement
     # ===========================
 
-    shear_reinforcement: Optional[ShearRebar] = Field(
+    shear_reinforcement: ShearRebar | None = Field(
         default=None,
         description="Shear links/spirals (None if unreinforced)",
     )
@@ -164,7 +164,7 @@ class CircularSectionCheck(BaseModel):
         ),
     )
 
-    r_sv_override: Optional[float] = Field(
+    r_sv_override: float | None = Field(
         default=None,
         description=(
             "Manual override for r_sv (mm) — radius from section centre to "
@@ -328,7 +328,7 @@ class CircularSectionCheck(BaseModel):
         description="EC2 §7.2(5) imposed deformation stress limit.",
     )
 
-    net_tension_face: Optional[Literal["top", "bottom"]] = Field(
+    net_tension_face: Literal["top", "bottom"] | None = Field(
         default=None,
         description=(
             "Face-checking policy for net tension cracking. "
@@ -342,11 +342,11 @@ class CircularSectionCheck(BaseModel):
     # ===========================
 
     @model_validator(mode="after")
-    def _validate_geometry(self) -> "CircularSectionCheck":    
+    def _validate_geometry(self) -> CircularSectionCheck:
         r = self.diameter / 2
         if self.cover >= r:
             raise ValueError("cover must be < D/2")
-        
+
         if self.r_sv_override is not None:
             if self.r_sv_override <= 0 or self.r_sv_override >= r:
                 raise ValueError("r_sv_override must be > 0 and < D/2")
@@ -364,17 +364,17 @@ class CircularSectionCheck(BaseModel):
                     "(expected cover to outer face of links)."
                 )
         return self
-    
 
-    _bending_check: Optional[BendingCheck] = PrivateAttr(default=None)
-    _shear_check: Optional[ShearCheck] = PrivateAttr(default=None)
-    _cracking_check: Optional[CrackingCheck] = PrivateAttr(default=None)
-    _stress_limits_check: Optional[StressLimitsCheck] = PrivateAttr(default=None)
-    _concrete_uls: Optional[ConcreteMaterial] = PrivateAttr(default=None)
+
+    _bending_check: BendingCheck | None = PrivateAttr(default=None)
+    _shear_check: ShearCheck | None = PrivateAttr(default=None)
+    _cracking_check: CrackingCheck | None = PrivateAttr(default=None)
+    _stress_limits_check: StressLimitsCheck | None = PrivateAttr(default=None)
+    _concrete_uls: ConcreteMaterial | None = PrivateAttr(default=None)
     _ndp_snapshot: tuple = PrivateAttr(default=())
 
     @model_validator(mode="after")
-    def _post_init(self) -> "CircularSectionCheck":
+    def _post_init(self) -> CircularSectionCheck:
         # Warn if shear reinforcement angle is not 90° (ineffective for circular)
         if (
             self.shear_reinforcement is not None
@@ -482,7 +482,7 @@ class CircularSectionCheck(BaseModel):
                 stacklevel=3,
             )
 
-    def with_updates(self, **changes: Any) -> "CircularSectionCheck":
+    def with_updates(self, **changes: Any) -> CircularSectionCheck:
         """
         Return a new CircularSectionCheck with the given fields replaced.
 
@@ -686,10 +686,10 @@ class CircularSectionCheck(BaseModel):
         N_Ed: float,
         b_w: float,
         d: float,
-        eps_top: Optional[float] = None,
-        eps_bottom: Optional[float] = None,
+        eps_top: float | None = None,
+        eps_bottom: float | None = None,
         ignore_compression_steel: bool = False,
-        strain_state: Optional["StrainState"] = None,
+        strain_state: StrainState | None = None,
     ) -> float:
         """Longitudinal reinforcement ratio for EC2 §6.2.2.
 
@@ -766,13 +766,13 @@ class CircularSectionCheck(BaseModel):
     def perform_bending_check(
         self,
         *,
-        My_Ed: Optional[float] = None,
+        My_Ed: float | None = None,
         N_Ed: float = 0.0,
         Mz_Ed: float = 0.0,
-        V_Ed: Optional[float] = None,
-        M_cap: Optional[float] = None,
-        shear_reinforcement: Optional[ShearRebar] = None,
-        cot_theta_override: Optional[float] = None,
+        V_Ed: float | None = None,
+        M_cap: float | None = None,
+        shear_reinforcement: ShearRebar | None = None,
+        cot_theta_override: float | None = None,
         use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float = 0.95,
         suppress_warnings: bool = False,
@@ -864,7 +864,7 @@ class CircularSectionCheck(BaseModel):
     def perform_cracking_check(
         self,
         *,
-        My_Ed: Optional[float] = None,
+        My_Ed: float | None = None,
         N_Ed: float = 0.0,
         Mz_Ed: float = 0.0,
         warning_threshold: float = 0.95,
@@ -916,7 +916,7 @@ class CircularSectionCheck(BaseModel):
     def perform_stress_limits_check(
         self,
         *,
-        My_Ed: Optional[float] = None,
+        My_Ed: float | None = None,
         N_Ed: float = 0.0,
         Mz_Ed: float = 0.0,
         warning_threshold: float = 0.95,
@@ -980,7 +980,7 @@ class CircularSectionCheck(BaseModel):
         self,
         *,
         load_case: LoadCase,
-        cot_theta_override: Optional[float] = None,
+        cot_theta_override: float | None = None,
         use_v_rd_s_for_cot_theta: bool = False,
         use_uncracked_V_Rd_c: bool = False,
         warning_threshold: float = 0.95,
@@ -1033,9 +1033,9 @@ class CircularSectionCheck(BaseModel):
             )
 
         # 1. Solve strains once for this load case; reuse across d, z and rho_l.
-        eps_top: Optional[float]
-        eps_bottom: Optional[float]
-        strain_state_local: Optional["StrainState"] = None
+        eps_top: float | None
+        eps_bottom: float | None
+        strain_state_local: StrainState | None = None
         diagram = self._shear_check._get_diagram(ignore_compression_steel)
         # Pass Mz_target only when the diagram is biaxial-capable (free NA adapter).
         _mz_kw: dict[str, Any] = (
@@ -1123,10 +1123,10 @@ class CircularSectionCheck(BaseModel):
             sigma_cp_capped,
             use_sigma_cp_for_alpha_cw=self.use_sigma_cp_for_alpha_cw,
         )
-        link_spacing_max_allowable: Optional[float] = None
-        link_spacing_satisfied: Optional[bool] = None
-        leg_spacing_max_allowable: Optional[float] = None
-        leg_spacing_satisfied: Optional[bool] = None
+        link_spacing_max_allowable: float | None = None
+        link_spacing_satisfied: bool | None = None
+        leg_spacing_max_allowable: float | None = None
+        leg_spacing_satisfied: bool | None = None
 
         cot_min, cot_max = self._get_cot_theta_limits(sigma_cp_capped)
 
@@ -1415,9 +1415,9 @@ class CircularSectionCheck(BaseModel):
         assert self._concrete_uls is not None
 
         # Solve strains once; both find_effective_depth and find_lever_arm reuse them.
-        _eps_top: Optional[float]
-        _eps_bottom: Optional[float]
-        _strain_state: Optional["StrainState"] = None
+        _eps_top: float | None
+        _eps_bottom: float | None
+        _strain_state: StrainState | None = None
         if abs(My_Ed) > 1e-6:
             _diagram = self._shear_check._get_diagram(ignore_compression_steel)
             _eps_top, _eps_bottom = _diagram.find_strains_for_MN(My_Ed, N_Ed)
@@ -1494,7 +1494,7 @@ class CircularSectionCheck(BaseModel):
         units: str,
         warning_threshold: float = 0.95,
         message: str = "",
-        details: Optional[Dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
     ) -> CheckResult:
         """Build a CheckResult with automatic status from utilization."""
         utilization = demand / capacity if capacity > 0 else float("inf")
@@ -1537,33 +1537,33 @@ class CircularSectionCheck(BaseModel):
         sigma_cp: float,
         section_name: str = "",
         governing_mode: str = "",
-        V_Rd_c: Optional[float] = None,
-        V_Rd_c_cracked: Optional[float] = None,
-        V_Rd_c_uncracked: Optional[float] = None,
-        use_uncracked_V_Rd_c: Optional[bool] = None,
-        V_Rd_c_max: Optional[float] = None,
-        V_Rd_s: Optional[float] = None,
-        V_Rd_max: Optional[float] = None,
-        cot_theta: Optional[float] = None,
-        b_w: Optional[float] = None,
-        b_wc: Optional[float] = None,
-        b_wt: Optional[float] = None,
-        alpha_cw: Optional[float] = None,
-        nu_1: Optional[float] = None,
-        K: Optional[float] = None,
-        f_ywd: Optional[float] = None,
-        used_note_2: Optional[bool] = None,
-        cot_theta_from_v_rd_s: Optional[bool] = None,
-        lambda_1: Optional[float] = None,
-        lambda_2: Optional[float] = None,
-        z_0: Optional[float] = None,
-        link_spacing_satisfied: Optional[bool] = None,
-        link_spacing_provided: Optional[float] = None,
-        link_spacing_max_allowable: Optional[float] = None,
-        leg_spacing_satisfied: Optional[bool] = None,
-        leg_spacing_provided: Optional[float] = None,
-        leg_spacing_max_allowable: Optional[float] = None,
-    ) -> Dict[str, Any]:
+        V_Rd_c: float | None = None,
+        V_Rd_c_cracked: float | None = None,
+        V_Rd_c_uncracked: float | None = None,
+        use_uncracked_V_Rd_c: bool | None = None,
+        V_Rd_c_max: float | None = None,
+        V_Rd_s: float | None = None,
+        V_Rd_max: float | None = None,
+        cot_theta: float | None = None,
+        b_w: float | None = None,
+        b_wc: float | None = None,
+        b_wt: float | None = None,
+        alpha_cw: float | None = None,
+        nu_1: float | None = None,
+        K: float | None = None,
+        f_ywd: float | None = None,
+        used_note_2: bool | None = None,
+        cot_theta_from_v_rd_s: bool | None = None,
+        lambda_1: float | None = None,
+        lambda_2: float | None = None,
+        z_0: float | None = None,
+        link_spacing_satisfied: bool | None = None,
+        link_spacing_provided: float | None = None,
+        link_spacing_max_allowable: float | None = None,
+        leg_spacing_satisfied: bool | None = None,
+        leg_spacing_provided: float | None = None,
+        leg_spacing_max_allowable: float | None = None,
+    ) -> dict[str, Any]:
         """Assemble details dict for shear check results.
 
         Key names match ShearCheck.perform_check details for consistency.
@@ -1571,7 +1571,7 @@ class CircularSectionCheck(BaseModel):
         appended after the common fields.
         """
         # Common fields — same names and order as ShearCheck
-        details: Dict[str, Any] = {
+        details: dict[str, Any] = {
             "V_Ed": V_Ed,
             "My_Ed": My_Ed,
             "N_Ed": N_Ed,

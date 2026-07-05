@@ -5,9 +5,10 @@ Provides common interface for all design checks (bending, shear, etc.).
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
 from enum import Enum
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CheckStatus(str, Enum):
@@ -31,34 +32,34 @@ class CheckResult(BaseModel):
 
     check_name: str = Field(..., description="Name of the check performed")
     status: CheckStatus = Field(..., description="Pass/fail status")
-    utilization: Optional[float] = Field(
+    utilization: float | None = Field(
         None,
         description="Utilization ratio (demand/capacity), if applicable",
         ge=0,
     )
 
     # Scalar demand/capacity (kept for simple checks like shear VEd/VRd)
-    demand: Optional[float] = Field(None, description="Demand value")
-    capacity: Optional[float] = Field(None, description="Capacity value")
-    units: Optional[str] = Field(None, description="Units for demand/capacity")
+    demand: float | None = Field(None, description="Demand value")
+    capacity: float | None = Field(None, description="Capacity value")
+    units: str | None = Field(None, description="Units for demand/capacity")
 
     # Vector demand/capacity (for M-N, M-N-V, etc.)
-    demand_components: Optional[Dict[str, float]] = Field(
+    demand_components: dict[str, float] | None = Field(
         default=None, description="Component demands (e.g. {'N':..., 'M':...})"
     )
-    capacity_components: Optional[Dict[str, float]] = Field(
+    capacity_components: dict[str, float] | None = Field(
         default=None, description="Component capacities at governing point"
     )
-    units_components: Optional[Dict[str, str]] = Field(
+    units_components: dict[str, str] | None = Field(
         default=None, description="Units per component (e.g. {'N':'kN','M':'kN·m'})"
     )
 
     message: str = Field(default="", description="Descriptive message")
-    details: Dict[str, Any] = Field(
+    details: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional check-specific details"
     )
-    code_reference: Optional[str] = Field(
+    code_reference: str | None = Field(
         None,
         description="Code clause reference (e.g., 'EC2 §6.1')"
     )
@@ -130,20 +131,20 @@ class BaseCodeCheck(BaseModel, ABC):
         code_reference: str,
         warning_threshold: float = 0.95,
         message: str = "",
-        details: Optional[Dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
 
         # scalar style (old)
-        demand: Optional[float] = None,
-        capacity: Optional[float] = None,
-        units: Optional[str] = None,
+        demand: float | None = None,
+        capacity: float | None = None,
+        units: str | None = None,
 
         # vector style (new)
-        demand_components: Optional[Dict[str, float]] = None,
-        capacity_components: Optional[Dict[str, float]] = None,
-        units_components: Optional[Dict[str, str]] = None,
+        demand_components: dict[str, float] | None = None,
+        capacity_components: dict[str, float] | None = None,
+        units_components: dict[str, str] | None = None,
 
         # override (for interaction checks)
-        utilization: Optional[float] = None,
+        utilization: float | None = None,
     ) -> CheckResult:
         """
         Helper to create standardized check results.

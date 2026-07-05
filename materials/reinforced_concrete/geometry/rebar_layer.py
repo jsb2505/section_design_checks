@@ -9,7 +9,8 @@ Provides utilities for positioning rebars in common configurations:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Literal, Optional, Sequence, Tuple, Union, cast
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
 from shapely.geometry import Point as ShapelyPoint
@@ -35,8 +36,8 @@ def _normalise_face(face: str) -> Literal["top", "bottom", "left", "right"]:
 
 
 def _resolve_face_segment(
-    section: "RCSection", face: Literal["top", "bottom", "left", "right"]
-) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    section: RCSection, face: Literal["top", "bottom", "left", "right"]
+) -> tuple[tuple[float, float], tuple[float, float]]:
     """
     Return the boundary segment that best represents a requested section face.
 
@@ -44,8 +45,8 @@ def _resolve_face_segment(
     with segment length used as a tie-breaker.
     """
     coords = list(section.outline.exterior.coords)
-    best_segment: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None
-    best_key: Optional[Tuple[float, float]] = None
+    best_segment: tuple[tuple[float, float], tuple[float, float]] | None = None
+    best_key: tuple[float, float] | None = None
 
     for (x0, y0), (x1, y1) in zip(coords[:-1], coords[1:]):
         dx = float(x1 - x0)
@@ -79,9 +80,9 @@ def _resolve_face_segment(
 
 def _orient_face_segment(
     face: Literal["top", "bottom", "left", "right"],
-    segment_start: Tuple[float, float],
-    segment_end: Tuple[float, float],
-) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    segment_start: tuple[float, float],
+    segment_end: tuple[float, float],
+) -> tuple[tuple[float, float], tuple[float, float]]:
     """Orient selected face segments consistently for predictable bar ordering."""
     x0, y0 = segment_start
     x1, y1 = segment_end
@@ -96,7 +97,7 @@ def _orient_face_segment(
     return segment_start, segment_end
 
 
-def _signed_exterior_area(section: "RCSection") -> float:
+def _signed_exterior_area(section: RCSection) -> float:
     """Signed area of exterior ring (positive for CCW winding)."""
     coords = list(section.outline.exterior.coords)
     area2 = 0.0
@@ -106,10 +107,10 @@ def _signed_exterior_area(section: "RCSection") -> float:
 
 
 def _get_inward_unit_normal(
-    section: "RCSection",
-    segment_start: Tuple[float, float],
-    segment_end: Tuple[float, float],
-) -> Tuple[float, float]:
+    section: RCSection,
+    segment_start: tuple[float, float],
+    segment_end: tuple[float, float],
+) -> tuple[float, float]:
     """
     Get inward unit normal for a boundary segment.
 
@@ -149,12 +150,12 @@ def _get_inward_unit_normal(
 
 def _offset_and_trim_segment(
     *,
-    segment_start: Tuple[float, float],
-    segment_end: Tuple[float, float],
-    inward_normal: Tuple[float, float],
+    segment_start: tuple[float, float],
+    segment_end: tuple[float, float],
+    inward_normal: tuple[float, float],
     offset_to_bar_centre: float,
     end_trim_to_bar_centre: float,
-) -> Tuple[Tuple[float, float], Tuple[float, float], float]:
+) -> tuple[tuple[float, float], tuple[float, float], float]:
     """
     Offset a face segment inward and trim equally at both ends.
 
@@ -205,8 +206,8 @@ def _offset_and_trim_segment(
 
 def _resolve_n_bars(
     *,
-    n_bars: Optional[int],
-    bar_spacing: Optional[float],
+    n_bars: int | None,
+    bar_spacing: float | None,
     usable_length: float,
 ) -> int:
     """Resolve number of bars from mutually exclusive count/spacing inputs."""
@@ -228,11 +229,11 @@ def _resolve_n_bars(
 def _create_linear_group_from_line(
     *,
     rebar: Rebar,
-    start_point: Tuple[float, float],
-    end_point: Tuple[float, float],
+    start_point: tuple[float, float],
+    end_point: tuple[float, float],
     n_bars: int,
-    bar_spacing: Optional[float],
-    layer_name: Optional[str],
+    bar_spacing: float | None,
+    layer_name: str | None,
     omit_start: bool,
     omit_end: bool,
 ) -> RebarGroup:
@@ -307,9 +308,9 @@ def _create_linear_group_from_line(
 def create_linear_rebar_layer(
     rebar: Rebar,
     n_bars: int,
-    start_point: Tuple[float, float],
-    end_point: Tuple[float, float],
-    layer_name: Optional[str] = None,
+    start_point: tuple[float, float],
+    end_point: tuple[float, float],
+    layer_name: str | None = None,
     omit_start: bool = False,
     omit_end: bool = False,
 ) -> RebarGroup:
@@ -382,16 +383,16 @@ def create_linear_rebar_layer(
 
 
 def create_multi_layer_linear_rebars(
-    rebars: Union[Rebar, Sequence[Rebar]],
+    rebars: Rebar | Sequence[Rebar],
     n_bars: int,
-    start_point: Tuple[float, float],
-    end_point: Tuple[float, float],
-    gap: Union[float, Sequence[float]] = 25.0,
+    start_point: tuple[float, float],
+    end_point: tuple[float, float],
+    gap: float | Sequence[float] = 25.0,
     gap_between_faces: bool = True,
-    layer_names: Optional[Sequence[str]] = None,
+    layer_names: Sequence[str] | None = None,
     omit_start: bool = False,
     omit_end: bool = False,
-) -> List[RebarGroup]:
+) -> list[RebarGroup]:
     """
     Create multiple parallel linear rebar layers offset perpendicular to the
     start→end direction.
@@ -438,14 +439,14 @@ def create_multi_layer_linear_rebars(
             "rebars must be a sequence of Rebar objects (one per layer), "
             "not a single Rebar.  Wrap in a list: [rebar, rebar, ...]"
         )
-    rebar_list: List[Rebar] = list(rebars)
+    rebar_list: list[Rebar] = list(rebars)
     n_layers = len(rebar_list)
     if n_layers < 1:
         raise ValueError("At least one rebar layer is required")
 
     # --- normalise gap to a list of n_layers-1 values ---
     if isinstance(gap, (int, float)):
-        gaps: List[float] = [float(gap)] * max(n_layers - 1, 0)
+        gaps: list[float] = [float(gap)] * max(n_layers - 1, 0)
     else:
         gaps = [float(g) for g in gap]
         if len(gaps) != n_layers - 1:
@@ -459,7 +460,7 @@ def create_multi_layer_linear_rebars(
             raise ValueError(
                 f"layer_names length ({len(layer_names)}) must equal number of layers ({n_layers})"
             )
-        names: List[Optional[str]] = list(layer_names)
+        names: list[str | None] = list(layer_names)
     else:
         names = [f"layer_{i}" for i in range(n_layers)]
 
@@ -472,7 +473,7 @@ def create_multi_layer_linear_rebars(
     nx, ny = -dy / length, dx / length  # 90° CCW rotation
 
     # --- build layers ---
-    groups: List[RebarGroup] = []
+    groups: list[RebarGroup] = []
     cumulative_offset = 0.0
 
     for i in range(n_layers):
@@ -508,15 +509,15 @@ def create_multi_layer_linear_rebars(
 
 
 def create_linear_rebar_layer_on_face(
-    section: "RCSection",
+    section: RCSection,
     rebar: Rebar,
     face: Literal["top", "bottom", "left", "right"],
     cover: float,
     *,
-    n_bars: Optional[int] = None,
-    bar_spacing: Optional[float] = None,
-    side_cover: Optional[float] = None,
-    layer_name: Optional[str] = None,
+    n_bars: int | None = None,
+    bar_spacing: float | None = None,
+    side_cover: float | None = None,
+    layer_name: str | None = None,
     omit_start: bool = False,
     omit_end: bool = False,
 ) -> RebarGroup:
@@ -577,20 +578,20 @@ def create_linear_rebar_layer_on_face(
 
 
 def create_multi_layer_linear_rebars_on_face(
-    section: "RCSection",
-    rebars: Union[Rebar, Sequence[Rebar]],
+    section: RCSection,
+    rebars: Rebar | Sequence[Rebar],
     face: Literal["top", "bottom", "left", "right"],
     cover: float,
     *,
-    n_bars: Optional[int] = None,
-    bar_spacing: Optional[float] = None,
-    side_cover: Optional[float] = None,
-    gap: Union[float, Sequence[float]] = 25.0,
+    n_bars: int | None = None,
+    bar_spacing: float | None = None,
+    side_cover: float | None = None,
+    gap: float | Sequence[float] = 25.0,
     gap_between_faces: bool = True,
-    layer_names: Optional[Sequence[str]] = None,
+    layer_names: Sequence[str] | None = None,
     omit_start: bool = False,
     omit_end: bool = False,
-) -> List[RebarGroup]:
+) -> list[RebarGroup]:
     """
     Create multiple parallel face-based linear rebar layers.
 
@@ -616,13 +617,13 @@ def create_multi_layer_linear_rebars_on_face(
             "rebars must be a sequence of Rebar objects (one per layer), "
             "not a single Rebar.  Wrap in a list: [rebar, rebar, ...]"
         )
-    rebar_list: List[Rebar] = list(rebars)
+    rebar_list: list[Rebar] = list(rebars)
     n_layers = len(rebar_list)
     if n_layers < 1:
         raise ValueError("At least one rebar layer is required")
 
     if isinstance(gap, (int, float)):
-        gaps: List[float] = [float(gap)] * max(n_layers - 1, 0)
+        gaps: list[float] = [float(gap)] * max(n_layers - 1, 0)
     else:
         gaps = [float(g) for g in gap]
         if len(gaps) != n_layers - 1:
@@ -635,7 +636,7 @@ def create_multi_layer_linear_rebars_on_face(
             raise ValueError(
                 f"layer_names length ({len(layer_names)}) must equal number of layers ({n_layers})"
             )
-        names: List[Optional[str]] = list(layer_names)
+        names: list[str | None] = list(layer_names)
     else:
         names = [f"layer_{i}" for i in range(n_layers)]
 
@@ -659,7 +660,7 @@ def create_multi_layer_linear_rebars_on_face(
         usable_length=first_layer_usable_length,
     )
 
-    groups: List[RebarGroup] = []
+    groups: list[RebarGroup] = []
     cumulative_offset = cover + rebar_list[0].diameter / 2.0
 
     for i in range(n_layers):
@@ -716,9 +717,9 @@ def create_rectangular_perimeter_rebars(
     cover: float,
     n_bars_width: int,
     n_bars_height: int,
-    origin: Tuple[float, float] = (0.0, 0.0),
+    origin: tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 1,
-) -> List[RebarGroup]:
+) -> list[RebarGroup]:
     """
     Create perimeter reinforcement for a rectangular section.
 
@@ -802,7 +803,7 @@ def create_rectangular_perimeter_rebars(
             "(bars would lie outside the section)."
         )
 
-    groups: List[RebarGroup] = []
+    groups: list[RebarGroup] = []
 
     # Bottom layer
     if n_bars_width >= 1:
@@ -866,7 +867,7 @@ def create_circular_perimeter_rebars(
     diameter: float,
     cover: float,
     n_bars: int,
-    origin: Tuple[float, float] = (0.0, 0.0),
+    origin: tuple[float, float] = (0.0, 0.0),
     start_angle: float = 0.0,
 ) -> RebarGroup:
     """
@@ -923,8 +924,8 @@ def create_circular_perimeter_rebars(
 
 def create_custom_rebar_layer(
     rebar: Rebar,
-    positions: Sequence[Tuple[float, float]],
-    layer_name: Optional[str] = None,
+    positions: Sequence[tuple[float, float]],
+    layer_name: str | None = None,
 ) -> RebarGroup:
     """
     Create a rebar layer at custom positions.

@@ -5,13 +5,9 @@ Contains geometry helpers and EC2 formula implementations used by both
 BendingCheck and CrackingCheck.
 """
 
-from math import hypot
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple
-
-# Public type alias for the fallback policy
-EffectiveDepthFallback = Literal["ratio_of_h", "centroid"]
-BiaxialEffectiveDepthPolicy = Literal["centroid_normal", "extreme_fibre"]
 import warnings
+from math import hypot
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field, computed_field, model_validator
@@ -19,10 +15,14 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 from materials.reinforced_concrete.constitutive import SteelModelType
 from materials.reinforced_concrete.ndp import get_ndp_callable
 
+# Public type alias for the fallback policy
+EffectiveDepthFallback = Literal["ratio_of_h", "centroid"]
+BiaxialEffectiveDepthPolicy = Literal["centroid_normal", "extreme_fibre"]
+
 if TYPE_CHECKING:
-    from materials.reinforced_concrete.geometry import RCSection
     from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
     from materials.reinforced_concrete.analysis.strain_state import StrainState
+    from materials.reinforced_concrete.geometry import RCSection
 
 
 class LoadCase(BaseModel):
@@ -127,7 +127,7 @@ def calculate_neutral_axis_depth_from_strains(
     eps_top: float,
     eps_bottom: float,
     section_height: float,
-) -> Optional[float]:
+) -> float | None:
     """
     Calculate neutral axis depth from top face given strain profile.
 
@@ -174,7 +174,7 @@ def calculate_compression_face_from_strains(
     eps_top: float,
     eps_bottom: float,
     strain_tol: float = 1e-12,
-) -> Optional[Literal["top", "bottom"]]:
+) -> Literal["top", "bottom"] | None:
     """
     Determine which face is in compression from strain state.
 
@@ -216,7 +216,7 @@ def _get_section_height(section: "RCSection") -> float:
 def _try_centroid_depth(
     section: "RCSection",
     compression_face: Literal["top", "bottom"],
-) -> Optional[float]:
+) -> float | None:
     """Try to get effective depth for a given compression face, return None on failure."""
     try:
         return float(section.get_effective_depth(compression_face=compression_face))
@@ -273,7 +273,7 @@ def _compute_biaxial_effective_depth(
     strain_state: "StrainState",
     diagram: Optional["MNInteractionDiagram"],
     policy: BiaxialEffectiveDepthPolicy = "centroid_normal",
-) -> Optional[float]:
+) -> float | None:
     """
     Compute effective depth perpendicular to a rotated neutral axis.
 
@@ -361,7 +361,8 @@ def _compute_biaxial_effective_depth(
         return abs(proj_comp_extreme - proj_T)
 
     # Find the intersection point furthest along compression direction
-    from shapely.geometry import GeometryCollection, MultiPoint, Point as ShapelyPoint
+    from shapely.geometry import GeometryCollection, MultiPoint
+    from shapely.geometry import Point as ShapelyPoint
 
     if isinstance(intersection, ShapelyPoint):
         pts = [intersection]
@@ -389,8 +390,8 @@ def find_effective_depth_for_flexure(
     diagram: Optional["MNInteractionDiagram"],
     M_Ed: float,
     N_Ed: float,
-    eps_top: Optional[float] = None,
-    eps_bottom: Optional[float] = None,
+    eps_top: float | None = None,
+    eps_bottom: float | None = None,
     *,
     strain_state: Optional["StrainState"] = None,
     biaxial_d_policy: BiaxialEffectiveDepthPolicy = "centroid_normal",
@@ -530,7 +531,7 @@ def find_mean_effective_depth(
 
 
 def find_equivalent_diameter(
-    bars: List[Tuple[float, int]],
+    bars: list[tuple[float, int]],
 ) -> float:
     """
     Equivalent bar diameter for mixed bar sizes (EC2 §7.3.4(3), Eq. 7.12).
@@ -579,7 +580,7 @@ def get_tension_rebars_from_strain_state(
     eps_top: float,
     eps_bottom: float,
     strain_state: Optional["StrainState"] = None,
-) -> List[Tuple[float, int, float]]:
+) -> list[tuple[float, int, float]]:
     """
     Identify rebars in the tension zone based on strain state.
 
@@ -721,7 +722,7 @@ def find_area_of_steel_maximum(section_area: float) -> float:
 
     Args:
         section_area: The cross-sectional area of the section
-    
+
     Returns:
         A_s,max: The maximum amount of longitudinal reinforcement allowed
     '''

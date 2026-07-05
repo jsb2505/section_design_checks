@@ -1,6 +1,6 @@
 """Concrete mix model for thermal analysis."""
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from materials.reinforced_concrete.thermal.binder import Binder
 

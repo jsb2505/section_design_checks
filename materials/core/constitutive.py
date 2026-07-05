@@ -4,9 +4,10 @@ Base classes for material constitutive (stress-strain) relationships.
 
 from abc import ABC, abstractmethod
 from typing import Protocol, runtime_checkable
-from pydantic import BaseModel, Field, ConfigDict
+
 import numpy as np
 import numpy.typing as npt
+from pydantic import BaseModel, ConfigDict, Field
 
 
 @runtime_checkable

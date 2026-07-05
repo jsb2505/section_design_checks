@@ -57,15 +57,15 @@ Example:
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Tuple
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 import numpy as np
 
 # Type aliases
-LoadCase = Dict[str, float]  # {"M": float, "N": float}
-SolverResult = Dict[str, Any]  # {"success": bool, "eps_top": float, "eps_bottom": float, "error": str}
+LoadCase = dict[str, float]  # {"M": float, "N": float}
+SolverResult = dict[str, Any]  # {"success": bool, "eps_top": float, "eps_bottom": float, "error": str}
 
 
 def _solve_single_case(diagram: Any, load_case: LoadCase, tol: float) -> SolverResult:
@@ -116,11 +116,11 @@ def _solve_single_case(diagram: Any, load_case: LoadCase, tol: float) -> SolverR
 
 def solve_batch_parallel(
     diagram: Any,  # MNInteractionDiagram
-    load_cases: List[LoadCase],
-    n_workers: Optional[int] = None,
+    load_cases: list[LoadCase],
+    n_workers: int | None = None,
     tol: float = 1e-6,
     show_progress: bool = False,
-) -> List[SolverResult]:
+) -> list[SolverResult]:
     """
     Solve multiple M-N load cases in parallel using threads.
 
@@ -177,7 +177,7 @@ def solve_batch_parallel(
 
     # Use ThreadPoolExecutor for parallel execution
     # Pre-allocate with proper type hint to avoid Pylance warnings
-    results: List[SolverResult] = [None] * len(load_cases)  # type: ignore[list-item]
+    results: list[SolverResult] = [None] * len(load_cases)  # type: ignore[list-item]
 
     with ThreadPoolExecutor(max_workers=n_workers) as executor:
         # Submit all tasks
@@ -201,10 +201,10 @@ def solve_batch_parallel(
 
 def solve_batch_serial(
     diagram: Any,  # MNInteractionDiagram
-    load_cases: List[LoadCase],
+    load_cases: list[LoadCase],
     tol: float = 1e-6,
     show_progress: bool = False,
-) -> List[SolverResult]:
+) -> list[SolverResult]:
     """
     Solve multiple M-N load cases serially (single process).
 
@@ -269,7 +269,7 @@ def solve_batch_serial(
     return results
 
 
-def analyze_batch_results(results: List[SolverResult]) -> Dict[str, Any]:
+def analyze_batch_results(results: list[SolverResult]) -> dict[str, Any]:
     """
     Analyze batch solver results and compute statistics.
 
@@ -312,7 +312,7 @@ def analyze_batch_results(results: List[SolverResult]) -> Dict[str, Any]:
     }
 
 
-def extract_strain_arrays(results: List[SolverResult]) -> Tuple[np.ndarray, np.ndarray]:
+def extract_strain_arrays(results: list[SolverResult]) -> tuple[np.ndarray, np.ndarray]:
     """
     Extract strain arrays from batch results.
 

@@ -11,27 +11,30 @@ Supports:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import cached_property
-from typing import TYPE_CHECKING, Annotated, List, Sequence, Tuple, Optional, Literal, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.materials.concrete import ConcreteMaterial
+
     from .reinforcement_reconcile import ReinforcementUpdateReport
 
 import numpy as np
-from shapely.geometry import Polygon, Point as ShapelyPoint
-from pydantic import BaseModel, BeforeValidator, Field, ConfigDict, model_validator, PrivateAttr
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, model_validator
+from shapely.geometry import Point as ShapelyPoint
+from shapely.geometry import Polygon
 
 from materials.core.geometry import BaseGeometry, Point2D
 from materials.reinforced_concrete.materials.rebar import Rebar
-from .reinforcement_reconcile import ReinforcementInvalidPolicy
 
+from .reinforcement_reconcile import ReinforcementInvalidPolicy
 
 # Small tolerance used for geometric checks (mm)
 _GEOM_TOL_MM = 1e-6
 
 
-def _ring_integrals_about_origin(coords: np.ndarray) -> Tuple[float, float, float, float, float, float]:
+def _ring_integrals_about_origin(coords: np.ndarray) -> tuple[float, float, float, float, float, float]:
     """
     Compute signed area, centroid (about origin), and second moments (about origin)
     for a single closed polygon ring using standard shoelace-based formulas.
@@ -83,7 +86,7 @@ def _ring_integrals_about_origin(coords: np.ndarray) -> Tuple[float, float, floa
     return (A, Cx, Cy, Ixx0, Iyy0, Ixy0)
 
 
-def _polygon_integrals_about_origin(poly: Polygon) -> Tuple[float, float, float, float, float, float]:
+def _polygon_integrals_about_origin(poly: Polygon) -> tuple[float, float, float, float, float, float]:
     """
     Compute signed area, centroid, and second moments about origin for a Polygon,
     including voids/holes (interior rings).
@@ -162,13 +165,13 @@ class RebarGroup(BaseModel):
         min_length=1,
     )
 
-    layer_name: Optional[str] = Field(
+    layer_name: str | None = Field(
         default=None,
         description="Optional layer identifier (e.g., 'bottom', 'top', 'side')"
     )
 
     @model_validator(mode="after")
-    def validate_positions_non_overlapping(self) -> "RebarGroup":
+    def validate_positions_non_overlapping(self) -> RebarGroup:
         """
         Ensure bar geometries do not overlap.
 
@@ -211,7 +214,7 @@ class RebarGroup(BaseModel):
             Total area in mm²
         """
         return self.n_bars * self.rebar.area
-    
+
     @cached_property
     def centroid(self) -> Point2D:
         """
@@ -246,14 +249,14 @@ def _coerce_point2d(v: Any) -> Any:
     return v  # let Pydantic validate/reject
 
 
-def _coerce_point2d_sequence(v: Any) -> Tuple[Point2D, ...]:
+def _coerce_point2d_sequence(v: Any) -> tuple[Point2D, ...]:
     """Coerce a sequence of Point2D-like items."""
     if isinstance(v, (tuple, list)):
         return tuple(_coerce_point2d(item) for item in v)
     return v
 
 
-def _coerce_voids(v: Any) -> Tuple[Tuple[Point2D, ...], ...]:
+def _coerce_voids(v: Any) -> tuple[tuple[Point2D, ...], ...]:
     """Coerce nested sequence of Point2D-like items for voids."""
     if isinstance(v, (tuple, list)):
         return tuple(_coerce_point2d_sequence(ring) for ring in v)
@@ -272,7 +275,7 @@ class RCSection(BaseGeometry):
     - Origin is at the *centre* of the section by default for helper constructors.
     """
     _suspend_outline_reconcile: bool = PrivateAttr(default=False)
-    
+
     model_config = ConfigDict(
         arbitrary_types_allowed=False,
         validate_assignment=True,
@@ -291,13 +294,13 @@ class RCSection(BaseGeometry):
         ),
     )
 
-    outline_coords: Annotated[Tuple[Point2D, ...], BeforeValidator(_coerce_point2d_sequence)] = Field(
+    outline_coords: Annotated[tuple[Point2D, ...], BeforeValidator(_coerce_point2d_sequence)] = Field(
         ...,
         description="Exterior ring coordinates (mm). First/last may be same; will be closed.",
         min_length=3,
     )
 
-    voids_coords: Annotated[Tuple[Tuple[Point2D, ...], ...], BeforeValidator(_coerce_voids)] = Field(
+    voids_coords: Annotated[tuple[tuple[Point2D, ...], ...], BeforeValidator(_coerce_voids)] = Field(
         default_factory=tuple,
         description="Interior rings (holes), each a tuple of coordinates (mm).",
     )
@@ -332,24 +335,24 @@ class RCSection(BaseGeometry):
             self._invalidate_outline_cache()
 
 
-    rebar_groups: List[RebarGroup] = Field(
+    rebar_groups: list[RebarGroup] = Field(
         default_factory=list,
         description="List of rebar groups in the section"
     )
 
-    concrete_cover_override: Optional[float] = Field(
+    concrete_cover_override: float | None = Field(
         default=None,
         description="Optional override for concrete cover (mm). If None, calculate from geometry.",
         gt=0,
     )
 
-    section_name: Optional[str] = Field(
+    section_name: str | None = Field(
         default=None,
         description="Section identifier"
     )
 
     @model_validator(mode="after")
-    def validate_outline_and_rebars(self) -> "RCSection":
+    def validate_outline_and_rebars(self) -> RCSection:
         """
         Validate polygon geometry and reconcile reinforcement.
 
@@ -394,10 +397,10 @@ class RCSection(BaseGeometry):
     def update_outline(
         self,
         *,
-        outline_coords: Tuple[Point2D, ...],
-        voids_coords: Tuple[Tuple[Point2D, ...], ...] | None = None,
+        outline_coords: tuple[Point2D, ...],
+        voids_coords: tuple[tuple[Point2D, ...], ...] | None = None,
         reinforcement_policy: ReinforcementInvalidPolicy | None = None,
-    ) -> "ReinforcementUpdateReport":
+    ) -> ReinforcementUpdateReport:
         """
         Atomically update outline/voids, rebuild outline, then reconcile reinforcement once.
 
@@ -465,9 +468,9 @@ class RCSection(BaseGeometry):
             holes.append(coords)
 
         return Polygon(ext, holes=holes)
-    
 
-    def _auto_reconcile_reinforcement(self) -> "ReinforcementUpdateReport":
+
+    def _auto_reconcile_reinforcement(self) -> ReinforcementUpdateReport:
         """
         Enforce reinforcement_policy after outline coords changes.
         Local import avoids circular imports.
@@ -475,7 +478,7 @@ class RCSection(BaseGeometry):
         from .reinforcement_reconcile import reconcile_after_outline_change
         return reconcile_after_outline_change(self, policy=self.reinforcement_policy)
 
-    
+
     def invalid_rebars(self) -> tuple[list[str], list[tuple[int, int]]]:
         '''
         Utility method to check if there are any invalid bars outside the bounds of the section
@@ -517,13 +520,13 @@ class RCSection(BaseGeometry):
 
         Args:
             E_cm: The elastic modulus of concrete in MPa
-            
+
         Returns:
             Transformed area in mm²
         """
         if E_cm <= 0:
             raise ValueError(f"Concrete modulus E_cm must be positive, got {E_cm}")
-    
+
         A_eff = self.get_area()  # mm², includes bar regions as concrete
 
         # Transformed area. Because get_area() is the GROSS area (the bar regions
@@ -543,11 +546,11 @@ class RCSection(BaseGeometry):
             E_s_avg = total_steel_stiffness / total_steel_area
             alpha_e = E_s_avg / E_cm
             A_eff += (alpha_e - 1.0) * total_steel_area
-        
+
         return A_eff
 
 
-    def get_centroid(self) -> Tuple[float, float]:
+    def get_centroid(self) -> tuple[float, float]:
         """
         Centroid of gross concrete section.
 
@@ -561,7 +564,7 @@ class RCSection(BaseGeometry):
         return (float(c.x), float(c.y))
 
 
-    def get_transformed_centroid(self, E_cm: float) -> Tuple[float, float, float]:
+    def get_transformed_centroid(self, E_cm: float) -> tuple[float, float, float]:
         """
         Centroid of transformed section (gross concrete + (n-1) steel areas).
 
@@ -571,7 +574,7 @@ class RCSection(BaseGeometry):
 
         Args:
             E_cm: The elastic modulus of concrete in MPa
-        
+
         Returns:
             (A_tr, cx_tr, cy_tr)
         """
@@ -604,7 +607,7 @@ class RCSection(BaseGeometry):
         return A_tr, cx_tr, cy_tr
 
 
-    def get_second_moment_area(self) -> Tuple[float, float, float]:
+    def get_second_moment_area(self) -> tuple[float, float, float]:
         """
         Second moments of area about centroidal axes (gross concrete section only).
 
@@ -631,7 +634,7 @@ class RCSection(BaseGeometry):
     def get_transformed_second_moment_area(
         self,
         E_cm: float,
-    ) -> Tuple[float, float, float]:
+    ) -> tuple[float, float, float]:
         """
         Second moments of area for transformed section including reinforcement.
 
@@ -678,7 +681,7 @@ class RCSection(BaseGeometry):
         return I_xx, I_yy, I_xy
 
 
-    def get_bounding_box(self) -> Tuple[float, float, float, float]:
+    def get_bounding_box(self) -> tuple[float, float, float, float]:
         """
         Bounding box of section.
 
@@ -766,21 +769,21 @@ class RCSection(BaseGeometry):
         return 0.0 if a_c == 0.0 else (self.total_steel_area / a_c)
 
 
-    def get_rebar_positions(self) -> List[Tuple[float, float, float]]:
+    def get_rebar_positions(self) -> list[tuple[float, float, float]]:
         """
         Get all rebar positions with areas.
 
         Returns:
             List of (x, y, area) tuples for each bar
         """
-        out: List[Tuple[float, float, float]] = []
+        out: list[tuple[float, float, float]] = []
         for group in self.rebar_groups:
             for pos in group.positions:
                 out.append((pos.x, pos.y, group.rebar.area))
         return out
 
 
-    def get_steel_centroid(self) -> Tuple[float, float]:
+    def get_steel_centroid(self) -> tuple[float, float]:
         """
         Calculate centroid of all reinforcement.
 
@@ -978,7 +981,7 @@ class RCSection(BaseGeometry):
         # Include exterior and interior boundaries (void boundaries matter too)
         rings = [self.outline.exterior, *self.outline.interiors]
 
-        segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+        segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
         for ring in rings:
             coords = list(ring.coords)
             for (x0, y0), (x1, y1) in zip(coords[:-1], coords[1:]):
@@ -1034,7 +1037,7 @@ class RCSection(BaseGeometry):
         self,
         compression_face: Literal["top", "bottom"] = "top",
         *,
-        tension_zone: Optional[Literal["top", "bottom"]] = None,
+        tension_zone: Literal["top", "bottom"] | None = None,
         zone_fraction: float = 0.5,
     ) -> float:
         """
@@ -1128,7 +1131,7 @@ class RCSection(BaseGeometry):
         compression_face: Literal["top", "bottom"] = "top",
         *,
         zone_fraction: float = 0.5,
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Distance d_2 from compression face to centroid of compression reinforcement.
 
@@ -1205,9 +1208,9 @@ class RCSection(BaseGeometry):
     def plot(
         self,
         *,
-        concrete: Optional["ConcreteMaterial"] = None,
+        concrete: ConcreteMaterial | None = None,
         show: bool = True,
-        title: Optional[str] = None,
+        title: str | None = None,
         width: int = 700,
         height: int = 700,
     ) -> Any:

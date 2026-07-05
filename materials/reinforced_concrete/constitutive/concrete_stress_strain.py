@@ -22,7 +22,6 @@ This avoids discontinuities while not creating a post-crushing plateau.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Optional
 
 import numpy as np
 import numpy.typing as npt
@@ -124,7 +123,7 @@ class ConcreteStressStrainSchematic(BaseConstitutiveModel):
 
 
     @model_validator(mode="after")
-    def validate_parameters(self) -> "ConcreteStressStrainSchematic":
+    def validate_parameters(self) -> ConcreteStressStrainSchematic:
         if self.concrete.f_cm <= 0:
             raise ValueError(f"Concrete f_cm must be > 0, got {self.concrete.f_cm}")
         if abs(self.concrete.epsilon_c1) <= 0:
@@ -270,7 +269,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         description="Use f_cd_accidental instead of f_cd (mutually exclusive with use_characteristic)"
     )
 
-    sigma_2: Optional[float] = Field(
+    sigma_2: float | None = Field(
         default=None,
         ge=0.0,
         description="EC2 §3.1.9: Effective lateral compressive stress (MPa) for confinement. "
@@ -384,7 +383,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         return self.epsilon_cu2_c if self.is_ec2_confined else float(self.concrete.epsilon_cu2)
 
     @model_validator(mode="after")
-    def validate_parameters(self) -> "ConcreteStressStrainParabolaRectangle":
+    def validate_parameters(self) -> ConcreteStressStrainParabolaRectangle:
         if self.use_characteristic and self.use_accidental:
             raise ValueError(
                 "Cannot set both use_characteristic=True and use_accidental=True. "
@@ -602,7 +601,7 @@ class ConcreteStressStrainBilinear(BaseConstitutiveModel):
         return self.concrete.f_cd
 
     @model_validator(mode="after")
-    def validate_parameters(self) -> "ConcreteStressStrainBilinear":
+    def validate_parameters(self) -> ConcreteStressStrainBilinear:
         if self.use_characteristic and self.use_accidental:
             raise ValueError(
                 "Cannot set both use_characteristic=True and use_accidental=True. "
@@ -705,7 +704,7 @@ class ConcreteStressStrainLinearElastic(BaseConstitutiveModel):
     concrete: ConcreteMaterial = Field(..., description="Concrete material")
     name: str = Field(default="EC2 Linear Elastic", description="Model name")
 
-    elastic_modulus: Optional[float] = Field(
+    elastic_modulus: float | None = Field(
         default=None,
         description="Elastic modulus in MPa. If None, uses concrete.E_cm.",
         gt=0.0,
@@ -805,7 +804,7 @@ def create_concrete_stress_strain(
     model_type: ConcreteModelType = ConcreteModelType.PARABOLA_RECTANGLE,
     use_characteristic: bool = False,
     use_accidental: bool = False,
-    elastic_modulus: Optional[float] = None,
+    elastic_modulus: float | None = None,
     include_tension: bool = False,
 ) -> BaseConstitutiveModel:
     """
