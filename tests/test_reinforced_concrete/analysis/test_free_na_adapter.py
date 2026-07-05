@@ -258,3 +258,24 @@ class TestSingleSolveConsistency:
         ss = adapter.find_strain_state_for_MN(**kw)
         assert ss.eps_top == pytest.approx(eps_top, rel=1e-6, abs=1e-9)
         assert ss.eps_bottom == pytest.approx(eps_bottom, rel=1e-6, abs=1e-9)
+
+    @pytest.mark.parametrize(
+        "My_target,N_target,Mz_target",
+        [
+            (40.0, -300.0, 0.0),    # tension-controlled (net tension)
+            (60.0, 0.0, 0.0),       # pure bending
+            (30.0, 1500.0, 10.0),   # compression-controlled, biaxial
+        ],
+    )
+    def test_two_methods_agree_across_pivot_zones(
+        self, asymmetric_section, concrete_c30, My_target, N_target, Mz_target
+    ):
+        """After extracting the shared _pivot_slope_and_y_na helper, the strains
+        method and the strain-state method must still agree across the tension /
+        bending / compression pivot zones (guards the consolidation)."""
+        adapter = _make_adapter(asymmetric_section, concrete_c30, 25000.0)
+        kw = dict(My_target=My_target, N_target=N_target, Mz_target=Mz_target)
+        eps_top, eps_bottom = adapter.find_strains_for_MN(**kw)
+        ss = adapter.find_strain_state_for_MN(**kw)
+        assert ss.eps_top == pytest.approx(eps_top, rel=1e-6, abs=1e-9)
+        assert ss.eps_bottom == pytest.approx(eps_bottom, rel=1e-6, abs=1e-9)
