@@ -61,7 +61,7 @@ class DummyDiagram:
     def get_capacity_vector(self, *, N_Ed, M_Ed, return_details=False):
         return self.capacity
 
-    def apply_tension_shift(self, *, M_Ed, V_Ed, N_Ed, M_cap, shear_reinforcement, iterate_z=False):
+    def apply_tension_shift(self, *, M_Ed, V_Ed, N_Ed, M_cap, shear_reinforcement, iterate_z=False, cot_theta_override=None):
         """Stub for MNInteractionDiagram.apply_tension_shift."""
         from math import copysign
         from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
@@ -119,11 +119,13 @@ def make_check(*, diagram: DummyDiagram) -> BendingCheck:
         gamma_c=1.5,
         gamma_c_accidental=1.2,
         E_cm=33_000.0,
+        model_dump=lambda: {"stub": "concrete"},
     )
 
     section = SimpleNamespace(
         section_name="test_section",
         reinforcement_ratio=0.0123,
+        model_dump=lambda: {"stub": "section"},
     )
 
     # Bypass Pydantic's __init__ and model_post_init entirely
@@ -138,8 +140,20 @@ def make_check(*, diagram: DummyDiagram) -> BendingCheck:
     object.__setattr__(check, 'n_fibres_height', 30)
     object.__setattr__(check, 'use_accidental', False)
 
-    # Private cached fields that the methods use
+    # Snapshot-based caching: pre-set snapshot so _get_diagram() returns the stub
+    snapshot = {
+        "section": {"stub": "section"},
+        "concrete": {"stub": "concrete"},
+        "concrete_model_type": ConcreteModelType.PARABOLA_RECTANGLE,
+        "steel_model_type": SteelModelType.INCLINED,
+        "n_fibres_width": 20,
+        "n_fibres_height": 30,
+        "use_accidental": False,
+    }
     object.__setattr__(check, '_diagram', diagram)
+    object.__setattr__(check, '_diagram_snapshot', snapshot)
+    object.__setattr__(check, '_diagram_no_comp_steel', None)
+    object.__setattr__(check, '_diagram_no_comp_snapshot', None)
     object.__setattr__(check, '_A_transformed', 100_000.0)  # mm², arbitrary
 
     # Monkeypatchable result creator (so tests don't depend on BaseCodeCheck internals)

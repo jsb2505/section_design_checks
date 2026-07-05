@@ -190,9 +190,11 @@ class FibreMesh:
                 # Subtract steel overlap geometrically (accurate)
                 # Use difference() so area and centroid are consistent.
                 remaining = cell_concrete
-                if self.exclude_steel_area and self._bar_union_prepared is not None:
-                    if self._bar_union_prepared.intersects(cell_concrete):
-                        remaining = cell_concrete.difference(self._bar_union)
+                if self.exclude_steel_area and self._bar_union is not None:
+                    if self._bar_union_prepared is not None and self._bar_union_prepared.intersects(cell_concrete):
+                        diff = cell_concrete.difference(self._bar_union)
+                        if diff is not None:
+                            remaining = diff
 
                 if remaining.is_empty:
                     continue

@@ -6,16 +6,33 @@ and stress-strain parameters for concrete grades C12/15 to C90/105.
 """
 
 from enum import StrEnum
-from functools import cached_property
-from typing import Annotated
 from math import log
-from pydantic import Field, BeforeValidator, ConfigDict
+from pydantic import Field, ConfigDict
 
 from materials.core.base_material import BaseMaterial
 from materials.core.units import StressUnit, to_mpa
 
 
 # Concrete grades according to EC2 Table 3.1 (single source of truth)
+# Table data: (f_ck, f_ck_cube, f_cm) per EC2 Table 3.1, units: MPa
+_GRADE_TABLE: dict[str, tuple[float, float, float]] = {
+    "C12/15":  (12.0, 15.0, 20.0),
+    "C16/20":  (16.0, 20.0, 24.0),
+    "C20/25":  (20.0, 25.0, 28.0),
+    "C25/30":  (25.0, 30.0, 33.0),
+    "C30/37":  (30.0, 37.0, 38.0),
+    "C35/45":  (35.0, 45.0, 43.0),
+    "C40/50":  (40.0, 50.0, 48.0),
+    "C45/55":  (45.0, 55.0, 53.0),
+    "C50/60":  (50.0, 60.0, 58.0),
+    "C55/67":  (55.0, 67.0, 63.0),
+    "C60/75":  (60.0, 75.0, 68.0),
+    "C70/85":  (70.0, 85.0, 78.0),
+    "C80/95":  (80.0, 95.0, 88.0),
+    "C90/105": (90.0, 105.0, 98.0),
+}
+
+
 class ConcreteGrade(StrEnum):
     '''
     Concrete grades supported as per EC2.
@@ -52,41 +69,24 @@ class ConcreteGrade(StrEnum):
     C90_105 = "C90/105"
 
     @property
-    def _table_data(self) -> tuple[float, float, float]:
-        """
-        Returns (f_ck, f_ck_cube, f_cm) per EC2 Table 3.1.
-        Units: MPa
-        """
-        # Dictionary mapping for quick, safe lookup
-        mapping = {
-            ConcreteGrade.C12_15:  (12.0, 15.0, 20.0),
-            ConcreteGrade.C16_20:  (16.0, 20.0, 24.0),
-            ConcreteGrade.C20_25:  (20.0, 25.0, 28.0),
-            ConcreteGrade.C25_30:  (25.0, 30.0, 33.0),
-            ConcreteGrade.C30_37:  (30.0, 37.0, 38.0),
-            ConcreteGrade.C35_45:  (35.0, 45.0, 43.0),
-            ConcreteGrade.C40_50:  (40.0, 50.0, 48.0),
-            ConcreteGrade.C45_55:  (45.0, 55.0, 53.0),
-            ConcreteGrade.C50_60:  (50.0, 60.0, 58.0),
-            ConcreteGrade.C55_67:  (55.0, 67.0, 63.0),
-            ConcreteGrade.C60_75:  (60.0, 75.0, 68.0),
-            ConcreteGrade.C70_85:  (70.0, 85.0, 78.0),
-            ConcreteGrade.C80_95:  (80.0, 95.0, 88.0),
-            ConcreteGrade.C90_105: (90.0, 105.0, 98.0),
-        }
-        return mapping[self]
-    
-    @property
     def f_ck(self) -> float:
-        return self._table_data[0]
+        return _GRADE_TABLE[self][0]
 
     @property
     def f_ck_cube(self) -> float:
-        return self._table_data[1]
+        return _GRADE_TABLE[self][1]
 
     @property
     def f_cm(self) -> float:
-        return self._table_data[2]
+        return _GRADE_TABLE[self][2]
+
+
+_AGGREGATE_FACTORS: dict[str, float] = {
+    "basalt": 1.2,
+    "quartzite": 1.0,
+    "limestone": 0.9,
+    "sandstone": 0.7,
+}
 
 
 class AggregateType(StrEnum):
@@ -98,16 +98,7 @@ class AggregateType(StrEnum):
     @property
     def e_cm_factor(self) -> float:
         """Correction factor for E_cm based on aggregate type (§3.1.3(2))."""
-        factors = {
-            AggregateType.BASALT: 1.2,
-            AggregateType.QUARTZITE: 1.0,
-            AggregateType.LIMESTONE: 0.9,
-            AggregateType.SANDSTONE: 0.7,
-        }
-        return factors[self]
-
-# This tells Pylance "Strings are okay" but Pydantic will convert to Enum
-GradeInput = Annotated[ConcreteGrade, BeforeValidator(lambda v: ConcreteGrade(v) if isinstance(v, str) else v)]
+        return _AGGREGATE_FACTORS[self]
 
 
 class ConcreteMaterial(BaseMaterial):
@@ -123,9 +114,7 @@ class ConcreteMaterial(BaseMaterial):
         - Strain: dimensionless
     """
 
-    model_config = ConfigDict(
-        ignored_types=(cached_property,),  # Allow cached_property to work
-    )
+    model_config = ConfigDict()
 
     name: str = Field(default="Concrete", description="Material name")
     grade: ConcreteGrade = Field(..., description="Concrete grade per EC2 Table 3.1")
@@ -184,17 +173,17 @@ class ConcreteMaterial(BaseMaterial):
         """Mean cylinder compressive strength (§Table 3.1): f_cm = f_ck + 8 (MPa)."""
         return self.grade.f_cm
 
-    @cached_property
+    @property
     def f_cd(self) -> float:
         """Design compressive strength (§3.1.6): f_cd = α_cc · f_ck / γ_c (MPa)."""
         return self.alpha_cc * self.f_ck / self.gamma_c
 
-    @cached_property
+    @property
     def f_cd_accidental(self) -> float:
         """Accidental design compressive strength: f_cd,acc = α_cc · f_ck / γ_c,acc (MPa)."""
         return self.alpha_cc * self.f_ck / self.gamma_c_accidental
 
-    @cached_property
+    @property
     def f_ctm(self) -> float:
         """
         Mean tensile strength (§Table 3.1), MPa.
@@ -206,27 +195,27 @@ class ConcreteMaterial(BaseMaterial):
             return 0.30 * (self.f_ck ** (2.0 / 3.0))
         return 2.12 * log(1.0 + self.f_cm / 10.0)
 
-    @cached_property
+    @property
     def f_ctk_005(self) -> float:
         """5% fractile characteristic tensile strength (§Table 3.1): 0.7 · f_ctm (MPa)."""
         return 0.7 * self.f_ctm
 
-    @cached_property
+    @property
     def f_ctk_095(self) -> float:
         """95% fractile characteristic tensile strength (§Table 3.1): 1.3 · f_ctm (MPa)."""
         return 1.3 * self.f_ctm
 
-    @cached_property
+    @property
     def f_ctd(self) -> float:
         """Design tensile strength (§3.1.6): f_ctd = α_ct · f_ctk,0.05 / γ_c (MPa)."""
         return self.alpha_ct * self.f_ctk_005 / self.gamma_c
 
-    @cached_property
+    @property
     def f_ctd_accidental(self) -> float:
         """Accidental design tensile strength: f_ctd,acc = α_ct · f_ctk,0.05 / γ_c,acc (MPa)."""
         return self.alpha_ct * self.f_ctk_005 / self.gamma_c_accidental
 
-    @cached_property
+    @property
     def E_cm(self) -> float:
         """
         Secant modulus of elasticity (§Table 3.1), MPa.
@@ -242,7 +231,7 @@ class ConcreteMaterial(BaseMaterial):
         """Implements BaseMaterial abstract method: return E_cm (MPa)."""
         return self.E_cm
 
-    @cached_property
+    @property
     def epsilon_c1(self) -> float:
         """
         Strain at peak stress for parabola-rectangle diagram (§Table 3.1).
@@ -253,42 +242,42 @@ class ConcreteMaterial(BaseMaterial):
         """
         return min(0.7 * (self.f_cm ** 0.31) / 1000.0, 0.0028)
 
-    @cached_property
+    @property
     def epsilon_cu1(self) -> float:
         """Ultimate strain for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0035
         return (2.8 + 27.0 * (((98.0 - self.f_cm) / 100.0) ** 4.0)) / 1000.0
 
-    @cached_property
+    @property
     def epsilon_c2(self) -> float:
         """Strain at reaching f_ck for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0020
         return (2.0 + 0.085 * ((self.f_ck - 50.0) ** 0.53)) / 1000.0
 
-    @cached_property
+    @property
     def epsilon_cu2(self) -> float:
         """Ultimate strain for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.0035
         return (2.6 + 35.0 * (((90.0 - self.f_ck) / 100.0) ** 4.0)) / 1000.0
 
-    @cached_property
+    @property
     def n(self) -> float:
         """Exponent for parabola-rectangle (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 2.0
         return 1.4 + 23.4 * (((90.0 - self.f_ck) / 100.0) ** 4.0)
 
-    @cached_property
+    @property
     def epsilon_c3(self) -> float:
         """Strain at reaching f_ck for bilinear (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:
             return 0.00175
         return (1.75 + 0.55 * ((self.f_ck - 50.0) / 40.0)) / 1000.0
 
-    @cached_property
+    @property
     def epsilon_cu3(self) -> float:
         """Ultimate strain for bilinear (§Table 3.1), dimensionless."""
         if self.f_ck <= 50:

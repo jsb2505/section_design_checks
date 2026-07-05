@@ -8,7 +8,6 @@ N_Ed, M_Ed, and V_Ed are now parameters to perform_check(),not fields.
 This enables checking multiple load cases against the same section efficiently.
 """
 
-from functools import cached_property
 from typing import Optional, ClassVar
 from math import atan, degrees, radians, sin, sqrt
 import warnings
@@ -78,12 +77,21 @@ class ShearCheck(BaseCodeCheck):
     - Variable strut angle 21.8° ≤ θ ≤ 45° (cot θ = 1.0 to 2.5)
 
     Attributes:
-        section: RC section geometry
+        section:RC section geometry
         concrete: Concrete material
         shear_reinforcement: Shear links/stirrups (optional)
-        use_accidental: Use accidental limit state partial factors (default: False)
-        use_rigorous: Use solver-based approach for NA and lever arm (default: True)
-        cap_lever_arm: Cap lever arm to 0.9d per EC2 (default: True, rigorous mode only)
+        use_accidental:
+            Use accidental limit state partial factors (default: False)
+        use_rigorous:
+            Use solver-based approach for NA and lever arm (default: True)
+        allow_negative_sigma_cp:
+            Allow negative σ_cp from tensile axial forces (default: True)
+            If True, negative σ_cp reduces shear capacity
+            If False, σ_cp is limited to a minimum of 0.0 MPa
+        use_transformed_area_for_sigma_cp: 
+            Use transformed area (concrete + n·steel) for σ_cp calculation (default: True)
+        cap_lever_arm:
+            Cap lever arm to 0.9d per EC2 (default: True, rigorous mode only)
         concrete_model_type: Concrete stress-strain model (for rigorous mode)
         steel_model_type: Steel stress-strain branch (for rigorous mode)
 
@@ -217,44 +225,53 @@ class ShearCheck(BaseCodeCheck):
     # Internal state (private)
     # =========================
 
-    _diagram: MNInteractionDiagram = PrivateAttr()
+    _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
+    _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
 
     # Constants from EC2
     MIN_COT_THETA: ClassVar[float] = 1.0  # θ = 45°
     MAX_COT_THETA: ClassVar[float] = 2.5  # θ = 21.8°
 
-    def model_post_init(self, __context):
-        """
-        Create M-N diagram for both modes (but don't generate curve points).
+    def _take_snapshot(self) -> dict:
+        """Capture current state of inputs that affect the interaction diagram."""
+        return {
+            "section": self.section.model_dump(),
+            "concrete": self.concrete.model_dump(),
+            "concrete_model_type": self.concrete_model_type,
+            "steel_model_type": self.steel_model_type,
+            "use_accidental": self.use_accidental,
+        }
 
-        Both rigorous and approximate modes need the diagram for compression face detection.
-        The difference:
-        - Rigorous: also computes accurate lever arm from force centroids
-        - Approximate: only uses diagram for compression face, always z=0.9d
-        """
-        super().model_post_init(__context)
+    def _get_diagram(self) -> MNInteractionDiagram:
+        """Get the cached diagram, rebuilding if inputs have changed."""
+        snapshot = self._take_snapshot()
+        if self._diagram is None or snapshot != self._diagram_snapshot:
+            self._diagram = MNInteractionDiagram(
+                section=self.section,
+                concrete=self.concrete,
+                concrete_model_type=self.concrete_model_type,
+                steel_model_type=self.steel_model_type,
+                use_characteristic=False,
+                use_accidental=self.use_accidental,
+            )
+            self._diagram_snapshot = snapshot
+        return self._diagram
 
-        # Create diagram (mesh + models) but DON'T generate curve points
-        # This saves ~900ms initialization time - we only need the forward model
-        # for the inverse solver
-        self._diagram = MNInteractionDiagram(
-            section=self.section,
-            concrete=self.concrete,
-            concrete_model_type=self.concrete_model_type,
-            steel_model_type=self.steel_model_type,
-            use_characteristic=False,  # Use design strengths
-            use_accidental=self.use_accidental,  # Match limit state
-        )
+    @property
+    def _A_transformed(self) -> float:
+        """Transformed area (mm²)."""
+        return self.section.get_transformed_area(self.concrete.E_cm)
 
-        # cached properties to save time later
-        self._A_transformed = self.section.get_transformed_area(self.concrete.E_cm)  # mm²
-        self._A_gross = self.section.get_area()  # mm²
+    @property
+    def _A_gross(self) -> float:
+        """Gross area (mm²)."""
+        return self.section.get_area()
 
     # ===============================================
     # Properties (immutable - don't depend on loads)
     # ===============================================
 
-    @cached_property
+    @property
     def breadth(self) -> float:
         """
         Minimum web breadth b_w for shear design (mm).
@@ -267,17 +284,17 @@ class ShearCheck(BaseCodeCheck):
             return self.breadth_override
         return calculate_section_breadth(self.section)
 
-    @cached_property
+    @property
     def f_cd_design(self) -> float:
         """Design concrete strength (accidental or persistent) in MPa."""
         return self.concrete.f_cd_accidental if self.use_accidental else self.concrete.f_cd
 
-    @cached_property
+    @property
     def gamma_c_design(self) -> float:
         """Partial factor for concrete (accidental or persistent)."""
         return self.concrete.gamma_c_accidental if self.use_accidental else self.concrete.gamma_c
 
-    @cached_property
+    @property
     def f_ywd_design(self) -> float:
         """Design yield strength of shear reinforcement (accidental or persistent) in MPa."""
         if self.shear_reinforcement is None:
@@ -352,9 +369,9 @@ class ShearCheck(BaseCodeCheck):
             return _get_conservative_d()
 
         # If strains missing, try to solve if you can (robust helper)
-        if (eps_top is None or eps_bottom is None) and self._diagram:
+        if eps_top is None or eps_bottom is None:
             try:
-                eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
+                eps_top, eps_bottom = self._get_diagram().find_strains_for_MN(M_Ed, N_Ed)
             except Exception:
                 eps_top, eps_bottom = None, None
 
@@ -422,7 +439,7 @@ class ShearCheck(BaseCodeCheck):
             (z_ec2, z_mech)
         """
         # No diagram available (or user opted out) => always use EC2 approx
-        if (self._diagram is None) or (not self.use_rigorous):
+        if not self.use_rigorous:
             return (0.9 * d, None)
 
         # Delegate to MNInteractionDiagram; it should:
@@ -430,7 +447,7 @@ class ShearCheck(BaseCodeCheck):
         # - fallback to 0.9d when z_mech is None / suspicious
         # - optionally cap to 0.9d
         # - emit warnings when fallback/cap occurs
-        return self._diagram.get_lever_arm(
+        return self._get_diagram().get_lever_arm(
             M_Ed=M_Ed,
             N_Ed=N_Ed,
             d=d,
@@ -467,7 +484,7 @@ class ShearCheck(BaseCodeCheck):
         Returns:
             ρ_l (dimensionless)
         """
-        if not self.use_rigorous or self._diagram is None:
+        if not self.use_rigorous:
             # Approximate mode: if we have strain information, use it to determine tension side
             # This handles hogging/sagging and N-M interaction correctly
             if eps_top is not None and eps_bottom is not None:
@@ -493,7 +510,7 @@ class ShearCheck(BaseCodeCheck):
 
         # Rigorous: use actual NA from strain state
         if eps_top is None or eps_bottom is None:
-            eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
+            eps_top, eps_bottom = self._get_diagram().find_strains_for_MN(M_Ed, N_Ed)
         return self._compute_rho_l_from_strains(eps_top, eps_bottom, d)
 
 
@@ -724,8 +741,8 @@ class ShearCheck(BaseCodeCheck):
         # Solve for strains once (both modes need for compression face detection)
         # This avoids redundant solves and ensures consistency
         # Only solve if M_Ed is non-zero (moment determines compression face, not axial load)
-        if self._diagram is not None and abs(M_Ed) > 1e-6:
-            eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
+        if abs(M_Ed) > 1e-6:
+            eps_top, eps_bottom = self._get_diagram().find_strains_for_MN(M_Ed, N_Ed)
         else:
             eps_top, eps_bottom = None, None
 

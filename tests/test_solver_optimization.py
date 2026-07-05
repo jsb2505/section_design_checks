@@ -41,9 +41,10 @@ def test_solver_not_called_when_M_zero():
 
     print("\n=== Test: Solver NOT called when M_Ed = 0 ===")
 
-    # Patch the find_strains_for_MN method to track if it's called
+    # Force lazy diagram creation, then patch the find_strains_for_MN method
+    diagram = check._get_diagram()
     with patch.object(
-        check._diagram, 'find_strains_for_MN', wraps=check._diagram.find_strains_for_MN
+        diagram, 'find_strains_for_MN', wraps=diagram.find_strains_for_MN
     ) as mock_solver:
 
         # Case 1: Pure shear (M=0, N=0)

@@ -5,7 +5,6 @@ Provides common interface for all design checks (bending, shear, etc.).
 """
 
 from abc import ABC, abstractmethod
-from functools import cached_property
 from typing import Dict, Any, Optional
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
@@ -109,7 +108,6 @@ class BaseCodeCheck(BaseModel, ABC):
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
         validate_assignment=True,
-        ignored_types=(cached_property,),  # Allow cached_property in subclasses
     )
 
     @abstractmethod

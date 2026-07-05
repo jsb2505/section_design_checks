@@ -5,7 +5,6 @@ Implements characteristic and design strengths for reinforcing bar grades.
 """
 
 from enum import StrEnum
-from functools import cached_property
 from typing import Literal
 from pydantic import Field, ConfigDict
 from materials.core.base_material import BaseMaterial
@@ -15,6 +14,14 @@ from materials.core.base_material import BaseMaterial
 DuctilityClass = Literal["A", "B", "C"]
 
 # Steel grades according to EC2 §C.1 (single source of truth)
+# Table data: (f_yk, ft_ratio_min, epsilon_uk_min, ductility_class)
+_STEEL_GRADE_TABLE: dict[str, tuple[float, float, float, DuctilityClass]] = {
+    "B500A": (500.0, 1.05, 0.025, "A"),
+    "B500B": (500.0, 1.08, 0.050, "B"),
+    "B500C": (500.0, 1.15, 0.075, "C"),
+}
+
+
 class ReinforcingSteelGrade(StrEnum):
     '''
     Reinforcing steel grades supported as per EC2.
@@ -27,32 +34,19 @@ class ReinforcingSteelGrade(StrEnum):
     B500A = "B500A"
     B500B = "B500B"
     B500C = "B500C"
-
-    @property
-    def _data(self) -> tuple[float, float, float, DuctilityClass]:
-        """
-        Returns (f_yk, ft_ratio_min, epsilon_uk_min, ductility_class)
-        Explicitly typed to satisfy Pylance.
-        """
-        mapping: dict[ReinforcingSteelGrade, tuple[float, float, float, DuctilityClass]] = {
-            ReinforcingSteelGrade.B500A: (500.0, 1.05, 0.025, "A"),
-            ReinforcingSteelGrade.B500B: (500.0, 1.08, 0.050, "B"),
-            ReinforcingSteelGrade.B500C: (500.0, 1.15, 0.075, "C"),
-        }
-        return mapping[self]
     
     @property
-    def f_yk(self) -> float: return self._data[0]
+    def f_yk(self) -> float: return _STEEL_GRADE_TABLE[self][0]
 
     @property
-    def ft_ratio_min(self) -> float: return self._data[1]
+    def ft_ratio_min(self) -> float: return _STEEL_GRADE_TABLE[self][1]
 
     @property
-    def epsilon_uk_min(self) -> float: return self._data[2]
+    def epsilon_uk_min(self) -> float: return _STEEL_GRADE_TABLE[self][2]
 
     @property
     def ductility_class(self) -> DuctilityClass:
-        return self._data[3]
+        return _STEEL_GRADE_TABLE[self][3]
 
 
 class ReinforcingSteel(BaseMaterial):
@@ -68,7 +62,6 @@ class ReinforcingSteel(BaseMaterial):
     """
 
     model_config = ConfigDict(
-        ignored_types=(cached_property,),  # Allow cached_property to work
     )
 
     name: str = Field(default="Reinforcing Steel", description="Material name")
@@ -109,17 +102,17 @@ class ReinforcingSteel(BaseMaterial):
         """Characteristic yield strength (§C.1). All B500 grades: 500 MPa."""
         return self.grade.f_yk
 
-    @cached_property
+    @property
     def f_yd(self) -> float:
         """Design yield strength (§2.4.2.4): f_yd = f_yk / γ_s."""
         return self.f_yk / self.gamma_s
 
-    @cached_property
+    @property
     def f_yd_accidental(self) -> float:
         """Accidental design yield strength: f_yd = f_yk / γ_s,accidental."""
         return self.f_yk / self.gamma_s_accidental
 
-    @cached_property
+    @property
     def f_t(self) -> float:
         """
         Characteristic tensile strength f_tk (§C.1).
@@ -128,7 +121,7 @@ class ReinforcingSteel(BaseMaterial):
         """
         return self.grade.ft_ratio_min * self.f_yk
 
-    @cached_property
+    @property
     def f_td(self) -> float:
         """
         Design tensile strength f_td = f_t / γ_s.
@@ -137,7 +130,7 @@ class ReinforcingSteel(BaseMaterial):
         """
         return self.f_t / self.gamma_s
 
-    @cached_property
+    @property
     def f_td_accidental(self) -> float:
         """
         Accidental design tensile strength f_td,acc = f_t / γ_s,acc.
@@ -146,17 +139,17 @@ class ReinforcingSteel(BaseMaterial):
         """
         return self.f_t / self.gamma_s_accidental
 
-    @cached_property
+    @property
     def epsilon_yk(self) -> float:
         """Characteristic yield strain (§3.2.7): ε_yk = f_yk / E_s."""
         return self.f_yk / self.E_s
 
-    @cached_property
+    @property
     def epsilon_yd(self) -> float:
         """Design yield strain: ε_yd = f_yd / E_s."""
         return self.f_yd / self.E_s
 
-    @cached_property
+    @property
     def epsilon_uk(self) -> float:
         """
         Characteristic strain at maximum load (§C.1).
@@ -166,12 +159,12 @@ class ReinforcingSteel(BaseMaterial):
         """
         return self.grade.epsilon_uk_min
 
-    @cached_property
+    @property
     def epsilon_ud(self) -> float:
         """Design ultimate strain (§3.2.7): ε_ud = 0.9 · ε_uk."""
         return 0.9 * self.epsilon_uk
 
-    @cached_property
+    @property
     def k_ratio(self) -> float:
         """Ratio f_t/f_yk for ductility classification (§C.1)."""
         return self.grade.ft_ratio_min

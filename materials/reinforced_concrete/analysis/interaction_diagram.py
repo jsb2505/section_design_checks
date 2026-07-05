@@ -46,6 +46,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union, NamedTuple
 if TYPE_CHECKING:
     from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
     from materials.reinforced_concrete.materials.rebar import ShearRebar
+
 import warnings
 import csv
 import json

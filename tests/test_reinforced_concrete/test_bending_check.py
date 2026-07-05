@@ -607,7 +607,7 @@ class TestTensionShiftResultDataclass:
         shear_rebar = ShearRebar(grade="B500B", diameter=10, spacing=200, n_legs=2)
 
         # Use the diagram's apply_tension_shift method
-        shift_result = check._diagram.apply_tension_shift(
+        shift_result = check._get_diagram().apply_tension_shift(
             M_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
@@ -626,7 +626,7 @@ class TestTensionShiftResultDataclass:
         """Test that shift distance equals d when no shear reinforcement."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        shift_result = check._diagram.apply_tension_shift(
+        shift_result = check._get_diagram().apply_tension_shift(
             M_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
@@ -723,12 +723,12 @@ class TestMultipleLoadCases:
         """Test that diagram is cached and reused."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        # Store reference to internal diagram
+        # Trigger lazy diagram creation, then store reference
+        check.perform_check(M_Ed=50.0, N_Ed=200.0)
         diagram_ref = check._diagram
 
-        # Perform multiple checks
-        check.perform_check(M_Ed=50.0, N_Ed=200.0)
+        # Perform another check
         check.perform_check(M_Ed=100.0, N_Ed=500.0)
 
-        # Diagram should be the same object (cached)
+        # Diagram should be the same object (cached, inputs unchanged)
         assert check._diagram is diagram_ref

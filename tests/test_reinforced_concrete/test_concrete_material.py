@@ -41,8 +41,8 @@ class TestConcreteMaterial:
 
     def test_custom_alpha_cc(self):
         """Test custom alpha_cc."""
-        concrete = ConcreteMaterial(grade="C30/37", alpha_cc=0.85)
-        assert concrete.f_cd == pytest.approx(17.0)  # 0.85 * 30 / 1.5
+        concrete = ConcreteMaterial(grade="C30/37", alpha_cc=1.0)
+        assert concrete.f_cd == pytest.approx(20.0)  # 1.0 * 30 / 1.5
 
     def test_tensile_strength_normal_concrete(self, concrete_c30):
         """Test tensile strength for f_ck ≤ 50."""
@@ -106,7 +106,7 @@ class TestConcreteMaterial:
         assert concrete_c30.epsilon_cu3 == 0.0035
         assert concrete_c30.n == 2.0
 
-    def test_strain_parameters_high_strength(self, concrete_c50):
+    def test_strain_parameters_high_strength(self):
         """Test strain parameters for f_ck > 50."""
         # C50 is exactly at boundary, so use > 50 check
         # For C50: epsilon_c2 = 0.002 (not greater)
@@ -157,7 +157,7 @@ class TestConcreteMaterial:
         assert "30.0" in s  # f_ck
         assert "17.0" in s  # f_cd (with default alpha_cc=0.85)
 
-    def test_computed_fields_cannot_be_set(self, concrete_c30):
+    def test_readonly_properties(self, concrete_c30):
         """Test that computed fields are read-only."""
         with pytest.raises(Exception):
             concrete_c30.f_ck = 40.0
@@ -174,7 +174,7 @@ class TestConcreteMaterial:
 
     def test_json_serialization(self, concrete_c30):
         """Test JSON serialization."""
-        json_data = concrete_c30.model_dump()
+        json_data = concrete_c30.model_dump(mode="json")
         assert json_data["grade"] == "C30/37"
         assert json_data["gamma_c"] == 1.5
         # f_ck is a property derived from grade, not included in model_dump()
@@ -190,3 +190,25 @@ class TestConcreteMaterial:
         concrete = ConcreteMaterial(**json_data)
         assert concrete.grade == "C30/37"
         assert concrete.f_ck == 30.0
+
+    def test_50mpa_boundary_low(self):
+        """Test that C50/60 (f_ck=50) uses the ≤50 branch."""
+        c50 = ConcreteMaterial(grade="C50/60")
+        # ≤50 branch: fixed values
+        assert c50.f_ctm == pytest.approx(0.30 * (50 ** (2.0 / 3.0)), rel=1e-6)
+        assert c50.epsilon_c2 == 0.002
+        assert c50.epsilon_cu2 == 0.0035
+        assert c50.epsilon_c3 == 0.00175
+        assert c50.epsilon_cu3 == 0.0035
+        assert c50.n == 2.0
+
+    def test_50mpa_boundary_high(self):
+        """Test that C55/67 (f_ck=55) uses the >50 branch."""
+        import math
+        c55 = ConcreteMaterial(grade="C55/67")
+        # >50 branch: calculated values
+        assert c55.f_ctm == pytest.approx(2.12 * math.log(1 + c55.f_cm / 10), rel=1e-6)
+        assert c55.epsilon_c2 > 0.002
+        assert c55.epsilon_cu2 < 0.0035
+        assert c55.epsilon_c3 > 0.00175
+        assert c55.n < 2.0

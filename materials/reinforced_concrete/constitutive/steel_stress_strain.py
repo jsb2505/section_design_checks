@@ -9,8 +9,6 @@ Implements EC2 Fig 3.8 with options for:
 from __future__ import annotations
 
 from enum import StrEnum
-from functools import cached_property
-
 import numpy as np
 import numpy.typing as npt
 from pydantic import Field, model_validator
@@ -81,7 +79,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
     )
 
 
-    @cached_property
+    @property
     def f_y(self) -> float:
         """Yield strength (design, characteristic, or accidental)."""
         if self.use_characteristic:
@@ -90,12 +88,12 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
             return self.steel.f_yd_accidental
         return self.steel.f_yd
 
-    @cached_property
+    @property
     def epsilon_y(self) -> float:
         """Yield strain corresponding to f_y."""
         return self.f_y / self.steel.E_s
 
-    @cached_property
+    @property
     def f_t(self) -> float:
         """Tensile strength for inclined branch (design, characteristic, or accidental)."""
         if self.use_characteristic:

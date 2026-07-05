@@ -23,6 +23,9 @@ output/figures/*.png
 output/data/*.json
 output/data/*.csv
 _superceded/
+docs/
+analytics/
+output/
 
 # Temporary files
 *.tmp

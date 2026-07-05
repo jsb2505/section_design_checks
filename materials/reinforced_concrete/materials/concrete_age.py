@@ -5,7 +5,6 @@ properties for early-age concrete behaviour and strength development.
 """
 
 from enum import StrEnum
-from functools import cached_property
 from math import exp, sqrt
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -55,7 +54,6 @@ class ConcreteAge(BaseModel):
         arbitrary_types_allowed=True,
         extra="forbid",
         frozen=False,
-        ignored_types=(cached_property,),  # Allow cached_property to work
     )
 
     concrete: ConcreteMaterial = Field(
@@ -74,7 +72,7 @@ class ConcreteAge(BaseModel):
         description="Cement strength class: R (rapid), N (normal), S (slow)",
     )
 
-    @cached_property
+    @property
     def beta_cc_t(self) -> float:
         """
         Coefficient for strength development over time (§3.1.2(6), Eq. 3.2).
@@ -84,7 +82,7 @@ class ConcreteAge(BaseModel):
         s = self.cement_class.s_coefficient
         return exp(s * (1.0 - sqrt(28.0 / self.age)))
 
-    @cached_property
+    @property
     def f_cm_t(self) -> float:
         """
         Mean cylinder compressive strength at age t (§3.1.2(6), Eq. 3.1).
@@ -93,7 +91,7 @@ class ConcreteAge(BaseModel):
         """
         return self.beta_cc_t * self.concrete.f_cm
 
-    @cached_property
+    @property
     def f_ck_t(self) -> float:
         """
         Characteristic cylinder compressive strength at age t (§3.1.2(5)).
@@ -103,7 +101,7 @@ class ConcreteAge(BaseModel):
         """
         return self.f_cm_t - 8.0
 
-    @cached_property
+    @property
     def f_ctm_t(self) -> float:
         """
         Mean tensile strength at age t (§3.1.2(9), Eq. 3.4).
@@ -117,7 +115,7 @@ class ConcreteAge(BaseModel):
         alpha = 1.0 if self.age < 28.0 else (2.0 / 3.0)
         return self.concrete.f_ctm * (self.beta_cc_t ** alpha)
 
-    @cached_property
+    @property
     def f_ctd_t(self) -> float:
         """
         Design tensile strength at age t.
@@ -128,7 +126,7 @@ class ConcreteAge(BaseModel):
         f_ctk_t = 0.7 * self.f_ctm_t
         return self.concrete.alpha_ct * f_ctk_t / self.concrete.gamma_c
 
-    @cached_property
+    @property
     def E_cm_t(self) -> float:
         """
         Secant modulus of elasticity at age t (§3.1.3(3), Eq. 3.5).

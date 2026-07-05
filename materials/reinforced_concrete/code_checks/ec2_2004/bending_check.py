@@ -5,7 +5,6 @@ This is a FIRST PRINCIPLES check based on strain compatibility and force equilib
 Uses the fibre-based M-N interaction diagram infrastructure.
 """
 
-from functools import cached_property
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import Field, PrivateAttr
@@ -112,61 +111,62 @@ class BendingCheck(BaseCodeCheck):
     # Internal state (private)
     # ===========================
 
-    _diagram: MNInteractionDiagram = PrivateAttr()
+    _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
     _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
+    _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
+    _diagram_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
 
-    def model_post_init(self, __context):
-        """
-        Create M-N interaction diagram on initialization for reuse across multiple checks.
-
-        This significantly improves performance when checking multiple load cases against
-        the same section, as the diagram (mesh + material models) only needs to be created once.
-        """
-        super().model_post_init(__context)
-
-        # Create and cache the diagram for reuse (with compression steel)
-        self._diagram = create_interaction_diagram(
-            section=self.section,
-            concrete=self.concrete,
-            concrete_model_type=self.concrete_model_type,
-            steel_model_type=self.steel_model_type,
-            n_fibres_width=self.n_fibres_width,
-            n_fibres_height=self.n_fibres_height,
-            use_accidental=self.use_accidental,
-            ignore_compression_steel=False,
-        )
-        # Diagram without compression steel is created lazily on first use
-        self._diagram_no_comp_steel = None
-
-        # cached properties to save time later
-        self._A_transformed = self.section.get_transformed_area(self.concrete.E_cm)  # mm²
-        self._A_gross = self.section.get_area()  # mm²
+    def _take_snapshot(self) -> dict:
+        """Capture current state of inputs that affect the interaction diagram."""
+        return {
+            "section": self.section.model_dump(),
+            "concrete": self.concrete.model_dump(),
+            "concrete_model_type": self.concrete_model_type,
+            "steel_model_type": self.steel_model_type,
+            "n_fibres_width": self.n_fibres_width,
+            "n_fibres_height": self.n_fibres_height,
+            "use_accidental": self.use_accidental,
+        }
 
     def _get_diagram(self, ignore_compression_steel: bool = False) -> MNInteractionDiagram:
-        """Get the appropriate cached diagram based on ignore_compression_steel flag."""
-        if not ignore_compression_steel:
-            return self._diagram
+        """Get the cached diagram, rebuilding if inputs have changed."""
+        snapshot = self._take_snapshot()
 
-        # Lazily create the diagram without compression steel
-        if self._diagram_no_comp_steel is None:
-            self._diagram_no_comp_steel = create_interaction_diagram(
-                section=self.section,
-                concrete=self.concrete,
-                concrete_model_type=self.concrete_model_type,
-                steel_model_type=self.steel_model_type,
-                n_fibres_width=self.n_fibres_width,
-                n_fibres_height=self.n_fibres_height,
-                use_accidental=self.use_accidental,
-                ignore_compression_steel=True,
-            )
-        return self._diagram_no_comp_steel
+        if ignore_compression_steel:
+            if self._diagram_no_comp_steel is None or snapshot != self._diagram_no_comp_snapshot:
+                self._diagram_no_comp_steel = create_interaction_diagram(
+                    section=self.section,
+                    concrete=self.concrete,
+                    concrete_model_type=self.concrete_model_type,
+                    steel_model_type=self.steel_model_type,
+                    n_fibres_width=self.n_fibres_width,
+                    n_fibres_height=self.n_fibres_height,
+                    use_accidental=self.use_accidental,
+                    ignore_compression_steel=True,
+                )
+                self._diagram_no_comp_snapshot = snapshot
+            return self._diagram_no_comp_steel
+        else:
+            if self._diagram is None or snapshot != self._diagram_snapshot:
+                self._diagram = create_interaction_diagram(
+                    section=self.section,
+                    concrete=self.concrete,
+                    concrete_model_type=self.concrete_model_type,
+                    steel_model_type=self.steel_model_type,
+                    n_fibres_width=self.n_fibres_width,
+                    n_fibres_height=self.n_fibres_height,
+                    use_accidental=self.use_accidental,
+                    ignore_compression_steel=False,
+                )
+                self._diagram_snapshot = snapshot
+            return self._diagram
 
 
     # ===============================================
     # Properties (immutable - don't depend on loads)
     # ===============================================
 
-    @cached_property
+    @property
     def f_cd_design(self) -> float:
         """Design concrete strength (accidental or persistent) in MPa."""
         return self.concrete.f_cd_accidental if self.use_accidental else self.concrete.f_cd
@@ -270,7 +270,7 @@ class BendingCheck(BaseCodeCheck):
                 raise ValueError("V_Ed must be provided when M_cap is provided (tension shift enabled)")
 
             # Use the diagram's apply_tension_shift which handles all the policy decisions
-            shift_result = self._diagram.apply_tension_shift(
+            shift_result = self._get_diagram().apply_tension_shift(
                 M_Ed=M_Ed_original,
                 V_Ed=float(V_Ed),
                 N_Ed=float(N_Ed),
@@ -396,7 +396,7 @@ class BendingCheck(BaseCodeCheck):
             Tuple of (M_Rd_positive, M_Rd_negative) in kN·m
             Returns (None, None) if N_Ed is outside the interaction diagram bounds.
         """
-        N_cap, M_Rd_pos, M_Rd_neg = self._diagram.get_capacity_fixed_n(N_Ed=N_Ed)
+        N_cap, M_Rd_pos, M_Rd_neg = self._get_diagram().get_capacity_fixed_n(N_Ed=N_Ed)
 
         if N_cap is not None:
             if N_cap >= 0:  # N_cap is positive
@@ -420,7 +420,7 @@ class BendingCheck(BaseCodeCheck):
         Returns:
             Tuple of (N_array, M_array) for plotting
         """
-        return self._diagram.get_diagram_arrays(n_points=n_points)
+        return self._get_diagram().get_diagram_arrays(n_points=n_points)
 
     def plot_mn(
         self,

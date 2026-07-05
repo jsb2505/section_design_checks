@@ -69,7 +69,7 @@ class MNDiagramViewer:
             mode="lines",
             name="M-N Capacity",
             line=dict(color="black", width=2),
-            hovertemplate="M: %{x:.3g} kN·m<br>N: %{y:.3g} kN<extra></extra>",
+            hovertemplate="M: %{x:.1f} kN·m<br>N: %{y:.1f} kN<extra></extra>",
         ))
 
         # 3. Add Origin Marker
@@ -131,13 +131,13 @@ class MNDiagramViewer:
                 if show_metadata:
                     hover_text = (
                         f"<b>{name_lp}</b><br>"
-                        f"N_Ed: {N_Ed:.3g} kN<br>"
-                        f"M_Ed: {M_Ed:.3g} kN·m<br>"
+                        f"N_Ed: {N_Ed:.1f} kN<br>"
+                        f"M_Ed: {M_Ed:.1f} kN·m<br>"
                     )
                     if capacity.N_Rd is not None:
                         hover_text += (
-                            f"N_Rd: {capacity.N_Rd:.3g} kN<br>"
-                            f"M_Rd: {capacity.M_Rd:.3g} kN·m<br>"
+                            f"N_Rd: {capacity.N_Rd:.1f} kN<br>"
+                            f"M_Rd: {capacity.M_Rd:.1f} kN·m<br>"
                             f"Utilization: {capacity.utilization:.1%}<br>"
                             f"Status: {'✓ PASS' if capacity.is_safe else '✗ FAIL'}"
                         )

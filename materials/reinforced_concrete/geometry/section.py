@@ -12,7 +12,7 @@ Supports:
 from __future__ import annotations
 
 from functools import cached_property
-from typing import TYPE_CHECKING, List, Tuple, Optional, Literal, Any
+from typing import TYPE_CHECKING, Annotated, List, Sequence, Tuple, Optional, Literal, Any
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.materials.concrete import ConcreteMaterial
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 import numpy as np
 from shapely.geometry import Polygon, Point as ShapelyPoint
-from pydantic import BaseModel, Field, ConfigDict, model_validator, PrivateAttr
+from pydantic import BaseModel, BeforeValidator, Field, ConfigDict, model_validator, PrivateAttr
 
 from materials.core.geometry import BaseGeometry, Point2D
 from materials.reinforced_concrete.materials.rebar import Rebar
@@ -228,6 +228,29 @@ class RebarGroup(BaseModel):
         return f"RebarGroup({self.n_bars}×{self.rebar}, layer={self.layer_name})"
 
 
+def _coerce_point2d(v: Any) -> Any:
+    """Accept Point2D, (x, y) tuple/list, or dict."""
+    if isinstance(v, Point2D):
+        return v
+    if isinstance(v, (tuple, list)) and len(v) == 2:
+        return Point2D(x=v[0], y=v[1])
+    return v  # let Pydantic validate/reject
+
+
+def _coerce_point2d_sequence(v: Any) -> Tuple[Point2D, ...]:
+    """Coerce a sequence of Point2D-like items."""
+    if isinstance(v, (tuple, list)):
+        return tuple(_coerce_point2d(item) for item in v)
+    return v
+
+
+def _coerce_voids(v: Any) -> Tuple[Tuple[Point2D, ...], ...]:
+    """Coerce nested sequence of Point2D-like items for voids."""
+    if isinstance(v, (tuple, list)):
+        return tuple(_coerce_point2d_sequence(ring) for ring in v)
+    return v
+
+
 class RCSection(BaseGeometry):
     """
     Reinforced concrete section with arbitrary polygonal outline.
@@ -259,13 +282,13 @@ class RCSection(BaseGeometry):
         ),
     )
 
-    outline_coords: Tuple[Point2D, ...] = Field(
+    outline_coords: Annotated[Tuple[Point2D, ...], BeforeValidator(_coerce_point2d_sequence)] = Field(
         ...,
         description="Exterior ring coordinates (mm). First/last may be same; will be closed.",
         min_length=3,
     )
 
-    voids_coords: Tuple[Tuple[Point2D, ...], ...] = Field(
+    voids_coords: Annotated[Tuple[Tuple[Point2D, ...], ...], BeforeValidator(_coerce_voids)] = Field(
         default_factory=tuple,
         description="Interior rings (holes), each a tuple of coordinates (mm).",
     )
@@ -312,7 +335,7 @@ class RCSection(BaseGeometry):
     )
 
     section_name: Optional[str] = Field(
-        None,
+        default=None,
         description="Section identifier"
     )
 
@@ -1041,7 +1064,7 @@ def create_rectangular_section(
 
 def create_circular_section(
     diameter: float,
-    n_points: int = 32,
+    n_points: int = 60,
     origin: Tuple[float, float] = (0.0, 0.0),
     hook_ref: int = 1,
     section_name: Optional[str] = None,
@@ -1061,7 +1084,7 @@ def create_circular_section(
         n_points: Number of points to approximate circle (default: 32)
         origin: Hook point coordinates (default: (0, 0))
         hook_ref: Hook reference point (0=centre, 1=bottom-left, etc.). Default: 1
-        section_name: Optional section name
+        section_name: Optional section name (default: None)
 
     Returns:
         RCSection with circular outline

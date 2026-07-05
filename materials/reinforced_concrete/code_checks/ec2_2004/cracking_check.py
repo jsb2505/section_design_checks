@@ -5,7 +5,6 @@ This is a SERVICEABILITY check using characteristic material properties and
 elastic/cracked section analysis to calculate crack widths.
 """
 
-from functools import cached_property
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import List, Optional, Tuple
@@ -152,39 +151,48 @@ class CrackingCheck(BaseCodeCheck):
     # National Annex coefficients for crack spacing (EC2 §7.3.4(3))
     k_3: float = Field(
         default=3.4,
-        description="National Annex coefficient k_3 for crack spacing (recommended 3.4)",
+        description="National Annex coefficient k_3 for crack spacing",
     )
 
     k_4: float = Field(
         default=0.425,
-        description="National Annex coefficient k_4 for crack spacing (recommended 0.425)",
+        description="National Annex coefficient k_4 for crack spacing",
     )
 
     # ===========================
     # Internal state (private)
     # ===========================
 
-    _diagram: MNInteractionDiagram = PrivateAttr()
+    _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
+    _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
 
-    def model_post_init(self, __context):
-        """
-        Create M-N interaction diagram on initialization.
+    def _take_snapshot(self) -> dict:
+        """Capture current state of inputs that affect the interaction diagram."""
+        return {
+            "section": self.section.model_dump(),
+            "concrete": self.concrete.model_dump(),
+            "concrete_model_type": self.concrete_model_type,
+            "steel_model_type": self.steel_model_type,
+            "n_fibres_width": self.n_fibres_width,
+            "n_fibres_height": self.n_fibres_height,
+        }
 
-        Uses characteristic strengths for serviceability analysis.
-        """
-        super().model_post_init(__context)
-
-        # Create diagram with CHARACTERISTIC strengths for SLS
-        self._diagram = create_interaction_diagram(
-            section=self.section,
-            concrete=self.concrete,
-            concrete_model_type=self.concrete_model_type,
-            steel_model_type=self.steel_model_type,
-            n_fibres_width=self.n_fibres_width,
-            n_fibres_height=self.n_fibres_height,
-            use_characteristic=True,  # SLS uses characteristic values
-            ignore_compression_steel=False,
-        )
+    def _get_diagram(self) -> MNInteractionDiagram:
+        """Get the cached diagram, rebuilding if inputs have changed."""
+        snapshot = self._take_snapshot()
+        if self._diagram is None or snapshot != self._diagram_snapshot:
+            self._diagram = create_interaction_diagram(
+                section=self.section,
+                concrete=self.concrete,
+                concrete_model_type=self.concrete_model_type,
+                steel_model_type=self.steel_model_type,
+                n_fibres_width=self.n_fibres_width,
+                n_fibres_height=self.n_fibres_height,
+                use_characteristic=True,  # SLS uses characteristic values
+                ignore_compression_steel=False,
+            )
+            self._diagram_snapshot = snapshot
+        return self._diagram
 
     # ===============================================
     # Properties (immutable - don't depend on loads)
@@ -207,12 +215,12 @@ class CrackingCheck(BaseCodeCheck):
         """Factor for load duration (EC2 §7.3.4(2))."""
         return self.load_duration.k_t
 
-    @cached_property
+    @property
     def k_1(self) -> float:
         """Bond coefficient (EC2 §7.3.4(3)): 0.8 for high bond, 1.6 for plain."""
         return 0.8 if self.is_high_bond_bar else 1.6
 
-    @cached_property
+    @property
     def E_cm_eff(self) -> float:
         """
         Effective concrete modulus accounting for creep (EC2 §7.4.3).
@@ -227,7 +235,7 @@ class CrackingCheck(BaseCodeCheck):
         """
         return self.concrete.get_elastic_modulus() / self.effective_modulus_ratio
 
-    @cached_property
+    @property
     def alpha_e(self) -> float:
         """
         Modular ratio E_s / E_cm,eff (EC2 §7.3.4(2)).
@@ -910,7 +918,7 @@ class CrackingCheck(BaseCodeCheck):
 
         # Step 2: Solve for strain state (cracked section)
         try:
-            eps_top, eps_bottom = self._diagram.find_strains_for_MN(
+            eps_top, eps_bottom = self._get_diagram().find_strains_for_MN(
                 M_target=M_Ed,
                 N_target=N_Ed,
             )
@@ -1089,7 +1097,7 @@ class CrackingCheck(BaseCodeCheck):
             )
 
         # Solve strain state
-        eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
+        eps_top, eps_bottom = self._get_diagram().find_strains_for_MN(M_Ed, N_Ed)
 
         # Calculate all values
         x = flexure_utils.calculate_neutral_axis_depth_from_strains(

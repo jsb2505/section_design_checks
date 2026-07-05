@@ -22,7 +22,6 @@ This avoids discontinuities while not creating a post-crushing plateau.
 from __future__ import annotations
 
 from enum import StrEnum
-from functools import cached_property
 from typing import Optional
 
 import numpy as np
@@ -116,7 +115,7 @@ class ConcreteStressStrainSchematic(BaseConstitutiveModel):
     )
 
 
-    @cached_property
+    @property
     def k(self) -> float:
         """k = 1.05 · E_cm · |ε_c1| / f_cm"""
         return 1.05 * self.concrete.E_cm * abs(self.concrete.epsilon_c1) / self.concrete.f_cm
@@ -289,7 +288,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         """True if EC2 §3.1.9 confinement is active (sigma_2 > 0)."""
         return self.sigma_2 is not None and self.sigma_2 > 0.0
 
-    @cached_property
+    @property
     def f_ck_c(self) -> float:
         """
         Confined characteristic strength per EC2 §3.1.9.
@@ -311,7 +310,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         else:
             return f_ck * (1.125 + 2.5 * ratio)
 
-    @cached_property
+    @property
     def epsilon_c2_c(self) -> float:
         """
         Confined strain at peak stress per EC2 §3.1.9 Eq. 3.26.
@@ -328,7 +327,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         strength_ratio = self.f_ck_c / f_ck
         return eps_c2 * (strength_ratio ** 2)
 
-    @cached_property
+    @property
     def epsilon_cu2_c(self) -> float:
         """
         Confined ultimate strain per EC2 §3.1.9 Eq. 3.27.
@@ -345,7 +344,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         sigma_2 = float(self.sigma_2)  # type: ignore[arg-type]
         return eps_cu2 + 0.2 * sigma_2 / f_ck
 
-    @cached_property
+    @property
     def f_c(self) -> float:
         """
         Design, characteristic, or accidental strength depending on flags.
@@ -591,7 +590,7 @@ class ConcreteStressStrainBilinear(BaseConstitutiveModel):
         description="Tolerance for ultimate strain clipping (dimensionless strain).",
     )
 
-    @cached_property
+    @property
     def f_c(self) -> float:
         """Design, characteristic, or accidental strength depending on flags."""
         if self.use_characteristic:
