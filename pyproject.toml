@@ -32,7 +32,7 @@ dependencies = [
 
 [project.optional-dependencies]
 viz = [
-    "matplotlib>=3.7.0",
+    "plotly>=5.0.0",
 ]
 api = [
     "fastapi>=0.104.0",
