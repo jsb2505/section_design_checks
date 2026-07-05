@@ -132,18 +132,18 @@ class ShearCheck(BaseCodeCheck):
         ... )
         >>>
         >>> # Simple check - just shear force (My_Ed and N_Ed default to 0)
-        >>> result = check.perform_check(load_case=LoadCase(Vy_Ed=150))
+        >>> result = check.perform_check(load_case=LoadCase(V_Ed=150))
         >>>
         >>> # With moment and axial force
         >>> result = check.perform_check(
-        ...     load_case=LoadCase(Vy_Ed=150, My_Ed=50, N_Ed=100)
+        ...     load_case=LoadCase(V_Ed=150, My_Ed=50, N_Ed=100)
         ... )
         >>>
         >>> # Check multiple load cases (use list comprehension)
         >>> load_cases = [
-        ...     LoadCase(Vy_Ed=150, My_Ed=50, N_Ed=100),   # Sagging
-        ...     LoadCase(Vy_Ed=120, My_Ed=-30, N_Ed=80),   # Hogging
-        ...     LoadCase(Vy_Ed=100),                        # Pure shear
+        ...     LoadCase(V_Ed=150, My_Ed=50, N_Ed=100),   # Sagging
+        ...     LoadCase(V_Ed=120, My_Ed=-30, N_Ed=80),   # Hogging
+        ...     LoadCase(V_Ed=100),                        # Pure shear
         ... ]
         >>> results = [check.perform_check(load_case=case) for case in load_cases]
     """
@@ -1342,7 +1342,7 @@ class ShearCheck(BaseCodeCheck):
         Examples:
             >>> # Single load case
             >>> result = check.perform_check(
-            ...     load_case=LoadCase(Vy_Ed=150, My_Ed=50, N_Ed=100)
+            ...     load_case=LoadCase(V_Ed=150, My_Ed=50, N_Ed=100)
             ... )
             >>>
             >>> # Multiple load cases - use list comprehension
@@ -1390,11 +1390,13 @@ class ShearCheck(BaseCodeCheck):
         # Derive effective shear direction from the shear components whenever EITHER
         # is non-zero (was previously AND, so a pure minor-axis shear kept the default
         # major-axis breadth while the I_eff angle below rotated to 90° — an axis
-        # mismatch). Normalised so pure major-axis shear maps exactly to the default
-        # (0, 1) and uses the cached breadth unchanged.
-        if abs(Vz_Ed) > 1e-9 or abs(Vy_Ed) > 1e-9:
-            _mag = hypot(Vz_Ed, Vy_Ed)
-            shear_direction: tuple[float, float] = (Vz_Ed / _mag, Vy_Ed / _mag)
+        # mismatch). The tuple is (vx, vy) = (horizontal, vertical): the minor/horizontal
+        # shear Vy_Ed is the x-component and the major/vertical shear Vz_Ed the y-component,
+        # so pure major-axis shear (Vz_Ed) maps exactly to the default (0, 1) = vertical
+        # and uses the cached breadth unchanged.
+        if abs(Vy_Ed) > 1e-9 or abs(Vz_Ed) > 1e-9:
+            _mag = hypot(Vy_Ed, Vz_Ed)
+            shear_direction: tuple[float, float] = (Vy_Ed / _mag, Vz_Ed / _mag)
         else:
             shear_direction = self.breadth_shear_direction
 
@@ -1460,9 +1462,9 @@ class ShearCheck(BaseCodeCheck):
 
         # Compute both V_Rd,c variants and choose the one used for design.
         # Shear angle for generalised I: angle of the neutral axis from horizontal,
-        # equal to the angle of the shear force vector from vertical (y-axis).
-        # 0° → vertical shear (Vy_Ed only) → I_xx; 90° → horizontal shear → I_yy.
-        _shear_angle_deg = degrees(atan2(Vz_Ed, Vy_Ed)) if (abs(Vz_Ed) > 1e-9 or abs(Vy_Ed) > 1e-9) else 0.0
+        # equal to the angle of the shear force vector from the vertical axis.
+        # 0° → vertical/major shear (Vz_Ed only) → I_xx; 90° → horizontal/minor shear (Vy_Ed) → I_yy.
+        _shear_angle_deg = degrees(atan2(Vy_Ed, Vz_Ed)) if (abs(Vy_Ed) > 1e-9 or abs(Vz_Ed) > 1e-9) else 0.0
         V_Rd_c_cracked = self.find_V_Rd_c(d, rho_l, sigma_cp, b_w=b_w)
         V_Rd_c_uncracked = self.find_V_Rd_c_uncracked(sigma_cp=sigma_cp, b_w=b_w, shear_angle_deg=_shear_angle_deg)
         V_Rd_c = V_Rd_c_uncracked if use_uncracked_V_Rd_c else V_Rd_c_cracked

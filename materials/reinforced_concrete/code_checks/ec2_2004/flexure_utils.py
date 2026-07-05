@@ -29,18 +29,28 @@ class LoadCase(BaseModel):
     """
     Single load case for design checks.
 
+    Axis convention (subscripts name the *direction* a shear force acts, but the
+    *axis* a moment acts about — which is why the major-axis pair reads Vz/My):
+
     Attributes:
-        Vy_Ed: Major axis shear force (kN). For pure vertical shear, set this
-               and leave Vz_Ed as 0. The resultant V_Ed is computed automatically.
-        Vz_Ed: Minor axis shear force (kN, default 0).
-        My_Ed: Major axis design moment (kN·m, default 0).
-        Mz_Ed: Minor axis design moment (kN·m, default 0).
+        Vz_Ed: Major axis shear force — acts along the vertical (z) axis (kN).
+               For the common case, just pass the resultant ``V_Ed`` instead; it
+               maps to this major-axis component. Default 0.
+        Vy_Ed: Minor axis shear force — acts along the horizontal (y) axis (kN,
+               default 0).
+        My_Ed: Major axis design moment — bending about the horizontal (y) axis
+               (kN·m, default 0). Pairs with the major-axis shear ``Vz_Ed``.
+        Mz_Ed: Minor axis design moment — bending about the vertical (z) axis
+               (kN·m, default 0). Pairs with the minor-axis shear ``Vy_Ed``.
         N_Ed: Design axial force (kN, compression positive, default 0).
+        V_Ed: Direction-agnostic resultant shear; accepted as a convenience input
+              (maps to the major axis ``Vz_Ed``) and also exposed as a computed
+              field ``hypot(Vy_Ed, Vz_Ed)``.
     """
-    Vy_Ed: float = Field(default=0.0, description="Major axis shear force in kN")
-    Vz_Ed: float = Field(default=0.0, description="Minor axis shear force in kN")
-    My_Ed: float = Field(default=0.0, description="Major axis design moment in kN·m")
-    Mz_Ed: float = Field(default=0.0, description="Minor axis design moment in kN·m")
+    Vy_Ed: float = Field(default=0.0, description="Minor axis (horizontal/y) shear force in kN")
+    Vz_Ed: float = Field(default=0.0, description="Major axis (vertical/z) shear force in kN")
+    My_Ed: float = Field(default=0.0, description="Major axis design moment (about horizontal y-axis) in kN·m")
+    Mz_Ed: float = Field(default=0.0, description="Minor axis design moment (about vertical z-axis) in kN·m")
     N_Ed: float = Field(default=0.0, description="Design axial force in kN (compression positive)")
 
     @computed_field  # type: ignore[prop-decorator]
@@ -51,30 +61,27 @@ class LoadCase(BaseModel):
 
     @property
     def M_Ed(self) -> float:
-        """Deprecated alias for My_Ed — for backward compatibility."""
+        """Agnostic alias for the major-axis moment ``My_Ed``."""
         return self.My_Ed
 
     @model_validator(mode="before")
     @classmethod
     def _compat_legacy_fields(cls, values: Any) -> Any:
-        """Accept legacy V_Ed and M_Ed keyword arguments."""
+        """Accept the agnostic-resultant ``V_Ed`` and ``M_Ed`` convenience inputs.
+
+        Both are direction-agnostic scalars that mean "the major-axis value", so
+        they map to the major-axis components (``Vz_Ed`` / ``My_Ed``). Explicit
+        components always win — ``V_Ed`` is only applied when neither shear
+        component is supplied.
+        """
         if not isinstance(values, dict):
             return values
-        # Legacy V_Ed → Vy_Ed (assume major axis shear)
-        if "V_Ed" in values and "Vy_Ed" not in values:
-            warnings.warn(
-                "LoadCase: V_Ed is deprecated, use Vy_Ed (and Vz_Ed for minor axis shear)",
-                DeprecationWarning,
-                stacklevel=4,
-            )
-            values["Vy_Ed"] = values.pop("V_Ed")
-        # Legacy M_Ed → My_Ed
+        # Resultant V_Ed → Vz_Ed (major / vertical axis). Only when no explicit
+        # shear component is given, so LoadCase(Vy_Ed=..., Vz_Ed=...) is honoured.
+        if "V_Ed" in values and "Vy_Ed" not in values and "Vz_Ed" not in values:
+            values["Vz_Ed"] = values.pop("V_Ed")
+        # Agnostic M_Ed → My_Ed (major axis moment).
         if "M_Ed" in values and "My_Ed" not in values:
-            warnings.warn(
-                "LoadCase: M_Ed is deprecated, use My_Ed",
-                DeprecationWarning,
-                stacklevel=4,
-            )
             values["My_Ed"] = values.pop("M_Ed")
         return values
 
