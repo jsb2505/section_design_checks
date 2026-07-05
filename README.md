@@ -1,458 +1,255 @@
-# Section Design Checks - Structural Engineering Library
+# Section Design Checks
 
-**API-ready library for structural materials and code-checked section design**
+[![CI](https://github.com/jsb2505/section_design_checks/actions/workflows/ci.yml/badge.svg)](https://github.com/jsb2505/section_design_checks/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-green.svg)](LICENSE)
 
-A modern Python library for structural engineering with full Pydantic validation, designed for integration with FEA post-processing workflows.
+A Python library for reinforced concrete section analysis and design checks to
+Eurocode 2 (EN 1992-1-1:2004). It combines a fibre-based strain-compatibility
+engine with fully validated Pydantic models, so the same code that drives an
+interactive design study can sit behind an API or post-process FEA results in
+batch.
+
+## Gallery
+
+| | |
+|---|---|
+| ![M-N interaction diagram](examples/plots/mn_interaction_diagram.png) | ![Biaxial M-M-N interaction surface](examples/plots/biaxial_mn_surface.png) |
+| *Uniaxial M-N interaction diagram with load cases and capacity vectors* | *Biaxial M-M-N interaction surface (EC2 pivot method)* |
+| ![Strain compatibility solution](examples/plots/stress_strain_state.png) | ![Crack width contours](examples/plots/crack_width_contours.png) |
+| *Strain-compatibility solution for an applied (M, N) pair* | *SLS crack width contour map over the M-N domain* |
+| ![Shear cot theta study](examples/plots/shear_cot_theta_study.png) | ![Section geometry](examples/plots/section_geometry.png) |
+| *Variable strut inclination study for the shear check* | *Section viewer with rebar hover data* |
+
+All plots are interactive Plotly figures; the PNGs above are regenerated with
+[examples/generate_release_plots.py](examples/generate_release_plots.py).
 
 ## Features
 
-### ✅ Currently Implemented
+**Materials and constitutive models**
+- EC2 concrete grades C12/15 to C90/105 and reinforcement B500A/B/C, with
+  partial factors, long-term coefficients and derived properties computed and
+  validated by Pydantic
+- EC2 stress-strain models: parabola-rectangle, bilinear, schematic and
+  linear-elastic (SLS), steel with horizontal or inclined post-yield branch,
+  plus confined-concrete and user-defined constitutive models
+- Concrete ageing (strength development with time) and early-age thermal
+  models (adiabatic temperature rise to CIRIA C766)
 
-- **🏗️ Reinforced Concrete (Eurocode 2)**
-  - Complete material models (concrete grades C12/15 to C90/105, steel B500A/B/C)
-  - Three EC2 stress-strain models (schematic, parabola-rectangle, bilinear)
-  - Shapely-based 2D polygonal section geometry with arbitrary rebar positioning
-  - Fiber mesh generation for strain compatibility analysis
-  - **M-N interaction diagrams** with fiber-based strain compatibility (NEW!)
-  - Pydantic validation throughout for API-ready usage
+**Section geometry**
+- Arbitrary polygonal outlines (including holes) built on Shapely, with
+  helpers for rectangular and circular sections, linear rebar layers and
+  perimeter bar arrangements
+- Fibre mesh generation for strain-compatibility analysis of any shape
+- Save/load of complete reinforced sections to JSON
 
-- **🔧 Core Infrastructure**
-  - Base material and constitutive model abstractions
-  - Unit system (mm, MPa, kN standard)
-  - Comprehensive type hints
-  - JSON serialization support
+**Section analysis**
+- Uniaxial M-N interaction diagrams from first principles (fibre integration
+  with analytical Jacobians, cached inverse solver, parallel batch solving)
+- Biaxial M-M-N interaction surfaces generated with the EC2 pivot method, so
+  every point lies on the true failure surface
+- Inverse strain solver: given (M, N) find the strain plane, then reuse it for
+  effective depth, lever arm and stress extraction
+- Free neutral-axis adapter for unsymmetric sections and biaxial SLS states,
+  including an analytical fast path for uncracked linear-elastic states
 
-### 🚧 In Development
+**Code checks (EN 1992-1-1:2004)**
+- Bending with axial force, via the interaction diagram (`BendingCheck`)
+- Shear to section 6.2 with variable strut inclination, tension shift,
+  uncracked shear capacity and axial-force effects (`ShearCheck`)
+- Crack width to section 7.3 (`CrackingCheck`) and stress limits to
+  section 7.2 (`StressLimitsCheck`)
+- Combined beam checks (`BeamCheck`) orchestrating the above
+- Circular sections (piles, columns) following Orr (2012), with shear
+  efficiency factors, equivalent web width and the k_f factor for cast-in-place
+  piles (`CircularSectionCheck`)
 
-- **Code Checks (Eurocode 2)**
-  - Shear (§6.2)
-  - Cracking (§7.3)
-  - Deflection (§7.4)
+**Nationally Determined Parameters**
+- NDP registry for EN 1992-1-1:2004 and EN 1992-2:2005 with the EU recommended
+  values plus UK and German National Annexes, switchable at runtime and
+  extensible with custom annexes
 
-- **Additional Materials**
-  - Structural steel (with database section profiles)
-  - Timber (scaffolding)
-
-- **API Layer**
-  - Request/response models
-  - FastAPI integration examples
+**Visualisation**
+- Interactive Plotly viewers for sections, M-N diagrams (with load points and
+  utilisation vectors), 3D biaxial surfaces, strain/stress states, shear
+  design studies (cot θ, link angle, heatmaps, contour maps with sliders) and
+  crack widths (3D stem plots and M-N contour maps)
 
 ## Installation
 
 ```bash
-# Clone repository
-cd c:\Users\user\Repo\Scripts
-git clone <your-repo-url> section_design_checks
+git clone https://github.com/jsb2505/section_design_checks.git
 cd section_design_checks
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Or install as editable package
-pip install -e .
+pip install -e ".[viz]"        # viz extra adds Plotly
 ```
 
-## Quick Start
+Requires Python 3.11+. Core dependencies: Pydantic v2, NumPy, SciPy, Shapely.
+For static image export of the Plotly figures, additionally `pip install kaleido`.
 
-### Defining Materials
-
-```python
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
-
-# Create concrete material
-concrete = ConcreteMaterial(
-    grade="C30/37",
-    gamma_c=1.5,
-    alpha_cc=1.0,
-)
-
-print(concrete.f_ck)  # 30.0 MPa
-print(concrete.f_cd)  # 20.0 MPa
-print(concrete.E_cm)  # 33000 MPa
-
-# Create rebar
-bar = Rebar(
-    grade="B500B",
-    diameter=16,
-)
-
-print(bar.area)  # 201.1 mm²
-print(bar.f_yd)  # 434.8 MPa
-```
-
-### Creating RC Sections
+## Quick start
 
 ```python
+from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
 from materials.reinforced_concrete.geometry import (
     create_rectangular_section,
     create_linear_rebar_layer,
 )
-from materials.core.geometry import Point2D
-
-# Create 300×500 mm beam section
-section = create_rectangular_section(
-    width=300,
-    height=500,
-    section_name="Beam B1",
-)
-
-# Add bottom reinforcement: 3×ϕ20
-bottom_bars = create_linear_rebar_layer(
-    rebar=Rebar(diameter=20, grade="B500B"),
-    n_bars=3,
-    start_point=(50, 50),    # 50mm cover
-    end_point=(250, 50),
-    layer_name="bottom",
-)
-
-section.add_rebar_group(bottom_bars)
-
-print(section)
-# RCSection('Beam B1', A_c=150000 mm², A_s=942 mm², 1 groups)
-
-print(f"Reinforcement ratio: {section.reinforcement_ratio:.3f}")
-# Reinforcement ratio: 0.006
-```
-
-### Stress-Strain Models
-
-```python
-from materials.reinforced_concrete.constitutive import (
-    create_concrete_stress_strain,
-    create_steel_stress_strain,
-)
-
-# Concrete parabola-rectangle model (EC2 Fig 3.3)
-concrete_model = create_concrete_stress_strain(
-    concrete=concrete,
-    model_type="parabola-rectangle",
-)
-
-# Get stress at 2‰ strain (peak)
-stress = concrete_model.get_stress(0.002)
-print(f"Concrete stress at ε=0.002: {stress:.1f} MPa")
-
-# Steel with strain hardening (EC2 Fig 3.8)
-steel_model = create_steel_stress_strain(
-    steel=bar,
-    branch_type="inclined",  # Strain hardening
-)
-
-# Get stress at 1% strain
-stress = steel_model.get_stress(0.01)
-print(f"Steel stress at ε=0.01: {stress:.1f} MPa")
-```
-
-### M-N Interaction Diagrams (Uniaxial Bending)
-
-```python
 from materials.reinforced_concrete.analysis import create_interaction_diagram
-
-# Create M-N interaction diagram
-diagram = create_interaction_diagram(
-    section=section,  # RC section with rebars
-    concrete=concrete,
-    concrete_model_type="parabola-rectangle",  # EC2 Fig 3.3
-    steel_branch_type="inclined",  # With strain hardening
-    n_fibers_width=20,
-    n_fibers_height=30,
+from materials.reinforced_concrete.code_checks.ec2_2004 import (
+    CrackingCheck,
+    LoadCase,
+    ShearCheck,
 )
 
-# Generate complete M-N curve
-points = diagram.generate_diagram(n_points=100)
+# 300x500 beam, C30/37, 4H20 bottom + 2H16 top
+concrete = ConcreteMaterial(grade="C30/37")
+section = create_rectangular_section(width=300, height=500)
+section.add_rebar_group(
+    create_linear_rebar_layer(
+        rebar=Rebar(diameter=20, grade="B500B"),
+        n_bars=4,
+        start_point=(60, 60),
+        end_point=(240, 60),
+    )
+)
+section.add_rebar_group(
+    create_linear_rebar_layer(
+        rebar=Rebar(diameter=16, grade="B500B"),
+        n_bars=2,
+        start_point=(60, 440),
+        end_point=(240, 440),
+    )
+)
 
-# Get arrays for plotting
-N, M = diagram.get_diagram_arrays(n_points=100)
+# ULS bending capacity from the M-N interaction diagram
+diagram = create_interaction_diagram(section=section, concrete=concrete)
+capacity = diagram.get_capacity_vector(N_Ed=400.0, M_Ed=150.0)
+print(f"Utilisation: {capacity.utilization:.2f} (safe: {capacity.is_safe})")
 
-# Check capacity for applied loads
-N_Ed = 500  # kN compression
-M_Ed = 150  # kN·m
-is_safe, utilization = diagram.check_capacity(N_Ed, M_Ed)
+# Shear check to EC2 6.2 (variable strut inclination)
+shear = ShearCheck(
+    section=section,
+    concrete=concrete,
+    shear_reinforcement=ShearRebar(diameter=10, link_spacing=150, n_legs=2, grade="B500B"),
+)
+result = shear.perform_check(load_case=LoadCase(V_Ed=250.0, M_Ed=100.0, N_Ed=150.0))
+print(result)
 
-print(f"Section utilization: {utilization:.1%}")
-print(f"Safe: {is_safe}")
-
-# Get moment capacity at specific axial force
-M_Rd_pos, M_Rd_neg = diagram.get_capacity(N_Ed=1000)
-print(f"M_Rd at N=1000 kN: ±{M_Rd_pos:.1f} kN·m")
+# SLS crack width to EC2 7.3
+cracking = CrackingCheck(section=section, concrete=concrete, w_k_limit=0.3)
+crack = cracking.calculate_detailed(My_Ed=120.0, N_Ed=0.0)
+print(f"w_k = {crack.w_k:.3f} mm (limit {crack.w_k_limit} mm)")
 ```
 
-### Biaxial M-M-N Interaction Surfaces
+### Biaxial bending
 
 ```python
 from materials.reinforced_concrete.analysis.biaxial_interaction import (
-    BiaxialMNInteractionSurface
+    BiaxialMNInteractionSurface,
 )
 
-# Create biaxial M-M-N interaction surface
-surface = BiaxialMNInteractionSurface(
-    section=section,  # RC section with rebars
-    concrete=concrete,
-    concrete_model_type="parabola-rectangle",
-    steel_branch_type="inclined",
-    n_fibers_width=20,
-    n_fibers_height=30,
+surface = BiaxialMNInteractionSurface(section=section, concrete=concrete)
+N_Rd, My_Rd, Mz_Rd, is_safe, utilisation = surface.get_capacity_vector(
+    N_Ed=1000.0, My_Ed=150.0, Mz_Ed=60.0
 )
 
-# Generate 3D surface using EC2 Pivot Method
-points = surface.generate_surface_pivot(
-    n_angles=36,        # Number of bending angles (0-360°)
-    n_axial_levels=20,  # Number of uniform N levels
-)
-
-# Check biaxial capacity
-N_Ed = 1000   # kN
-My_Ed = 150   # kN·m about y-axis
-Mz_Ed = 100   # kN·m about z-axis
-
-N_Rd, My_Rd, Mz_Rd, is_safe, utilization = surface.check_point(N_Ed, My_Ed, Mz_Ed)
-
-print(f"Applied: N={N_Ed}, My={My_Ed}, Mz={Mz_Ed}")
-print(f"Capacity: N={N_Rd:.1f}, My={My_Rd:.1f}, Mz={Mz_Rd:.1f}")
-print(f"Utilization: {utilization:.1%}, Safe: {is_safe}")
-
-# Interactive 3D plot with load points
-load_cases = [
-    {"N_Ed": 1000, "My_Ed": 150, "Mz_Ed": 100, "name": "LC1: DL+LL"},
-    {"N_Ed": 800, "My_Ed": 200, "Mz_Ed": 80, "name": "LC2: DL+Wind"},
-]
-
+# Interactive 3D surface with load points and capacity vectors
 surface.plot(
-    load_points=load_cases,
-    show_vectors=True,  # Show projection rays to capacity
-    n_angles=36,
-    n_axial_levels=16,
-    save_path="biaxial_surface.html"
+    load_points=[{"N_Ed": 1000, "My_Ed": 150, "Mz_Ed": 60, "name": "LC1"}],
+    show_vectors=True,
 )
 ```
 
-**EC2 Pivot Method**: The biaxial surface generation uses Eurocode 2's pivot zone approach (Zones A, B, C) to ensure strain profiles always touch an ultimate limit strain (ε_cu2, ε_c2, or ε_ud). This mathematically guarantees all points lie on the true failure surface with no interior points. See [docs/PIVOT_METHOD_IMPLEMENTATION.md](docs/PIVOT_METHOD_IMPLEMENTATION.md) for details.
-
-### Fiber Mesh for Custom Analysis
+### National Annexes
 
 ```python
-from materials.reinforced_concrete.geometry import FibreMesh
+from materials.reinforced_concrete.ndp import CountryCode, set_ndp_context
 
-# Generate fiber mesh for custom strain compatibility analysis
-mesh = FibreMesh(
-    section=section,
-    n_fibers_width=20,
-    n_fibers_height=30,
-    exclude_steel_area=True,
-)
-
-print(mesh)
-# FibreMesh(concrete=585, steel=3, total=588)
-
-# Get fiber data as numpy arrays
-x, y, area, material_type, material_index = mesh.get_fiber_arrays()
+set_ndp_context(country=CountryCode.EU_UK)   # UK National Annex
+set_ndp_context(country=CountryCode.EU_DE)   # German National Annex
+set_ndp_context(country=CountryCode.EU)      # EC2 recommended values (default)
 ```
 
-### Complex Geometry with Shapely
+## Units and sign conventions
 
-```python
-from shapely.geometry import Polygon
-from materials.reinforced_concrete.geometry import RCSection, create_circular_perimeter_rebars
+- Dimensions in **mm**, forces in **kN**, moments in **kN·m**, stresses in **MPa**
+- Axial force `N_Ed` is **compression positive**
+- `My_Ed` is the major-axis moment, `Mz_Ed` the minor-axis moment;
+  `Vz_Ed` is the major-axis (vertical) shear paired with `My_Ed`, and `Vy_Ed`
+  the minor-axis (horizontal) shear paired with `Mz_Ed`
+- `V_Ed` and `M_Ed` are accepted as direction-agnostic inputs that map to the
+  major axis
 
-# T-beam section using custom polygon
-t_beam_coords = [
-    (0, 0),      # Bottom left
-    (200, 0),    # Bottom right
-    (200, 400),  # Start of flange
-    (500, 400),  # Flange right
-    (500, 500),  # Top right
-    (0, 500),    # Top left
-    (0, 400),    # Flange left
-    (0, 0),      # Close
-]
+## Examples
 
-t_beam = RCSection(
-    outline=Polygon(t_beam_coords),
-    section_name="T-Beam",
-)
+The [examples/](examples/) directory contains runnable scripts and Jupyter
+notebooks, including:
 
-# Circular column with perimeter reinforcement
-from materials.reinforced_concrete.geometry import create_circular_section
+| Notebook | Topic |
+|---|---|
+| [m_n_interaction_diagram_tutorial.ipynb](examples/m_n_interaction_diagram_tutorial.ipynb) | Uniaxial M-N diagrams end to end |
+| [biaxial_mn_interaction_tutorial.ipynb](examples/biaxial_mn_interaction_tutorial.ipynb) | Biaxial M-M-N surfaces and the pivot method |
+| [ec2_code_checks_demonstration.ipynb](examples/ec2_code_checks_demonstration.ipynb) | Bending, shear, cracking and stress-limit checks |
+| [shear_viewer_demonstration.ipynb](examples/shear_viewer_demonstration.ipynb) | Shear design study plots |
+| [crack_width_viewer_demonstration.ipynb](examples/crack_width_viewer_demonstration.ipynb) | Crack width visualisation |
+| [circular_section_check_demonstration.ipynb](examples/circular_section_check_demonstration.ipynb) | Circular pile/column checks (Orr 2012) |
+| [ndp_demonstration.ipynb](examples/ndp_demonstration.ipynb) | Nationally Determined Parameters |
 
-column = create_circular_section(diameter=400, section_name="Column C1")
+## Testing and code quality
 
-# Add 8×ϕ20 perimeter bars
-perimeter_bars = create_circular_perimeter_rebars(
-    rebar=Rebar(diameter=20, grade="B500B"),
-    diameter=400,
-    cover=40,
-    n_bars=8,
-)
+- 1,300+ tests run in CI on every push (fast lane plus a slow biaxial
+  regression lane)
+- `ruff` linting and a fully type-checked codebase under `mypy` (both blocking
+  in CI)
+- Numerical results are validated against hand calculations and published
+  references throughout the test suite
 
-column.add_rebar_group(perimeter_bars)
+```bash
+pip install -e ".[dev,viz]"
+pytest                # fast lane
+pytest -m slow        # slow lane (biaxial surface regression)
 ```
 
-## Project Structure
+## Project structure
 
 ```
-section_design_checks/
-├── materials/                      # Main package
-│   ├── core/                       # Base abstractions
-│   │   ├── base_material.py
-│   │   ├── constitutive.py
-│   │   ├── geometry.py
-│   │   └── units.py
-│   │
-│   ├── reinforced_concrete/        # RC implementation
-│   │   ├── materials/              # Material models
-│   │   ├── constitutive/           # Stress-strain
-│   │   ├── geometry/               # Sections & fibers
-│   │   ├── code_checks/            # EC2 checks
-│   │   └── analysis/               # M-N diagrams, etc.
-│   │
-│   ├── structural_steel/           # Steel (scaffolding)
-│   ├── timber/                     # Timber (scaffolding)
-│   └── api/                        # API models
-│
-├── tests/                          # Pytest tests
-├── examples/                       # Usage examples
-└── pyproject.toml                  # Modern packaging
+materials/
+├── core/                        # Base abstractions: materials, constitutive, units
+└── reinforced_concrete/
+    ├── materials/               # Concrete, rebar, ageing
+    ├── constitutive/            # EC2 stress-strain models
+    ├── geometry/                # Sections, rebar layers, fibre mesh, viewer
+    ├── analysis/                # M-N diagrams, biaxial surfaces, viewers
+    ├── code_checks/ec2_2004/    # Bending, shear, cracking, stress limits, circular
+    ├── ndp/                     # Nationally Determined Parameters (EU, UK, DE)
+    └── thermal/                 # Early-age thermal models (CIRIA C766)
 ```
 
-## Design Principles
+## Disclaimer
 
-### 1. **Pydantic Validation Throughout**
-All models use Pydantic for automatic validation, serialization, and API compatibility:
-
-```python
-# Invalid input raises validation error
-try:
-    bad_concrete = ConcreteMaterial(grade="C100/120")  # Invalid grade
-except ValidationError as e:
-    print(e)
-```
-
-### 2. **Shapely for Robust Geometry**
-Complex 2D sections handled with industry-standard Shapely library:
-- Arbitrary polygonal outlines
-- Automatic area/centroid/moments calculations
-- Containment checking for rebar positions
-
-### 3. **Type Hints & Modern Python**
-- Full type annotations (Python 3.10+)
-- Computed fields with `@computed_field`
-- Immutable where appropriate
-- Clean separation of concerns
-
-### 4. **API-Ready by Design**
-- JSON serializable models
-- Standard request/response patterns
-- Easy integration with FastAPI/Flask
-- Post-process FEA results → design checks
-
-## FEA Integration Workflow
-
-```python
-# Pseudocode for FEA integration
-import json
-from materials.reinforced_concrete.geometry import create_rectangular_section
-from materials.reinforced_concrete.code_checks.ec2 import BendingCheck
-
-# 1. Load FEA results (JSON from post-processing)
-with open("fea_results.json") as f:
-    results = json.load(f)
-
-# 2. Define section
-section = create_rectangular_section(width=300, height=500)
-# ... add reinforcement ...
-
-# 3. Run design checks
-for element in results["beam_elements"]:
-    M_Ed = element["moment"]  # kN·m
-    N_Ed = element["axial"]   # kN
-
-    # Check = BendingCheck(section, concrete, steel)
-    # result = check.perform_check(M_Ed=M_Ed, N_Ed=N_Ed)
-
-    # if result.status == "fail":
-    #     print(f"Element {element['id']} fails: {result}")
-```
-
-## Project Structure
-
-```
-section_design_checks/
-├── materials/                    # Core library code
-│   ├── reinforced_concrete/     # RC materials and analysis
-│   │   ├── analysis/            # M-N diagrams, biaxial surfaces
-│   │   ├── constitutive/        # Stress-strain models
-│   │   ├── geometry/            # Section geometry
-│   │   └── materials/           # Material properties
-│   └── core/                    # Base abstractions
-├── examples/                    # Example scripts and notebooks
-│   ├── *.ipynb                 # Jupyter tutorials
-│   └── *.py                    # Example scripts
-├── tests/                       # Test suite
-│   ├── unit/                   # Unit tests (240 tests)
-│   └── integration/            # Integration tests
-├── docs/                        # Technical documentation
-│   └── README.md               # Documentation index
-├── output/                      # Generated outputs
-│   ├── figures/                # Plots and diagrams
-│   └── data/                   # JSON/CSV exports
-└── README.md                    # This file
-```
-
-## Documentation & Examples
-
-**Getting Started:**
-- **[GETTING_STARTED.md](GETTING_STARTED.md)** - Quick start guide with examples
-
-**Interactive Tutorials:**
-- **[examples/m_n_interaction_diagram_tutorial.ipynb](examples/m_n_interaction_diagram_tutorial.ipynb)** - Uniaxial M-N diagrams
-- **[examples/biaxial_mn_interaction_tutorial.ipynb](examples/biaxial_mn_interaction_tutorial.ipynb)** - Biaxial M-M-N surfaces
-
-**Technical Documentation:**
-- **[docs/](docs/)** - Implementation guides, bug fixes, test results
-  - See [docs/README.md](docs/README.md) for complete documentation index
-
-## Test Coverage
-
-**240 tests, 100% passing**
-
-```
-======================== 240 passed in 1.78s =========================
-```
-
-- Core abstractions: 22 tests ✅
-- RC materials: 69 tests ✅
-- Constitutive models: 57 tests ✅
-- Geometry & sections: 43 tests ✅
-- Code check framework: 19 tests ✅
-- M-N interaction diagrams: 30 tests ✅
-
-All tests validate functionality, edge cases, error handling, and numerical accuracy.
-
-## Roadmap
-
-- [x] ~~Complete EC2 bending check with M-N interaction~~ **✅ COMPLETE**
-- [x] ~~Comprehensive test suite~~ **✅ 240/240 passing**
-- [ ] Implement shear, cracking, deflection checks
-- [ ] Structural steel section database (UK/EU profiles)
-- [ ] Timber material models
-- [ ] FastAPI example application
-- [ ] Documentation site
-- [ ] PyPI package
+This library is provided for research and engineering workflow automation.
+It is **not** a substitute for professional engineering judgement: all results
+must be independently verified by a qualified engineer before being used in
+design. See the [LICENSE](LICENSE) for the full warranty disclaimer.
 
 ## Contributing
 
-This is a development project. Contributions welcome!
+Issues and pull requests are welcome. Please run the test suite and the
+`ruff`/`mypy` gates before submitting:
 
-## License
-
-MIT License
+```bash
+ruff check materials tests --extend-ignore E501
+mypy materials --ignore-missing-imports
+pytest
+```
 
 ## References
 
-- **Eurocode 2**: EN 1992-1-1:2004 - Design of concrete structures
-- **Shapely**: https://shapely.readthedocs.io/
-- **Pydantic**: https://docs.pydantic.dev/
+- EN 1992-1-1:2004 — Eurocode 2: Design of concrete structures, Part 1-1
+- EN 1992-2:2005 — Eurocode 2: Concrete bridges
+- Orr, J. J. (2012). *Shear design of circular concrete sections.* University of Bath
+- CIRIA C766 — Control of cracking caused by restrained deformation in concrete
 
-## Contact
+## Licence
 
-For questions or collaboration: [Your contact info]
+[MIT](LICENSE)
