@@ -186,7 +186,7 @@ class MNInteractionDiagram:
         ignore_compression_steel: bool = False,
         elastic_modulus: Optional[float] = None,
         include_tension: bool = False,
-        crack_to_neutral_axis_on_first_tension_failure: bool = False,
+        crack_to_neutral_axis_on_first_tension_failure: bool = True,
         concrete_model_override: Optional[Any] = None,
         steel_models_override: Optional[List[Any]] = None,
     ):

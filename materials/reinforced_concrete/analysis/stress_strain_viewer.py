@@ -747,11 +747,6 @@ class StressStrainViewer:
                 pass
         return fallback
 
-    def _top_right_annotation_anchor(self, fig: Any) -> tuple[float, float]:
-        """Get paper-coordinate anchor for top-left of top-right quadrant."""
-        left_x, _, y = self._top_right_annotation_anchors(fig)
-        return (left_x, y)
-
     def _top_right_annotation_anchors(self, fig: Any) -> tuple[float, float, float]:
         """Get paper-coordinate anchors for left/right annotation columns."""
         layout = getattr(fig, "layout", None)
@@ -863,7 +858,6 @@ class StressStrainViewer:
         # Concrete-only i/j + stresses
         ci = fi[s.conc_mask]
         cj = fj[s.conc_mask]
-        conc_stresses = s.stresses[s.conc_mask]
 
         if ci.size == 0 or cj.size == 0:
             return

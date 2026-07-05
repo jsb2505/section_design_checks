@@ -761,3 +761,77 @@ class TestCrackingAdditionalBranches:
         assert all(c["face"] == "top" and c["is_net_tension"] for c in captured_faces)
         assert out.details["governing_face"] == "top"
         assert detailed.governing_face == "top"
+
+    def test_get_diagram_sets_internal_crack_detection_kwargs(self, monkeypatch, concrete_c30):
+        """Cracked-analysis diagram should enforce internal crack-detection settings."""
+        check = CrackingCheck(
+            section=_make_section(),
+            concrete=concrete_c30,
+        )
+
+        captured: dict = {}
+
+        def _fake_create(**kwargs):
+            captured.update(kwargs)
+            return _FakeDiagram(eps_top=0.0, eps_bottom=0.0)
+
+        monkeypatch.setattr(cc_mod, "create_interaction_diagram", _fake_create)
+        _ = check._get_diagram(ignore_compression_steel=False)
+
+        assert captured["include_tension"] is True
+        assert captured["crack_to_neutral_axis_on_first_tension_failure"] is True
+
+    def test_perform_check_uses_solver_crack_decision_not_mcr(self, monkeypatch, concrete_c30):
+        """Crack-state branch should follow solver result, independent of M_cr helper."""
+        check = CrackingCheck(section=_make_section(), concrete=concrete_c30)
+
+        # Deliberately huge helper cracking moment to prove branch is not M_cr-driven.
+        monkeypatch.setattr(CrackingCheck, "find_cracking_moment", lambda self, N_Ed=0.0: 1e9)
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_is_cracked_by_solver",
+            lambda self, M_Ed, N_Ed, ignore_compression_steel=False: (
+                True, 0.0008, -0.0008, -0.00012, -0.00010
+            ),
+        )
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_get_diagram",
+            lambda self, ignore_compression_steel=False: _FakeDiagram(
+                eps_top=0.0008,
+                eps_bottom=-0.0008,
+            ),
+        )
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_get_peak_concrete_stress",
+            lambda self, eps_top, eps_bottom, diagram=None: 5.0,
+        )
+
+        monkeypatch.setattr(
+            CrackingCheck,
+            "_calculate_face_crack_width",
+            lambda self, eps_top, eps_bottom, face, x, is_net_tension, suppress_warnings=False, actual_bar_diameter=None: CrackingResult(
+                w_k=0.10,
+                w_k_limit=self.w_k_limit,
+                s_r_max=100.0,
+                eps_sm_minus_eps_cm=0.001,
+                sigma_s=200.0,
+                rho_p_eff=0.01,
+                h_c_ef=100.0,
+                x=x,
+                is_cracked=True,
+                phi_eq=20.0,
+                cover=35.0,
+            ),
+        )
+
+        out = check.perform_check(
+            M_Ed=20.0,
+            N_Ed=0.0,
+            force_cracked=False,
+            suppress_warnings=True,
+        )
+
+        assert out.details["is_cracked"] is True
+        assert out.details["crack_detection_method"] == "solver_uncracked_tension_threshold"

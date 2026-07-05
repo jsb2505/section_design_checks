@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
 import warnings
 
+import numpy as np
 from pydantic import Field, PrivateAttr, computed_field
 
 from materials.reinforced_concrete.code_checks.base_check import (
@@ -24,7 +25,11 @@ from materials.reinforced_concrete.code_checks.ec2_2004.stress_limits_check impo
     check_imposed_deformation_stress,
     compute_nonlinear_creep_coefficient,
 )
-from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
+from materials.reinforced_concrete.constitutive import (
+    ConcreteModelType,
+    SteelModelType,
+    ConcreteStressStrainLinearElastic,
+)
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial
 from materials.reinforced_concrete.analysis import create_interaction_diagram
@@ -89,7 +94,8 @@ class CrackingCheck(BaseCodeCheck):
         w_k = s_r,max × (ε_sm - ε_cm)
 
     The check process:
-    1. Determine if section is cracked (compare M_Ed to cracking moment)
+    1. Determine if section is cracked using an uncracked M-N solver probe
+       (LINEAR_ELASTIC concrete with include_tension=True)
     2. If cracked, solve for strain state using M-N interaction diagram
     3. Calculate steel stress from strain state
     4. Calculate h_c,ef, ρ_p,eff, and s_r,max
@@ -233,8 +239,12 @@ class CrackingCheck(BaseCodeCheck):
 
     _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
     _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
+    _diagram_uncracked: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
+    _diagram_uncracked_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
     _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
     _diagram_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
+    _diagram_uncracked_snapshot: Optional[dict] = PrivateAttr(default=None)
+    _diagram_uncracked_no_comp_snapshot: Optional[dict] = PrivateAttr(default=None)
 
     def _take_snapshot(self) -> dict:
         """Capture current state of inputs that affect the interaction diagram."""
@@ -243,6 +253,8 @@ class CrackingCheck(BaseCodeCheck):
             "concrete": self.concrete.model_dump(),
             "concrete_model_type": self.concrete_model_type,
             "steel_model_type": self.steel_model_type,
+            "include_tension": True,
+            "crack_to_neutral_axis_on_first_tension_failure": True,
             "n_fibres_width": self.n_fibres_width,
             "n_fibres_height": self.n_fibres_height,
             "E_c_eff": self.E_c_eff,
@@ -264,6 +276,8 @@ class CrackingCheck(BaseCodeCheck):
                     use_characteristic=True,
                     ignore_compression_steel=True,
                     elastic_modulus=self.E_c_eff,
+                    include_tension=True,
+                    crack_to_neutral_axis_on_first_tension_failure=True,
                 )
                 self._diagram_no_comp_snapshot = snapshot
             return self._diagram_no_comp_steel
@@ -279,9 +293,59 @@ class CrackingCheck(BaseCodeCheck):
                     use_characteristic=True,
                     ignore_compression_steel=False,
                     elastic_modulus=self.E_c_eff,
+                    include_tension=True,
+                    crack_to_neutral_axis_on_first_tension_failure=True,
                 )
                 self._diagram_snapshot = snapshot
             return self._diagram
+
+    def _get_uncracked_diagram(self, ignore_compression_steel: bool = False) -> MNInteractionDiagram:
+        """
+        Get cached uncracked-state probe diagram.
+
+        This probe uses linear-elastic concrete with tension enabled so cracking can
+        be identified from concrete tensile strain exceeding the cracking strain.
+        """
+        snapshot = self._take_snapshot()
+
+        if ignore_compression_steel:
+            if (
+                self._diagram_uncracked_no_comp_steel is None
+                or snapshot != self._diagram_uncracked_no_comp_snapshot
+            ):
+                self._diagram_uncracked_no_comp_steel = create_interaction_diagram(
+                    section=self.section,
+                    concrete=self.concrete,
+                    concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
+                    steel_model_type=self.steel_model_type,
+                    n_fibres_width=self.n_fibres_width,
+                    n_fibres_height=self.n_fibres_height,
+                    use_characteristic=True,
+                    ignore_compression_steel=True,
+                    elastic_modulus=self.E_c_eff,
+                    include_tension=True,
+                    crack_to_neutral_axis_on_first_tension_failure=True,
+                )
+                self._diagram_uncracked_no_comp_snapshot = snapshot
+            return self._diagram_uncracked_no_comp_steel
+
+        if self._diagram_uncracked is None or snapshot != self._diagram_uncracked_snapshot:
+            self._diagram_uncracked = create_interaction_diagram(
+                section=self.section,
+                concrete=self.concrete,
+                concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
+                steel_model_type=self.steel_model_type,
+                n_fibres_width=self.n_fibres_width,
+                n_fibres_height=self.n_fibres_height,
+                use_characteristic=True,
+                ignore_compression_steel=False,
+                elastic_modulus=self.E_c_eff,
+                include_tension=True,
+                crack_to_neutral_axis_on_first_tension_failure=True,
+            )
+            self._diagram_uncracked_snapshot = snapshot
+
+        return self._diagram_uncracked
 
     # ===============================================
     # Properties (immutable - don't depend on loads)
@@ -348,14 +412,19 @@ class CrackingCheck(BaseCodeCheck):
     # Cracking moment calculation
     # ===============================================
 
-    def find_cracking_moment(self, N_Ed: float = 0.0) -> float:
+    def find_cracking_moment(
+        self,
+        N_Ed: float = 0.0,
+        use_f_ctm_fl: bool = False,
+        ) -> float:
         """
         Cracking moment M_cr (kN·m) - moment at which section first cracks.
 
-        M_cr = (f_ctm,fl + σ_N) × W_el / 10^6
+        M_cr = (f_ct,eff + σ_N) × W_el / 10^6
 
         where:
         - f_ctm,fl = mean flexural tensile strength (accounts for size effect)
+        - f_ctm = mean tensile strength
         - W_el = elastic section modulus to tension face
         - σ_N = N_Ed / A_transformed (axial stress, compression positive)
 
@@ -363,13 +432,20 @@ class CrackingCheck(BaseCodeCheck):
         Tensile axial load decreases M_cr (promotes cracking).
 
         Args:
-            N_Ed: Design axial force (kN, compression positive). Default 0.
+            N_Ed: Design axial force (kN, compression positive). (Default 0).
+            use_f_ctm_fl:
+                Whether to use the mean flexural tensile strength (f_ctm,fl)
+                or mean tensile strength (f_ctm).
 
         Returns:
             Cracking moment in kN·m
         """
-        # Flexural tensile strength (EC2 §3.1.8)
-        f_ctm_fl = self.concrete.find_mean_flexural_tensile_strength(self.height)
+        if use_f_ctm_fl:
+            # Flexural tensile strength (EC2 §3.1.8)
+            f_ct_eff = self.concrete.find_mean_flexural_tensile_strength(self.height)
+        else:
+            # Basic tensile strength without size effect
+            f_ct_eff = self.concrete.f_ctm
 
         # Elastic section modulus (uncracked transformed section)
         I_yy, _, _ = self.section.get_transformed_second_moment_area(self.E_c_eff)
@@ -386,7 +462,7 @@ class CrackingCheck(BaseCodeCheck):
             sigma_N = N_Ed * 1000 / A_tr  # kN → N, then N/mm² = MPa
 
         # M_cr in kN·m (W_el in mm³, stresses in MPa → result in N·mm)
-        return to_knm((f_ctm_fl + sigma_N) * W_el, MomentUnit.NMM)
+        return to_knm((f_ct_eff + sigma_N) * W_el, MomentUnit.NMM)
 
 
     # ===============================================
@@ -677,8 +753,8 @@ class CrackingCheck(BaseCodeCheck):
 
         # Full formula
         if rho_p_eff > 0:
-            tension_stiffening = self.k_t * f_ct_eff * (1 + alpha_e * rho_p_eff) / rho_p_eff
-            eps_diff = (sigma_s - tension_stiffening) / E_s
+            stiffening_from_tension = self.k_t * f_ct_eff * (1 + alpha_e * rho_p_eff) / rho_p_eff
+            eps_diff = (sigma_s - stiffening_from_tension) / E_s
         else:
             eps_diff = sigma_s / E_s
 
@@ -1348,6 +1424,68 @@ class CrackingCheck(BaseCodeCheck):
             use_characteristic=True,
             ignore_compression_steel=ignore_compression_steel,
             elastic_modulus=E_c_eff,
+            include_tension=True,
+            crack_to_neutral_axis_on_first_tension_failure=True,
+        )
+
+    def _is_cracked_by_solver(
+        self,
+        *,
+        M_Ed: float,
+        N_Ed: float,
+        ignore_compression_steel: bool = False,
+    ) -> Tuple[bool, float, float, Optional[float], Optional[float]]:
+        """
+        Determine cracked state using an uncracked solver pass.
+
+        Returns:
+            (is_cracked, eps_top, eps_bottom, min_tension_concrete_strain, cracking_strain)
+        """
+        probe_diagram = self._get_uncracked_diagram(ignore_compression_steel)
+        eps_top, eps_bottom = probe_diagram.find_strains_for_MN(
+            M_target=M_Ed,
+            N_target=N_Ed,
+            strict=True,
+        )
+
+        # No concrete tension zone -> uncracked for cracking-width purposes
+        if eps_top >= 0.0 and eps_bottom >= 0.0:
+            return False, float(eps_top), float(eps_bottom), None, None
+
+        conc_mask = probe_diagram._fibre_mat == "concrete"
+        if not np.any(conc_mask):
+            return False, float(eps_top), float(eps_bottom), None, None
+
+        concrete_strains = probe_diagram._strain_field_from_end_strains(
+            eps_top=float(eps_top),
+            eps_bottom=float(eps_bottom),
+        )[conc_mask]
+        concrete_strains_real = np.real(concrete_strains)
+        tension_mask = concrete_strains_real < 0.0
+        if not np.any(tension_mask):
+            return False, float(eps_top), float(eps_bottom), None, None
+
+        min_tension_concrete_strain = float(np.min(concrete_strains_real[tension_mask]))
+
+        cracking_strain: Optional[float] = None
+        if isinstance(probe_diagram.concrete_model, ConcreteStressStrainLinearElastic):
+            cracking_strain = float(probe_diagram.concrete_model.cracking_strain)
+            return (
+                bool(min_tension_concrete_strain < cracking_strain),
+                float(eps_top),
+                float(eps_bottom),
+                min_tension_concrete_strain,
+                cracking_strain,
+            )
+
+        # Generic fallback for non-linear concrete models.
+        # (For current probe setup this branch is not expected.)
+        return (
+            bool(min_tension_concrete_strain < 0.0),
+            float(eps_top),
+            float(eps_bottom),
+            min_tension_concrete_strain,
+            cracking_strain,
         )
 
 
@@ -1685,9 +1823,8 @@ class CrackingCheck(BaseCodeCheck):
             N_Ed: Design axial force at SLS (kN, compression positive)
             warning_threshold: Utilization threshold for warnings
             ignore_compression_steel: If True, ignore compression reinforcement
-            force_cracked: If True, skip the cracking moment check and proceed
-                directly to cracked analysis. Useful for members with axial load
-                where reinforcement is always provided.
+            force_cracked: If True, skip the uncracked solver probe and proceed
+                directly to cracked analysis.
             suppress_warnings: If True, suppresses warnings
             actual_bar_diameter: If provided, corrects s_r,max for equivalent-area
                 bar substitution. When bars are modelled with a modified diameter
@@ -1730,9 +1867,35 @@ class CrackingCheck(BaseCodeCheck):
                 "Provide longitudinal reinforcement before calling perform_check()."
             )
 
-        # Step 1: Check if section is cracked
-        M_cr = self.find_cracking_moment(N_Ed=N_Ed)
-        is_cracked = force_cracked or abs(M_Ed) > abs(M_cr)
+        # Step 1: Determine cracked state.
+        crack_detection_method = "forced_cracked" if force_cracked else "solver_uncracked_tension_threshold"
+        probe_solver_error: Optional[str] = None
+        probe_eps_top: Optional[float] = None
+        probe_eps_bottom: Optional[float] = None
+        probe_min_tension_concrete_strain: Optional[float] = None
+        probe_cracking_strain: Optional[float] = None
+
+        if force_cracked:
+            is_cracked = True
+        else:
+            try:
+                (
+                    is_cracked,
+                    probe_eps_top,
+                    probe_eps_bottom,
+                    probe_min_tension_concrete_strain,
+                    probe_cracking_strain,
+                ) = self._is_cracked_by_solver(
+                    M_Ed=M_Ed,
+                    N_Ed=N_Ed,
+                    ignore_compression_steel=ignore_compression_steel,
+                )
+            except ValueError as e:
+                # If uncracked-state equilibrium cannot be solved, continue with
+                # cracked analysis rather than failing immediately.
+                is_cracked = True
+                probe_solver_error = str(e)
+                crack_detection_method = "solver_failed_assumed_cracked"
 
         if not is_cracked:
             # Section uncracked - no crack width to check
@@ -1742,16 +1905,29 @@ class CrackingCheck(BaseCodeCheck):
                 warning_threshold=warning_threshold,
                 utilization=0.0,
                 demand_components={"M_Ed": float(M_Ed), "N_Ed": float(N_Ed)},
-                capacity_components={"w_k_limit": self.w_k_limit, "M_cr": float(M_cr)},
-                units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm", "M_cr": "kN·m"},
-                message="Section uncracked (M_Ed < M_cr)",
+                capacity_components={"w_k_limit": self.w_k_limit},
+                units_components={"M_Ed": "kN·m", "N_Ed": "kN", "w_k_limit": "mm"},
+                message="Section uncracked (solver: concrete tension <= cracking limit)",
                 details={
                     "M_Ed": float(M_Ed),
                     "N_Ed": float(N_Ed),
-                    "M_cr": float(M_cr),
                     "is_cracked": False,
                     "w_k": 0.0,
                     "w_k_limit": self.w_k_limit,
+                    "crack_detection_method": crack_detection_method,
+                    "probe_solver_error": probe_solver_error,
+                    "probe_eps_top": float(probe_eps_top) if probe_eps_top is not None else None,
+                    "probe_eps_bottom": float(probe_eps_bottom) if probe_eps_bottom is not None else None,
+                    "probe_min_tension_concrete_strain": (
+                        float(probe_min_tension_concrete_strain)
+                        if probe_min_tension_concrete_strain is not None
+                        else None
+                    ),
+                    "probe_cracking_strain": (
+                        float(probe_cracking_strain)
+                        if probe_cracking_strain is not None
+                        else None
+                    ),
                 },
             )
 
@@ -1829,7 +2005,6 @@ class CrackingCheck(BaseCodeCheck):
                 details={
                     "M_Ed": float(M_Ed),
                     "N_Ed": float(N_Ed),
-                    "M_cr": float(M_cr),
                     "is_cracked": False,
                     "w_k": 0.0,
                     "w_k_limit": self.w_k_limit,
@@ -1838,6 +2013,20 @@ class CrackingCheck(BaseCodeCheck):
                     "sigma_c_peak": float(sigma_c_peak),
                     "nonlinear_creep_applied": nonlinear_creep_applied,
                     "creep_coefficient_used": float(creep_coefficient_used),
+                    "crack_detection_method": crack_detection_method,
+                    "probe_solver_error": probe_solver_error,
+                    "probe_eps_top": float(probe_eps_top) if probe_eps_top is not None else None,
+                    "probe_eps_bottom": float(probe_eps_bottom) if probe_eps_bottom is not None else None,
+                    "probe_min_tension_concrete_strain": (
+                        float(probe_min_tension_concrete_strain)
+                        if probe_min_tension_concrete_strain is not None
+                        else None
+                    ),
+                    "probe_cracking_strain": (
+                        float(probe_cracking_strain)
+                        if probe_cracking_strain is not None
+                        else None
+                    ),
                 },
             )
 
@@ -1919,7 +2108,6 @@ class CrackingCheck(BaseCodeCheck):
         details = {
             "M_Ed": float(M_Ed),
             "N_Ed": float(N_Ed),
-            "M_cr": float(M_cr),
             "is_cracked": True,
             "eps_top": float(eps_top),
             "eps_bottom": float(eps_bottom),
@@ -1945,6 +2133,20 @@ class CrackingCheck(BaseCodeCheck):
             "creep_coefficient_used": float(creep_coefficient_used),
             "is_net_tension": is_net_tension,
             "governing_face": cr.governing_face,
+            "crack_detection_method": crack_detection_method,
+            "probe_solver_error": probe_solver_error,
+            "probe_eps_top": float(probe_eps_top) if probe_eps_top is not None else None,
+            "probe_eps_bottom": float(probe_eps_bottom) if probe_eps_bottom is not None else None,
+            "probe_min_tension_concrete_strain": (
+                float(probe_min_tension_concrete_strain)
+                if probe_min_tension_concrete_strain is not None
+                else None
+            ),
+            "probe_cracking_strain": (
+                float(probe_cracking_strain)
+                if probe_cracking_strain is not None
+                else None
+            ),
         }
 
         # Bar diameter correction reporting
@@ -1987,7 +2189,7 @@ class CrackingCheck(BaseCodeCheck):
             M_Ed: Design moment at SLS (kN·m)
             N_Ed: Design axial force at SLS (kN, compression positive)
             ignore_compression_steel: If True, ignore compression reinforcement
-            force_cracked: If True, skip the cracking moment check and proceed
+            force_cracked: If True, skip the uncracked solver probe and proceed
                 directly to cracked analysis.
             suppress_warnings: If True, suppresses warnings
             actual_bar_diameter: If provided, corrects s_r,max for equivalent-area
@@ -1996,9 +2198,20 @@ class CrackingCheck(BaseCodeCheck):
         Returns:
             CrackingResult dataclass with all intermediate values
         """
-        # Check if cracked (axial load now accounted for in M_cr)
-        M_cr = self.find_cracking_moment(N_Ed=N_Ed)
-        is_cracked = force_cracked or abs(M_Ed) > abs(M_cr)
+        # Determine cracked state using an uncracked solver probe.
+        if force_cracked:
+            is_cracked = True
+        else:
+            try:
+                is_cracked, *_ = self._is_cracked_by_solver(
+                    M_Ed=M_Ed,
+                    N_Ed=N_Ed,
+                    ignore_compression_steel=ignore_compression_steel,
+                )
+            except ValueError:
+                # If uncracked-state equilibrium cannot be solved, continue with
+                # cracked analysis rather than failing immediately.
+                is_cracked = True
 
         if not is_cracked:
             return CrackingResult(
@@ -2015,13 +2228,14 @@ class CrackingCheck(BaseCodeCheck):
                 cover=0.0,
             )
 
-        # Solve strain state
-        eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(
+        # Solve strain state on cracked-analysis diagram
+        diagram_for_check = self._get_diagram(ignore_compression_steel)
+        eps_top, eps_bottom = diagram_for_check.find_strains_for_MN(
             M_Ed, N_Ed, strict=True
         )
 
         # Stress limitation and non-linear creep (same logic as _check_single_case)
-        sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom)
+        sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_for_check)
         nonlinear_creep_applied = False
         creep_coefficient_used = self.creep_coefficient
 
