@@ -493,8 +493,9 @@ class CrackingCheck(BaseCodeCheck):
 
         For biaxial bending (``na_angle_deg`` provided and non-zero), the
         second moment of area about the rotated NA direction is approximated
-        as ``I_eff = I_yy * cos²θ + I_xx * sin²θ``, and the tension face
-        distance is measured along the compression direction.
+        as ``I_eff = I_xx * cos²θ + I_yy * sin²θ`` (matching the implementation and
+        reducing to I_xx at θ=0), and the tension face distance is measured along
+        the compression direction.
 
         Compressive axial load increases M_cr (delays cracking).
         Tensile axial load decreases M_cr (promotes cracking).

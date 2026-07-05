@@ -526,7 +526,9 @@ class RCSection(BaseGeometry):
     
         A_eff = self.get_area()  # mm², includes bar regions as concrete
 
-        # Transformed area: A_c,tr = A_concrete + n·A_steel
+        # Transformed area. Because get_area() is the GROSS area (the bar regions
+        # are already counted as concrete), the steel contributes the EXTRA
+        # (n-1)·A_steel, not n·A_steel: A_c,tr = A_gross + (alpha_e - 1)·A_steel.
         # Calculate weighted average E_s for all steel
         total_steel_stiffness = 0.0
         total_steel_area = 0.0

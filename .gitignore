@@ -8,6 +8,13 @@ __pycache__/
 dist/
 build/
 
+# Coverage / pytest
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.pytest_cache/
+
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints
