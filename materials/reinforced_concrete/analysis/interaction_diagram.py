@@ -1157,20 +1157,65 @@ class MNInteractionDiagram:
             norm = float(np.hypot(n_err / n_scale, m_err / m_scale))
             return (abs_max, norm)
 
+        def _prefer_tensile_branch(
+            current_best: Any,
+            all_attempts: List[Tuple[Any, str, Tuple[float, float]]],
+        ) -> Any:
+            """For tension loads (N < 0), prefer all-tensile solutions over
+            eccentric solutions with compression at one face, when both
+            achieve acceptable equilibrium.  This prevents the solver from
+            picking an eccentric ULS branch when a physically correct
+            pure-tension branch also exists.
+
+            Near the M-N envelope boundary the all-tensile branch may have
+            a non-trivial residual (the load point is just outside the
+            envelope on that branch).  A generous threshold — 5 % of the
+            dominant target force — ensures the tensile projection is still
+            preferred over the eccentric branch in these boundary cases,
+            while remaining tight enough to avoid misfiring for near-pure-
+            bending loads (e.g. N=-10, M=200) where compression IS correct.
+            """
+            if N_target >= 0:
+                return current_best
+            best_x = np.asarray(current_best.x, dtype=float)
+            if float(np.max(best_x)) <= 0:
+                return current_best  # already all-tensile
+            # Generous threshold: 5 % of dominant target magnitude.
+            _tensile_threshold = max(
+                acceptable_abs_error,
+                0.05 * max(abs(N_target), abs(M_target), 1.0),
+            )
+            # Current best has compression at some face. Look for an
+            # all-tensile alternative with acceptable residual.
+            tensile_candidates: list[tuple[Any, float, float]] = []
+            for result, _tag, _guess in all_attempts:
+                rx = np.asarray(result.x, dtype=float)
+                if float(np.max(rx)) > 0:
+                    continue  # has compression
+                abs_err, norm_err = residual_metrics(result)
+                if not np.isfinite(abs_err) or abs_err > _tensile_threshold:
+                    continue
+                tensile_candidates.append((result, abs_err, norm_err))
+            if not tensile_candidates:
+                return current_best
+            return min(tensile_candidates, key=lambda t: (t[1], t[2]))[0]
+
         def solve_from_guess(
             guess: Tuple[float, float],
             jac: Union[Callable[[npt.NDArray], npt.NDArray], str],
             max_nfev: Optional[int] = None,
+            bounds_override: Optional[Tuple[npt.NDArray, npt.NDArray]] = None,
         ) -> Any:
             # Analytical Jacobian: exact derivatives, 5-10 iterations typical
             # Numerical Jacobian: finite difference, 30-50 iterations typical
             _max = max_nfev if max_nfev is not None else max_iterations
-            x0 = np.asarray(clamp_guess(guess), dtype=float)
+            _lb, _ub = bounds_override if bounds_override is not None else (lower_bounds, upper_bounds)
+            x0 = np.clip(np.asarray(clamp_guess(guess), dtype=float), _lb, _ub)
             try:
                 return least_squares(
                     residual,
                     x0=x0,
-                    bounds=(lower_bounds, upper_bounds),
+                    bounds=(_lb, _ub),
                     jac=jac,  # type: ignore[arg-type]
                     ftol=tol,
                     xtol=tol,
@@ -1191,7 +1236,7 @@ class MNInteractionDiagram:
                     full_output=True,
                     maxfev=_max,
                 )
-                x_clamped = np.clip(np.asarray(x_out, dtype=float), lower_bounds, upper_bounds)
+                x_clamped = np.clip(np.asarray(x_out, dtype=float), _lb, _ub)
                 fun = np.asarray(residual(x_clamped), dtype=float)
                 return SimpleNamespace(
                     x=x_clamped,
@@ -1302,6 +1347,34 @@ class MNInteractionDiagram:
                 if eccentricity_mm > float(self.section_height) * 0.6:
                     candidate_guesses.append((-eps_y * 2.0, +eps_cu * 0.7))
 
+        # Pure-tension candidates for tension-dominant loads.  The candidates
+        # added above for M > 0 / M < 0 are all compression-biased (contain
+        # +eps_cu terms) regardless of N sign.  When N < 0, the physically
+        # correct solution is often all-tensile; without these candidates the
+        # solver may converge exclusively to an eccentric ULS branch.
+        if N_target < 0 and abs(M_target) > 1e-6:
+            if M_target > 0:
+                # Sagging + tension: bottom more tensile than top.
+                # Cover a range of curvature ratios from nearly uniform
+                # (transition zone near the envelope boundary) through to
+                # deep tension with significant curvature.
+                candidate_guesses.extend([
+                    (-eps_y * 0.8, -eps_y * 1.2),   # near-uniform
+                    (-eps_y * 0.5, -eps_y * 1.5),   # mild curvature
+                    (-eps_y * 1.0, -eps_y * 2.0),   # moderate
+                    (-eps_y * 1.5, -eps_y * 4.0),   # high curvature
+                    (-eps_y * 3.0, -eps_y * 6.0),   # deep tension
+                ])
+            else:
+                # Hogging + tension: top more tensile than bottom.
+                candidate_guesses.extend([
+                    (-eps_y * 1.2, -eps_y * 0.8),
+                    (-eps_y * 1.5, -eps_y * 0.5),
+                    (-eps_y * 2.0, -eps_y * 1.0),
+                    (-eps_y * 4.0, -eps_y * 1.5),
+                    (-eps_y * 6.0, -eps_y * 3.0),
+                ])
+
         # Deduplicate after clamping to avoid redundant solve calls.
         deduped_guesses: List[Tuple[float, float]] = []
         for guess in candidate_guesses:
@@ -1324,9 +1397,16 @@ class MNInteractionDiagram:
         best_result = primary_result
         best_abs_error, _ = residual_metrics(best_result)
         if np.isfinite(best_abs_error) and best_abs_error <= acceptable_abs_error:
-            _result = tuple(best_result.x)
-            self._strain_cache[_cache_key] = _result
-            return _result
+            # For tension loads, don't fast-return if the primary converged
+            # to a compression solution — try more candidates to find the
+            # physically preferred all-tensile branch.
+            _primary_has_compression = (
+                N_target < 0 and float(np.max(np.asarray(best_result.x))) > 0
+            )
+            if not _primary_has_compression:
+                _result = tuple(best_result.x)
+                self._strain_cache[_cache_key] = _result
+                return _result
 
         # Fallback pass 1: alternative guesses with preferred Jacobian.
         for i, guess in enumerate(deduped_guesses[1:], start=1):
@@ -1340,6 +1420,24 @@ class MNInteractionDiagram:
                 0 if bool(getattr(item[0], "success", False)) else 1,
             ),
         )
+
+        best_result = _prefer_tensile_branch(best_result, attempts)
+
+        # Tensile-constrained pass: if N < 0 and best still has compression,
+        # re-solve with upper bounds clamped to 0 so strains cannot drift
+        # into the eccentric ULS branch.  This produces a tensile-branch
+        # projection even when the load point is near/outside the envelope.
+        if N_target < 0 and float(np.max(np.asarray(best_result.x))) > 0:
+            _tensile_bounds = (lower_bounds, np.array([0.0, 0.0]))
+            _t_guesses = [g for g in deduped_guesses if g[0] <= 0 and g[1] <= 0]
+            if not _t_guesses:
+                _t_guesses = [(-eps_y, -eps_y * 2.0)]
+            for _ti, _tg in enumerate(_t_guesses):
+                attempts.append((
+                    solve_from_guess(_tg, jac_method, bounds_override=_tensile_bounds),
+                    f"tensile_clamped_{_ti}", _tg,
+                ))
+            best_result = _prefer_tensile_branch(best_result, attempts)
 
         best_abs_error, _ = residual_metrics(best_result)
         if np.isfinite(best_abs_error) and best_abs_error <= acceptable_abs_error:
@@ -1366,6 +1464,8 @@ class MNInteractionDiagram:
                     0 if bool(getattr(item[0], "success", False)) else 1,
                 ),
             )
+
+        best_result = _prefer_tensile_branch(best_result, attempts)
 
         best_abs_error, _ = residual_metrics(best_result)
         finite_x = np.all(np.isfinite(np.asarray(best_result.x)))

@@ -289,16 +289,15 @@ class ShearViewer:
         if abs(M_Ed) > 1e-6:
             diagram = self.check._get_diagram(ignore_compression_steel)
             eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed)
-            # Detect if the load case is outside the interaction envelope.
-            # When strict=True fails, the strains from strict=False are
-            # "nearest feasible" projections — not true equilibrium — so
-            # z_mech from those strains can be misleading.  Force the
-            # virtual lever arm in that case.
-            try:
-                diagram.find_strains_for_MN(M_Ed, N_Ed, strict=True)
-                force_virtual = False
-            except ValueError:
-                force_virtual = True
+            # Projected strains from strict=False represent the section's
+            # failure mode at the nearest envelope point.  The resulting
+            # mechanical lever arm is always more meaningful (and more
+            # conservative for shear, since z_mech < 0.95d) than the
+            # virtual 0.95d fallback — even for load cases outside the
+            # M-N envelope.  Using force_virtual=True would create
+            # discontinuities wherever the load sweep crosses the
+            # envelope boundary.
+            force_virtual = False
         else:
             eps_top, eps_bottom = None, None
             force_virtual = False
