@@ -498,7 +498,7 @@ class MNInteractionDiagram:
             ten_mask = strains_real < 0.0
             concrete_stresses[ten_mask] = 0.0
 
-        return concrete_stresses
+        return np.asarray(concrete_stresses, dtype=np.float64)
 
     def _concrete_tangent_modulus_with_options(
         self,
@@ -564,7 +564,7 @@ class MNInteractionDiagram:
         # Note: Confined concrete tangent modulus would go here if implemented
         # For now, confined concrete uses numerical Jacobian (see Jacobian selection logic)
 
-        return E_t
+        return np.asarray(E_t, dtype=np.float64)
 
     def _should_force_cracked_tension_zone(
         self,
@@ -847,7 +847,7 @@ class MNInteractionDiagram:
         if n <= 1:
             return np.array([0.0])
         t = np.linspace(0.0, 1.0, n)
-        return 0.5 * np.subtract(1.0, np.cos(np.pi * t))
+        return np.asarray(0.5 * np.subtract(1.0, np.cos(np.pi * t)), dtype=np.float64)
 
 
     @staticmethod

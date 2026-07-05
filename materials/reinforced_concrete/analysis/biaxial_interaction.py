@@ -917,7 +917,7 @@ class BiaxialMNInteractionSurface:
                 def objective_tangent(phi: float) -> float:
                     na_depth = max_dim * np.tan(phi)
                     point = self.calculate_point_pivot(na_depth, angle_deg)
-                    return point.N - N_target
+                    return float(point.N - N_target)
 
                 try:
                     phi_bound = 1.5

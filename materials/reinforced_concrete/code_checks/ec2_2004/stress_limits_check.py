@@ -546,11 +546,10 @@ class StressLimitsCheck(BaseCodeCheck):
             StressLimitResult with all intermediate values.
         """
         M_Ed = My_Ed
-        _mz_kw = {"Mz_target": Mz_Ed} if abs(Mz_Ed) > 1e-9 else {}
         diagram = self._get_diagram(ignore_compression_steel)
-        eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed, strict=True, **_mz_kw)
+        eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed, strict=True, Mz_target=Mz_Ed)
         strain_state_local = diagram.find_strain_state_for_MN(
-            My_target=M_Ed, N_target=N_Ed, **_mz_kw,
+            My_target=M_Ed, N_target=N_Ed, Mz_target=Mz_Ed,
         )
 
         sigma_c = self._get_peak_concrete_stress(
@@ -603,10 +602,10 @@ class StressLimitsCheck(BaseCodeCheck):
                             E_cm_eff_NL, ignore_compression_steel,
                         )
                         eps_top, eps_bottom = diagram_nl.find_strains_for_MN(
-                            M_Ed, N_Ed, strict=True, **_mz_kw
+                            M_Ed, N_Ed, strict=True, Mz_target=Mz_Ed
                         )
                         strain_state_local = diagram_nl.find_strain_state_for_MN(
-                            My_target=M_Ed, N_target=N_Ed, **_mz_kw,
+                            My_target=M_Ed, N_target=N_Ed, Mz_target=Mz_Ed,
                         )
                         sigma_c_nl = self._get_peak_concrete_stress(
                             eps_top, eps_bottom, diagram_nl,

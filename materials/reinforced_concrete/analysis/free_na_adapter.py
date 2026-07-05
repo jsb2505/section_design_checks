@@ -9,7 +9,7 @@ must be free to rotate for correct equilibrium.
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from materials.reinforced_concrete.analysis.biaxial_interaction import (
         BiaxialMNInteractionSurface,
     )
+    from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
     from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
     from materials.reinforced_concrete.materials.rebar import ShearRebar
 
@@ -351,9 +352,9 @@ class FreeNADiagramAdapter:
         if not surface_data:
             return CapacityResult(N_Rd=None, M_Rd=None, is_safe=False, utilization=float("inf"))
 
-        my_arr = np.array([p[0] for p in surface_data], dtype=float)
-        mz_arr = np.array([p[1] for p in surface_data], dtype=float)
-        n_arr = np.array([p[2] for p in surface_data], dtype=float)
+        my_arr = np.array([p.My for p in surface_data], dtype=float)
+        mz_arr = np.array([p.Mz for p in surface_data], dtype=float)
+        n_arr = np.array([p.N for p in surface_data], dtype=float)
 
         pts_3d = np.column_stack([my_arr, mz_arr, n_arr])
         if len(pts_3d) < 4:
@@ -1191,20 +1192,21 @@ class FreeNADiagramAdapter:
     def plot_mn(
         self,
         *,
-        load_points=None,
+        load_points: Any = None,
         show_vectors: bool = False,
         show_metadata: bool = True,
         n_points: int = 120,
         Mz_slice: float = 0.0,
-        save_path=None,
+        save_path: str | None = None,
         show: bool = True,
-        title=None,
+        title: str | None = None,
         width: int = 900,
         height: int = 700,
-    ):
+    ) -> Any:
         from materials.reinforced_concrete.analysis.mn_diagram_viewer import MNDiagramViewer
 
-        viewer = MNDiagramViewer(self)
+        # The adapter intentionally duck-types as MNInteractionDiagram for the viewer.
+        viewer = MNDiagramViewer(cast("MNInteractionDiagram", self))
         return viewer.plot(
             load_points=load_points,
             show_vectors=show_vectors,
@@ -1224,14 +1226,15 @@ class FreeNADiagramAdapter:
         N_Ed: float,
         *,
         show: bool = True,
-        title=None,
+        title: str | None = None,
         width: int = 1200,
         height: int = 1000,
-        section_render: str = "points",
-    ):
+        section_render: Literal["points", "filled"] = "points",
+    ) -> Any:
         from materials.reinforced_concrete.analysis.stress_strain_viewer import StressStrainViewer
 
-        viewer = StressStrainViewer(self)
+        # The adapter intentionally duck-types as MNInteractionDiagram for the viewer.
+        viewer = StressStrainViewer(cast("MNInteractionDiagram", self))
         return viewer.plot(
             M_Ed=float(M_Ed),
             N_Ed=float(N_Ed),

@@ -260,12 +260,11 @@ class StressStrainViewer:
         biaxial = abs(Mz_Ed) > 1e-9
 
         # 1) Solve for strain state
-        mz_kw = {"Mz_target": Mz_Ed} if biaxial else {}
         strain_state_obj: StrainState | None = None
         try:
             if biaxial and hasattr(d, "find_strain_state_for_MN"):
                 strain_state_obj = d.find_strain_state_for_MN(
-                    My_target=My_Ed, N_target=N_Ed, **mz_kw,
+                    My_target=My_Ed, N_target=N_Ed, Mz_target=Mz_Ed,
                 )
                 eps_top = strain_state_obj.eps_top
                 eps_bottom = strain_state_obj.eps_bottom
