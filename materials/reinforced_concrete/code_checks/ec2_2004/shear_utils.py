@@ -4,9 +4,14 @@ Docstring for materials.reinforced_concrete.code_checks.ec2.shear_utils
 
 Utility functions for shear design checks according to Eurocode 2 (EC2).
 '''
+from __future__ import annotations
+
 from dataclasses import dataclass
 from math import sqrt, isfinite, radians, copysign, tan, sin
-from typing import Literal, Optional, cast
+from typing import TYPE_CHECKING, Literal, Optional, cast
+
+if TYPE_CHECKING:
+    from materials.reinforced_concrete.analysis.strain_state import StrainState
 
 from shapely.geometry import GeometryCollection, LineString, MultiLineString, Point
 
@@ -385,6 +390,7 @@ def find_rho_l_from_strains(
     d: float,
     eps_top: float,
     eps_bottom: float,
+    strain_state: Optional["StrainState"] = None,
     rho_l_max: float = 0.02,
 ) -> float:
     """
@@ -393,12 +399,17 @@ def find_rho_l_from_strains(
     Uses only reinforcement in tension (strain < 0):
         rho_l = A_sl / (b_w * d) <= rho_l_max
 
+    When *strain_state* is biaxial, strain at each bar is evaluated using
+    the full 2D plane ``strain_state.strain_at(x, y)`` instead of the
+    y-only linear interpolation.
+
     Args:
         section: RC section geometry with reinforcement.
         b_w: Web breadth in mm.
         d: Effective depth in mm.
         eps_top: Strain at top fibre (compression positive).
         eps_bottom: Strain at bottom fibre (compression positive).
+        strain_state: Optional full 2D strain state for biaxial evaluation.
         rho_l_max: Upper limit for rho_l (default 0.02).
 
     Returns:
@@ -406,6 +417,13 @@ def find_rho_l_from_strains(
     """
     if b_w <= 0.0 or d <= 0.0:
         return 0.0
+
+    use_biaxial = strain_state is not None and strain_state.is_biaxial
+
+    if use_biaxial:
+        cx, cy = section.get_centroid()
+    else:
+        cx, cy = 0.0, 0.0  # unused
 
     _, y_bot, _, y_top = section.outline.bounds
     h = y_top - y_bot
@@ -415,8 +433,12 @@ def find_rho_l_from_strains(
     A_sl = 0.0
     for group in section.rebar_groups:
         for pos in group.positions:
-            # Linear strain field through section depth
-            strain_at_bar = eps_bottom + (eps_top - eps_bottom) * (pos.y - y_bot) / h
+            if use_biaxial:
+                strain_at_bar = strain_state.strain_at(  # type: ignore[union-attr]
+                    float(pos.x) - cx, float(pos.y) - cy,
+                )
+            else:
+                strain_at_bar = eps_bottom + (eps_top - eps_bottom) * (pos.y - y_bot) / h
             if strain_at_bar < 0.0:
                 A_sl += group.rebar.area
 

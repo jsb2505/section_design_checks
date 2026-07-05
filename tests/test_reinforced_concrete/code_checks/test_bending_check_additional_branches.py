@@ -31,6 +31,9 @@ class _FakeDiagram:
             raise RuntimeError("no strains")
         return 0.001, -0.001
 
+    def find_strain_state_for_MN(self, *args, **kwargs):
+        return None
+
     def get_capacity_fixed_n(self, *, N_Ed: float):
         return self.fixed_n
 
@@ -162,7 +165,7 @@ def test_perform_check_handles_effective_depth_value_error_in_as_min_path(
     monkeypatch.setattr(
         BendingCheck,
         "_find_tension_steel_area_and_f_yk",
-        lambda self, eps_top, eps_bottom: (120.0, 500.0),
+        lambda self, eps_top, eps_bottom, **kwargs: (120.0, 500.0),
     )
 
     def _raise_depth(*args, **kwargs):

@@ -13,8 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import exp
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 import warnings
+
+if TYPE_CHECKING:
+    from materials.reinforced_concrete.analysis.strain_state import StrainState
 
 from pydantic import Field, PrivateAttr
 
@@ -437,10 +440,16 @@ class StressLimitsCheck(BaseCodeCheck):
         eps_top: float,
         eps_bottom: float,
         diagram: Optional[MNInteractionDiagram] = None,
+        strain_state: Optional["StrainState"] = None,
     ) -> float:
         """Peak compressive stress in concrete from fibre integration."""
         diag = diagram or self._get_diagram()
-        forces, y, areas = diag.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
+
+        use_biaxial = strain_state is not None and strain_state.is_biaxial
+        if use_biaxial:
+            forces, _x, _y, areas = diag.get_fibre_forces_from_strain_state(strain_state)
+        else:
+            forces, _y, areas = diag.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
 
         conc_mask = diag._fibre_mat == "concrete"
         conc_forces = forces[conc_mask]
@@ -459,9 +468,10 @@ class StressLimitsCheck(BaseCodeCheck):
         self,
         eps_top: float,
         eps_bottom: float,
+        strain_state: Optional["StrainState"] = None,
     ) -> float:
         """Maximum tensile stress across all bars (MPa, converted to positive stress).
-        
+
         Assumes negative strains are tensile.
         """
         bounds = self.section.outline.bounds
@@ -471,6 +481,10 @@ class StressLimitsCheck(BaseCodeCheck):
         if h <= 0:
             raise ValueError(f"Height, h: {h} mm cannot be equal to or less than zero.")
 
+        use_biaxial = strain_state is not None and strain_state.is_biaxial
+        cx = (bounds[0] + bounds[2]) / 2.0 if use_biaxial else 0.0
+        cy = (bounds[1] + bounds[3]) / 2.0 if use_biaxial else 0.0
+
         max_stress = 0.0
         for group in self.section.rebar_groups:
             E_s = group.rebar.E_s
@@ -479,8 +493,11 @@ class StressLimitsCheck(BaseCodeCheck):
             k_ratio = group.rebar.grade.ft_ratio_min
 
             for pos in group.positions:
-                y_rel = (pos.y - y_min) / h
-                strain = eps_bottom + (eps_top - eps_bottom) * y_rel
+                if use_biaxial:
+                    strain = strain_state.strain_at(pos.x - cx, pos.y - cy)
+                else:
+                    y_rel = (pos.y - y_min) / h
+                    strain = eps_bottom + (eps_top - eps_bottom) * y_rel
 
                 if strain >= 0:
                     continue
@@ -529,9 +546,16 @@ class StressLimitsCheck(BaseCodeCheck):
         """
         diagram = self._get_diagram(ignore_compression_steel)
         eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed, strict=True)
+        strain_state_local = diagram.find_strain_state_for_MN(
+            M_target=M_Ed, N_target=N_Ed,
+        )
 
-        sigma_c = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram)
-        sigma_s = self._get_max_steel_stress(eps_top, eps_bottom)
+        sigma_c = self._get_peak_concrete_stress(
+            eps_top, eps_bottom, diagram, strain_state=strain_state_local,
+        )
+        sigma_s = self._get_max_steel_stress(
+            eps_top, eps_bottom, strain_state=strain_state_local,
+        )
         f_yk = self._get_f_yk_max()
 
         nonlinear_creep_applied = False
@@ -578,8 +602,16 @@ class StressLimitsCheck(BaseCodeCheck):
                         eps_top, eps_bottom = diagram_nl.find_strains_for_MN(
                             M_Ed, N_Ed, strict=True
                         )
-                        sigma_c_nl = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_nl)
-                        sigma_s_nl = self._get_max_steel_stress(eps_top, eps_bottom)
+                        strain_state_local = diagram_nl.find_strain_state_for_MN(
+                            M_target=M_Ed, N_target=N_Ed,
+                        )
+                        sigma_c_nl = self._get_peak_concrete_stress(
+                            eps_top, eps_bottom, diagram_nl,
+                            strain_state=strain_state_local,
+                        )
+                        sigma_s_nl = self._get_max_steel_stress(
+                            eps_top, eps_bottom, strain_state=strain_state_local,
+                        )
                         nonlinear_creep_applied = True
 
                     result.sigma_c_peak = sigma_c_nl

@@ -11,6 +11,7 @@ The 2D case additionally stores plane coefficients (a, b, c) where
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -61,6 +62,38 @@ class StrainState:
         Vectorised strain field over arrays of fibre coordinates (relative to centroid).
         """
         return self.plane_a * x + self.plane_b * y + self.plane_c
+
+    def is_tension_at(self, x: float, y: float) -> bool:
+        """True if the strain at centroid-relative (x, y) is tensile (negative)."""
+        return self.strain_at(x, y) < 0
+
+    @property
+    def compression_direction(self) -> Tuple[float, float]:
+        """
+        Unit vector pointing from tension toward compression, perpendicular to NA.
+
+        The strain gradient ``(plane_a, plane_b)`` points in the direction of
+        increasing strain (toward compression).  This property normalises it.
+
+        For 1D (``plane_a == 0``): returns ``(0, 1)`` when ``plane_b > 0``
+        (top in compression) or ``(0, -1)`` when ``plane_b < 0``.
+
+        Returns ``(0, 0)`` for a uniform strain field (no gradient).
+        """
+        grad_mag = math.hypot(self.plane_a, self.plane_b)
+        if grad_mag < 1e-18:
+            return (0.0, 0.0)
+        return (self.plane_a / grad_mag, self.plane_b / grad_mag)
+
+    def project_along_compression(self, x: float, y: float) -> float:
+        """
+        Scalar projection of centroid-relative point (x, y) onto
+        :attr:`compression_direction`.
+
+        Larger values correspond to the compression side of the section.
+        """
+        dx, dy = self.compression_direction
+        return dx * x + dy * y
 
     def to_end_strains(self) -> Tuple[float, float]:
         """Return (eps_top, eps_bottom) for legacy API compatibility."""

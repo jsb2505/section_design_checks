@@ -43,10 +43,13 @@ def _make_stub_check() -> CircularSectionCheck:
         f_ctd_accidental=1.6,
     )
 
-    diag = SimpleNamespace(find_strains_for_MN=lambda M, N, strict=False: (0.001, -0.001))
+    diag = SimpleNamespace(
+        find_strains_for_MN=lambda M, N, strict=False: (0.001, -0.001),
+        find_strain_state_for_MN=lambda M_target, N_target: None,
+    )
     shear_check = SimpleNamespace(
-        find_effective_depth=lambda M, N, eps_top=None, eps_bottom=None, ignore_compression_steel=False: 500.0,
-        find_lever_arm=lambda M, N, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False: (450.0, 400.0),
+        find_effective_depth=lambda M, N, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 500.0,
+        find_lever_arm=lambda M, N, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: (450.0, 400.0),
         _get_diagram=lambda ignore_compression_steel=False: diag,
     )
 
@@ -594,10 +597,13 @@ class TestIterativeAndRoutingHelpers:
     def test_compute_cot_theta_for_tension_shift_paths(self, monkeypatch):
         """Test compute cot theta for tension shift paths."""
         check = _make_stub_check()
-        _cot_diag = SimpleNamespace(find_strains_for_MN=lambda M, N, strict=False: (0.001, -0.001))
+        _cot_diag = SimpleNamespace(
+            find_strains_for_MN=lambda M, N, strict=False: (0.001, -0.001),
+            find_strain_state_for_MN=lambda M_target, N_target: None,
+        )
         object.__setattr__(check, "_shear_check", SimpleNamespace(
-            find_effective_depth=lambda M, N, eps_top=None, eps_bottom=None, ignore_compression_steel=False: 500.0,
-            find_lever_arm=lambda M, N, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False: (450.0, None),  # force z=0.9d fallback
+            find_effective_depth=lambda M, N, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 500.0,
+            find_lever_arm=lambda M, N, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: (450.0, None),  # force z=0.9d fallback
             _get_diagram=lambda ignore_compression_steel=False: _cot_diag,
         ))
         object.__setattr__(
@@ -682,10 +688,13 @@ class TestIterativeAndRoutingHelpers:
         """Test perform shear check standard path with spacing flags."""
         check = _make_stub_check()
         check.shear_reinforcement.leg_spacing = 350.0
-        _std_diag = SimpleNamespace(find_strains_for_MN=lambda M, N, strict=False: (0.001, -0.001))
+        _std_diag = SimpleNamespace(
+            find_strains_for_MN=lambda M, N, strict=False: (0.001, -0.001),
+            find_strain_state_for_MN=lambda M_target, N_target: None,
+        )
         object.__setattr__(check, "_shear_check", SimpleNamespace(
-            find_effective_depth=lambda M, N, eps_top=None, eps_bottom=None, ignore_compression_steel=False: 500.0,
-            find_lever_arm=lambda M, N, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False: (450.0, 400.0),
+            find_effective_depth=lambda M, N, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 500.0,
+            find_lever_arm=lambda M, N, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: (450.0, 400.0),
             _get_diagram=lambda ignore_compression_steel=False: _std_diag,
         ))
 

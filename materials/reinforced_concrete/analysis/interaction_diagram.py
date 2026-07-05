@@ -300,7 +300,7 @@ class MNInteractionDiagram:
         self._fibre_mat = self._fibre_mat.astype("U8", copy=False)  # Ensure consistent dtype
 
         # Cache section centroid (avoid repeated Shapely geometry access)
-        _, self._section_cy = self.section.get_centroid()
+        self._section_cx, self._section_cy = self.section.get_centroid()
 
         # Cache diagram points to avoid repeated generation
         self._dense_diagram_points: Optional[tuple[InteractionPoint, ...]] = None
@@ -729,6 +729,69 @@ class MNInteractionDiagram:
         forces = stresses * area
 
         return (forces, y, area)
+
+
+    def get_fibre_forces_from_strain_state(
+        self,
+        strain_state: "StrainState",
+    ) -> Tuple[
+        npt.NDArray[np.float64],
+        npt.NDArray[np.float64],
+        npt.NDArray[np.float64],
+        npt.NDArray[np.float64],
+    ]:
+        """
+        Compute fibre-level forces from a :class:`StrainState`.
+
+        When the strain state is 1D (horizontal NA), this delegates to
+        :meth:`get_fibre_forces_from_end_strains` for performance.  When
+        biaxial, strains are evaluated over the full 2D plane.
+
+        Returns:
+            Tuple of (forces, x_coords, y_coords, areas):
+                - forces: Force in each fibre (N), compression positive
+                - x_coords: X-coordinate of each fibre (mm)
+                - y_coords: Y-coordinate of each fibre (mm)
+                - areas: Area of each fibre (mm²)
+        """
+        if not strain_state.is_biaxial:
+            forces, y, area = self.get_fibre_forces_from_end_strains(
+                strain_state.eps_top, strain_state.eps_bottom,
+            )
+            return (forces, self._fibre_x, y, area)
+
+        # Full 2D strain field
+        x = self._fibre_x
+        y = self._fibre_y
+        area = self._fibre_area
+        material_type = self._fibre_mat
+        material_index = self._fibre_mi
+
+        strains = strain_state.strain_field(
+            x - self._section_cx, y - self._section_cy,
+        )
+
+        stresses = np.zeros_like(strains)
+
+        conc_mask = material_type == "concrete"
+        if np.any(conc_mask):
+            stresses[conc_mask] = self._concrete_stress_with_options(strains[conc_mask])
+
+        steel_mask = material_type == "steel"
+        if np.any(steel_mask):
+            steel_strains = strains[steel_mask]
+            steel_indices = material_index[steel_mask]
+            steel_stresses = np.zeros_like(steel_strains)
+            for gi, sm in enumerate(self.steel_models):
+                m = steel_indices == gi
+                if np.any(m):
+                    steel_stresses[m] = sm.get_stress_array(steel_strains[m])
+            if self.ignore_compression_steel:
+                steel_stresses[steel_strains > 0] = 0.0
+            stresses[steel_mask] = steel_stresses
+
+        forces = stresses * area
+        return (forces, x, y, area)
 
 
     @staticmethod
@@ -1736,6 +1799,7 @@ class MNInteractionDiagram:
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
         *,
+        strain_state: Optional["StrainState"] = None,
         use_mechanical_lever_arm: bool = True,
         z_d_upper: float = 0.95,
         z_d_lower: float = 0.65,
@@ -1803,6 +1867,8 @@ class MNInteractionDiagram:
         # Try rigorous centroid-based lever arm
         if force_virtual:
             z_mech = None
+        elif strain_state is not None and strain_state.is_biaxial:
+            z_mech = self._compute_lever_arm_from_strain_state(strain_state)
         else:
             z_mech = self._compute_lever_arm_from_centroids(eps_top, eps_bottom)
 
@@ -1952,7 +2018,58 @@ class MNInteractionDiagram:
         z_mech = abs(float(y_T) - float(y_C))
         if not np.isfinite(z_mech):
             return None
-        
+
+        return float(z_mech)
+
+
+    def _compute_lever_arm_from_strain_state(
+        self,
+        strain_state: "StrainState",
+    ) -> Optional[float]:
+        """
+        Mechanical lever arm projected along the compression direction.
+
+        For a biaxial strain state, the lever arm is the perpendicular distance
+        between the tension and compression force resultant centroids, measured
+        along the strain gradient (compression) direction.
+
+        Returns None if either tension or compression resultant is absent.
+        """
+        forces, x_coords, y_coords, _ = self.get_fibre_forces_from_strain_state(
+            strain_state,
+        )
+
+        tension_mask = forces < 0
+        compression_mask = forces > 0
+
+        if (not np.any(tension_mask)) or (not np.any(compression_mask)):
+            return None
+
+        T_total = float(np.sum(-forces[tension_mask]))
+        C_total = float(np.sum(forces[compression_mask]))
+
+        if T_total <= 0 or C_total <= 0:
+            return None
+
+        cx, cy = self._section_cx, self._section_cy
+        dx, dy = strain_state.compression_direction
+        if abs(dx) < 1e-18 and abs(dy) < 1e-18:
+            return None
+
+        # Project fibre positions onto compression direction (centroid-relative)
+        proj = dx * (x_coords - cx) + dy * (y_coords - cy)
+
+        proj_T = float(
+            np.sum((-forces[tension_mask]) * proj[tension_mask]) / T_total
+        )
+        proj_C = float(
+            np.sum((forces[compression_mask]) * proj[compression_mask]) / C_total
+        )
+
+        z_mech = abs(proj_C - proj_T)
+        if not np.isfinite(z_mech):
+            return None
+
         return float(z_mech)
 
 

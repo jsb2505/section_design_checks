@@ -422,7 +422,7 @@ class TestPropertiesAndDepths:
 
         # Approximate mode with strain input delegates to strain helper method.
         object.__setattr__(check, "use_mechanical_lever_arm", False)
-        monkeypatch.setattr(ShearCheck, "_compute_rho_l_from_strains", lambda self, eps_top, eps_bottom, d: 0.011)
+        monkeypatch.setattr(ShearCheck, "_compute_rho_l_from_strains", lambda self, eps_top, eps_bottom, d, **kw: 0.011)
         assert check._find_rho_l(M_Ed=10.0, N_Ed=0.0, d=400.0, eps_top=0.001, eps_bottom=-0.001) == pytest.approx(0.011, rel=1e-12)
 
         # Approximate centroid fallback with no tension bars.
@@ -436,7 +436,7 @@ class TestPropertiesAndDepths:
             "_get_diagram",
             lambda ignore_compression_steel=False: SimpleNamespace(find_strains_for_MN=lambda M, N: (0.002, -0.001)),
         )
-        monkeypatch.setattr(ShearCheck, "_compute_rho_l_from_strains", lambda self, eps_top, eps_bottom, d: 0.015)
+        monkeypatch.setattr(ShearCheck, "_compute_rho_l_from_strains", lambda self, eps_top, eps_bottom, d, **kw: 0.015)
         assert check._find_rho_l(M_Ed=10.0, N_Ed=0.0, d=400.0) == pytest.approx(0.015, rel=1e-12)
 
         # Approximate centroid fallback with tension bars -> clamp to 0.02.
@@ -742,7 +742,7 @@ class TestCheckSingleCaseBranching:
         monkeypatch.setattr(
             ShearCheck,
             "find_effective_depth",
-            lambda self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False: 400.0,
+            lambda self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 400.0,
         )
         monkeypatch.setattr(
             ShearCheck,
@@ -755,14 +755,14 @@ class TestCheckSingleCaseBranching:
         monkeypatch.setattr(
             ShearCheck,
             "_find_rho_l",
-            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False: 0.01,
+            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: vrd_c)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp: vrd_c_un)
         monkeypatch.setattr(
             ShearCheck,
             "find_lever_arm",
-            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False: (360.0, None),
+            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: (360.0, None),
         )
         monkeypatch.setattr(ShearCheck, "_find_cot_theta_limits", lambda self, sigma_cp, z, V_Ed: (1.0, 2.0))
         monkeypatch.setattr(ShearCheck, "_find_cot_theta_for_V_Ed", lambda self, **kwargs: 1.5)
@@ -776,7 +776,7 @@ class TestCheckSingleCaseBranching:
         object.__setattr__(check, "shear_reinforcement", None)
         captured = {}
 
-        def _find_d(self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False):
+        def _find_d(self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw):
             captured["eps"] = (eps_top, eps_bottom)
             return 400.0
 
@@ -785,7 +785,7 @@ class TestCheckSingleCaseBranching:
         monkeypatch.setattr(
             ShearCheck,
             "_find_rho_l",
-            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False: 0.01,
+            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: 100.0)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp: 90.0)
@@ -816,13 +816,13 @@ class TestCheckSingleCaseBranching:
         monkeypatch.setattr(
             ShearCheck,
             "find_effective_depth",
-            lambda self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False: 400.0,
+            lambda self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 400.0,
         )
         monkeypatch.setattr(ShearCheck, "_find_sigma_cp", lambda self, N_Ed: 1.0)
         monkeypatch.setattr(
             ShearCheck,
             "_find_rho_l",
-            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False: 0.01,
+            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: 200.0)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c_uncracked", lambda self, sigma_cp: 150.0)
@@ -972,12 +972,12 @@ class TestCheckSingleCaseBranching:
         monkeypatch.setattr(
             ShearCheck,
             "find_effective_depth",
-            lambda self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False: 400.0,
+            lambda self, M_Ed, N_Ed, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 400.0,
         )
         monkeypatch.setattr(
             ShearCheck,
             "_find_rho_l",
-            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False: 0.01,
+            lambda self, M_Ed, N_Ed, d, eps_top=None, eps_bottom=None, ignore_compression_steel=False, **kw: 0.01,
         )
         monkeypatch.setattr(ShearCheck, "_find_sigma_cp", lambda self, N_Ed: 1.0)
         monkeypatch.setattr(ShearCheck, "find_V_Rd_c", lambda self, d, rho_l, sigma_cp: 50.0)

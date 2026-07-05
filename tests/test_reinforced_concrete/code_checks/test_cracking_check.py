@@ -87,6 +87,9 @@ class _FakeDiagram:
             raise ValueError("outside diagram")
         return self.eps_top, self.eps_bottom
 
+    def find_strain_state_for_MN(self, *args, **kwargs):
+        return None
+
     def get_fibre_forces_from_end_strains(self, eps_top: float, eps_bottom: float):
         y = np.zeros_like(self._forces, dtype=float)
         return self._forces, y, self._areas
@@ -372,7 +375,7 @@ class TestCrackingFaceAndMainFlow:
         monkeypatch.setattr(
             CrackingCheck,
             "_get_tension_rebar_info",
-            lambda self, eps_top, eps_bottom, face=None, h_c_ef_limit=None: (0.0, 0.0, []),
+            lambda self, eps_top, eps_bottom, face=None, h_c_ef_limit=None, **kw: (0.0, 0.0, []),
         )
 
         result = check._calculate_face_crack_width(
@@ -394,18 +397,18 @@ class TestCrackingFaceAndMainFlow:
         monkeypatch.setattr(
             CrackingCheck,
             "_get_tension_rebar_info",
-            lambda self, eps_top, eps_bottom, face=None, h_c_ef_limit=None: (1000.0, 45.0, [(20.0, 3)]),
+            lambda self, eps_top, eps_bottom, face=None, h_c_ef_limit=None, **kw: (1000.0, 45.0, [(20.0, 3)]),
         )
         monkeypatch.setattr(CrackingCheck, "find_rho_p_eff", lambda self, A_s_tension, h_c_ef, xi_1=0.0, A_p=0.0, A_c_eff=None: 0.02)
-        monkeypatch.setattr(CrackingCheck, "_get_steel_stress", lambda self, eps_top, eps_bottom, face=None, h_c_ef_limit=None: 300.0)
+        monkeypatch.setattr(CrackingCheck, "_get_steel_stress", lambda self, eps_top, eps_bottom, face=None, h_c_ef_limit=None, **kw: 300.0)
         monkeypatch.setattr(CrackingCheck, "find_k_2", lambda self, eps_top, eps_bottom: 0.5)
-        monkeypatch.setattr(CrackingCheck, "_compute_max_bar_spacing", lambda self, eps_top, eps_bottom, face=None, h_c_ef_limit=None: 0.0)
+        monkeypatch.setattr(CrackingCheck, "_compute_max_bar_spacing", lambda self, eps_top, eps_bottom, face=None, h_c_ef_limit=None, **kw: 0.0)
         monkeypatch.setattr(
             CrackingCheck,
             "find_maximum_crack_spacing",
             lambda self, cover, phi_eq, rho_p_eff, k_2, x=None, has_tension_reinforcement=True, sigma_s=0.0, bar_spacing=0.0: 120.0,
         )
-        monkeypatch.setattr(CrackingCheck, "_get_tension_zone_E_s", lambda self, eps_top, eps_bottom: 200000.0)
+        monkeypatch.setattr(CrackingCheck, "_get_tension_zone_E_s", lambda self, eps_top, eps_bottom, **kw: 200000.0)
         monkeypatch.setattr(CrackingCheck, "find_strain_difference", lambda self, sigma_s, rho_p_eff, E_s: 0.001)
         monkeypatch.setattr(CrackingCheck, "_get_f_yk_max", lambda self: 250.0)
 
@@ -503,7 +506,7 @@ class TestCrackingFaceAndMainFlow:
                 eps_bottom=0.0002,
             ),
         )
-        monkeypatch.setattr(CrackingCheck, "_get_peak_concrete_stress", lambda self, eps_top, eps_bottom, diagram=None: 10.0)
+        monkeypatch.setattr(CrackingCheck, "_get_peak_concrete_stress", lambda self, eps_top, eps_bottom, diagram=None, **kw: 10.0)
 
         result = check.perform_check(M_Ed=120.0, N_Ed=200.0, force_cracked=True)
         assert result.status == CheckStatus.PASS
@@ -523,7 +526,7 @@ class TestCrackingFaceAndMainFlow:
                 eps_bottom=-0.0010,
             ),
         )
-        monkeypatch.setattr(CrackingCheck, "_get_peak_concrete_stress", lambda self, eps_top, eps_bottom, diagram=None: 5.0)
+        monkeypatch.setattr(CrackingCheck, "_get_peak_concrete_stress", lambda self, eps_top, eps_bottom, diagram=None, **kw: 5.0)
 
         captured_faces = []
 
@@ -570,7 +573,7 @@ class TestCrackingFaceAndMainFlow:
                 eps_bottom=-0.001,
             ),
         )
-        monkeypatch.setattr(CrackingCheck, "_get_peak_concrete_stress", lambda self, eps_top, eps_bottom, diagram=None: 5.0)
+        monkeypatch.setattr(CrackingCheck, "_get_peak_concrete_stress", lambda self, eps_top, eps_bottom, diagram=None, **kw: 5.0)
 
         captured = {}
 
@@ -615,7 +618,7 @@ class TestCrackingFaceAndMainFlow:
                 eps_bottom=0.0002,
             ),
         )
-        monkeypatch.setattr(CrackingCheck, "_get_peak_concrete_stress", lambda self, eps_top, eps_bottom, diagram=None: 9.0)
+        monkeypatch.setattr(CrackingCheck, "_get_peak_concrete_stress", lambda self, eps_top, eps_bottom, diagram=None, **kw: 9.0)
 
         net_comp = check.calculate_detailed(M_Ed=100.0, N_Ed=100.0, force_cracked=True)
         assert net_comp.is_cracked is False

@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
 
 # Public type alias for the fallback policy
 EffectiveDepthFallback = Literal["ratio_of_h", "centroid"]
+BiaxialEffectiveDepthPolicy = Literal["centroid_normal", "extreme_fibre"]
 import warnings
+
+import numpy as np
 
 from materials.reinforced_concrete.constitutive import SteelModelType
 from materials.reinforced_concrete.ndp import get_ndp_callable
@@ -17,6 +20,7 @@ from materials.reinforced_concrete.ndp import get_ndp_callable
 if TYPE_CHECKING:
     from materials.reinforced_concrete.geometry import RCSection
     from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+    from materials.reinforced_concrete.analysis.strain_state import StrainState
 
 
 def calculate_section_height(section: "RCSection") -> float:
@@ -208,6 +212,122 @@ def _apply_d_fallback(
     return d
 
 
+def _compute_biaxial_effective_depth(
+    section: "RCSection",
+    strain_state: "StrainState",
+    diagram: Optional["MNInteractionDiagram"],
+    policy: BiaxialEffectiveDepthPolicy = "centroid_normal",
+) -> Optional[float]:
+    """
+    Compute effective depth perpendicular to a rotated neutral axis.
+
+    Args:
+        section: RCSection with rebar groups.
+        strain_state: Biaxial StrainState with compression_direction.
+        diagram: Optional diagram for fibre force computation (needed for
+            ``"centroid_normal"`` policy).
+        policy: ``"centroid_normal"`` or ``"extreme_fibre"``.
+
+    Returns:
+        Effective depth in mm, or None if computation fails.
+    """
+    from shapely.geometry import LineString
+
+    dx, dy = strain_state.compression_direction
+    if abs(dx) < 1e-18 and abs(dy) < 1e-18:
+        return None
+
+    cx, cy = section.get_centroid()
+
+    # Identify tension rebars and compute area-weighted centroid projection
+    tension_proj_sum = 0.0
+    tension_area_sum = 0.0
+    for group in section.rebar_groups:
+        a_bar = float(group.rebar.area)
+        for pos in group.positions:
+            xr, yr = float(pos.x) - cx, float(pos.y) - cy
+            if strain_state.is_tension_at(xr, yr):
+                proj = dx * xr + dy * yr
+                tension_proj_sum += a_bar * proj
+                tension_area_sum += a_bar
+
+    if tension_area_sum <= 0:
+        return None
+
+    proj_T = tension_proj_sum / tension_area_sum
+
+    if policy == "extreme_fibre":
+        # Project section boundary vertices onto compression direction
+        coords = list(section.outline.exterior.coords)
+        projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
+        proj_comp_extreme = max(projections)
+        return abs(proj_comp_extreme - proj_T)
+
+    # "centroid_normal" policy: find compression zone centroid, draw line
+    # through it along compression direction, intersect with section boundary.
+    if diagram is None:
+        # Fall back to extreme_fibre if no diagram available
+        coords = list(section.outline.exterior.coords)
+        projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
+        proj_comp_extreme = max(projections)
+        return abs(proj_comp_extreme - proj_T)
+
+    forces, x_coords, y_coords, _ = diagram.get_fibre_forces_from_strain_state(
+        strain_state,
+    )
+
+    compression_mask = forces > 0
+    if not np.any(compression_mask):
+        return None
+
+    C_total = float(np.sum(forces[compression_mask]))
+    if C_total <= 0:
+        return None
+
+    # Compression zone centroid (absolute coords)
+    x_C = float(np.sum(forces[compression_mask] * x_coords[compression_mask]) / C_total)
+    y_C = float(np.sum(forces[compression_mask] * y_coords[compression_mask]) / C_total)
+
+    # Draw a line through compression centroid along compression direction
+    # and find where it intersects the section boundary on the compression side
+    line_length = _get_section_height(section) * 2.0  # generous extent
+    line = LineString([
+        (x_C - dx * line_length, y_C - dy * line_length),
+        (x_C + dx * line_length, y_C + dy * line_length),
+    ])
+
+    intersection = section.outline.exterior.intersection(line)
+    if intersection.is_empty:
+        # Fallback to extreme fibre
+        coords = list(section.outline.exterior.coords)
+        projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
+        proj_comp_extreme = max(projections)
+        return abs(proj_comp_extreme - proj_T)
+
+    # Find the intersection point furthest along compression direction
+    from shapely.geometry import MultiPoint, Point as ShapelyPoint
+
+    if isinstance(intersection, ShapelyPoint):
+        pts = [intersection]
+    elif isinstance(intersection, MultiPoint):
+        pts = list(intersection.geoms)
+    elif hasattr(intersection, "geoms"):
+        pts = [g for g in intersection.geoms if isinstance(g, ShapelyPoint)]
+    else:
+        pts = []
+
+    if not pts:
+        coords = list(section.outline.exterior.coords)
+        projections = [dx * (x - cx) + dy * (y - cy) for x, y in coords]
+        proj_comp_extreme = max(projections)
+        return abs(proj_comp_extreme - proj_T)
+
+    boundary_projs = [dx * (p.x - cx) + dy * (p.y - cy) for p in pts]
+    proj_boundary = max(boundary_projs)
+
+    return abs(proj_boundary - proj_T)
+
+
 def find_effective_depth_for_flexure(
     section: "RCSection",
     diagram: Optional["MNInteractionDiagram"],
@@ -216,6 +336,8 @@ def find_effective_depth_for_flexure(
     eps_top: Optional[float] = None,
     eps_bottom: Optional[float] = None,
     *,
+    strain_state: Optional["StrainState"] = None,
+    biaxial_d_policy: BiaxialEffectiveDepthPolicy = "centroid_normal",
     m_tol: float = 1e-6,
     strain_tol: float = 1e-15,
     warn_on_fallback: bool = True,
@@ -232,6 +354,9 @@ def find_effective_depth_for_flexure(
     When the strain state allows (clear compression/tension split), d is
     computed from rebar centroid geometry via ``section.get_effective_depth()``.
 
+    When *strain_state* is biaxial (rotated NA), d is computed geometrically
+    perpendicular to the neutral axis using the ``biaxial_d_policy``.
+
     When the strain state is ambiguous (net compression, net tension, pure
     axial, solver failure), the ``d_fallback`` policy is applied:
         - ``"ratio_of_h"``: d = d_ratio * h  (default 0.9h, always available)
@@ -245,6 +370,15 @@ def find_effective_depth_for_flexure(
         N_Ed: Design axial force in kN (compression positive).
         eps_top: Pre-computed top strain (optional).
         eps_bottom: Pre-computed bottom strain (optional).
+        strain_state: Full 2D strain state (optional). When biaxial,
+            triggers perpendicular-to-NA effective depth computation.
+        biaxial_d_policy: Policy for biaxial effective depth:
+            - ``"centroid_normal"`` (default): d measured from the section
+              boundary (along a line through the compression zone centroid,
+              perpendicular to the NA) to the tension rebar centroid.
+            - ``"extreme_fibre"``: d measured from the extreme compression
+              fibre to the tension rebar centroid, both projected onto the
+              compression direction.
         m_tol: Tolerance for considering moment as zero.
         strain_tol: Tolerance for strain comparisons.
         warn_on_fallback: Whether to emit warnings when using fallback.
@@ -270,6 +404,18 @@ def find_effective_depth_for_flexure(
     # Pure shear / pure axial / no clear bending → fallback
     if abs(M_Ed) <= m_tol:
         return _fallback("no bending (|M_Ed| ≈ 0)")
+
+    # Biaxial path: perpendicular-to-NA geometric computation
+    if strain_state is not None and strain_state.is_biaxial:
+        d_biaxial = _compute_biaxial_effective_depth(
+            section=section,
+            strain_state=strain_state,
+            diagram=diagram,
+            policy=biaxial_d_policy,
+        )
+        if d_biaxial is not None and d_biaxial > 0:
+            return d_biaxial
+        return _fallback("biaxial effective depth computation failed")
 
     # If strains missing, try to solve via diagram
     if (eps_top is None or eps_bottom is None) and diagram is not None:
@@ -376,20 +522,35 @@ def get_tension_rebars_from_strain_state(
     section: "RCSection",
     eps_top: float,
     eps_bottom: float,
+    strain_state: Optional["StrainState"] = None,
 ) -> List[Tuple[float, int, float]]:
     """
     Identify rebars in the tension zone based on strain state.
 
     Returns rebars where the strain at their location is negative (tension).
 
+    When *strain_state* is provided and biaxial, the full 2D strain plane is
+    used to evaluate strain at each bar's (x, y) position.  Otherwise the
+    legacy y-only linear interpolation is used.
+
     Args:
         section: RCSection object
         eps_top: Strain at top fibre (compression positive)
         eps_bottom: Strain at bottom fibre (compression positive)
+        strain_state: Optional full 2D strain state for biaxial evaluation.
 
     Returns:
         List of tuples (diameter_mm, count, y_position) for each tension rebar group
     """
+    use_biaxial = (
+        strain_state is not None and strain_state.is_biaxial
+    )
+
+    if use_biaxial:
+        cx, cy = section.get_centroid()
+    else:
+        cx, cy = 0.0, 0.0  # unused
+
     bounds = section.outline.bounds
     h = bounds[3] - bounds[1]  # section height
     y_min = bounds[1]
@@ -399,10 +560,13 @@ def get_tension_rebars_from_strain_state(
     for group in section.rebar_groups:
         diameter = float(group.rebar.diameter)
         for pos in group.positions:
-            # Calculate strain at this y position (linear interpolation)
-            y_rel = (pos.y - y_min) / h  # normalised position from bottom (0 to 1)
-            # strain = eps_bottom + (eps_top - eps_bottom) * y_rel
-            strain_at_bar = eps_bottom + (eps_top - eps_bottom) * y_rel
+            if use_biaxial:
+                strain_at_bar = strain_state.strain_at(  # type: ignore[union-attr]
+                    float(pos.x) - cx, float(pos.y) - cy,
+                )
+            else:
+                y_rel = (pos.y - y_min) / h
+                strain_at_bar = eps_bottom + (eps_top - eps_bottom) * y_rel
 
             # Tension is negative strain
             if strain_at_bar < 0:

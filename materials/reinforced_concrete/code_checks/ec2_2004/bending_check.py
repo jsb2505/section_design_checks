@@ -5,9 +5,14 @@ This is a FIRST PRINCIPLES check based on strain compatibility and force equilib
 Uses the fibre-based M-N interaction diagram infrastructure.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import warnings
-from typing import Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+
+if TYPE_CHECKING:
+    from materials.reinforced_concrete.analysis.strain_state import StrainState
 from pydantic import Field, PrivateAttr, model_validator
 import numpy as np
 
@@ -346,13 +351,22 @@ class BendingCheck(BaseCodeCheck):
         *,
         eps_top: float,
         eps_bottom: float,
+        strain_state: Optional["StrainState"] = None,
         strain_tol: float = 1e-12,
     ) -> tuple[float, Optional[float]]:
         """
         Return total tension steel area and governing f_yk from current strain state.
 
         Tension is identified by negative strain at bar position.
+        When *strain_state* is biaxial, uses 2D strain evaluation.
         """
+        use_biaxial = strain_state is not None and strain_state.is_biaxial
+
+        if use_biaxial:
+            cx, cy = self.section.get_centroid()
+        else:
+            cx, cy = 0.0, 0.0
+
         _, y_min, _, y_max = self.section.outline.bounds
         h = float(y_max - y_min)
         if h <= strain_tol:
@@ -365,8 +379,13 @@ class BendingCheck(BaseCodeCheck):
             a_bar = float(group.rebar.area)
             f_yk = float(group.rebar.f_yk)
             for pos in group.positions:
-                y_rel = (float(pos.y) - float(y_min)) / h
-                eps_bar = float(eps_bottom) + (float(eps_top) - float(eps_bottom)) * y_rel
+                if use_biaxial:
+                    eps_bar = strain_state.strain_at(  # type: ignore[union-attr]
+                        float(pos.x) - cx, float(pos.y) - cy,
+                    )
+                else:
+                    y_rel = (float(pos.y) - float(y_min)) / h
+                    eps_bar = float(eps_bottom) + (float(eps_top) - float(eps_bottom)) * y_rel
                 if eps_bar < -strain_tol:
                     A_s_tension += a_bar
                     f_yk_tension.append(f_yk)
@@ -480,10 +499,19 @@ class BendingCheck(BaseCodeCheck):
             except Exception:
                 eps_top, eps_bottom = None, None
 
+            # Obtain full strain state for biaxial-aware downstream calls
+            strain_state_local: Optional["StrainState"] = None
+            if eps_top is not None and eps_bottom is not None:
+                try:
+                    strain_state_local = diagram.find_strain_state_for_MN(M_design, N_Ed)
+                except Exception:
+                    pass
+
             if eps_top is not None and eps_bottom is not None:
                 A_s_tension, f_yk_tension = self._find_tension_steel_area_and_f_yk(
                     eps_top=eps_top,
                     eps_bottom=eps_bottom,
+                    strain_state=strain_state_local,
                 )
 
                 if A_s_tension > 0.0 and f_yk_tension is not None:
@@ -495,6 +523,7 @@ class BendingCheck(BaseCodeCheck):
                             N_Ed=N_Ed,
                             eps_top=eps_top,
                             eps_bottom=eps_bottom,
+                            strain_state=strain_state_local,
                             warn_on_fallback=False,
                             d_fallback=self.d_fallback,
                             d_ratio=self.d_ratio,

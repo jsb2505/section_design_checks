@@ -18,9 +18,14 @@ Reference:
     University of Bath.
 """
 
+from __future__ import annotations
+
 import warnings
 from math import atan, degrees, pi, sqrt
-from typing import Any, Dict, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, cast
+
+if TYPE_CHECKING:
+    from materials.reinforced_concrete.analysis.strain_state import StrainState
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, computed_field, model_validator
@@ -682,6 +687,7 @@ class CircularSectionCheck(BaseModel):
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
         ignore_compression_steel: bool = False,
+        strain_state: Optional["StrainState"] = None,
     ) -> float:
         """Longitudinal reinforcement ratio for EC2 §6.2.2.
 
@@ -696,6 +702,7 @@ class CircularSectionCheck(BaseModel):
             eps_top: Pre-computed top strain (optional)
             eps_bottom: Pre-computed bottom strain (optional)
             ignore_compression_steel: If True, use diagram without compression steel.
+            strain_state: Optional StrainState for biaxial strain evaluation.
 
         Returns:
             rho_l, capped at 0.02
@@ -716,6 +723,7 @@ class CircularSectionCheck(BaseModel):
             eps_top=eps_top,
             eps_bottom=eps_bottom,
             rho_l_max=0.02,
+            strain_state=strain_state,
         )
 
     def calculate_V_Rd_c_uncracked(self, sigma_cp: float) -> float:
@@ -979,10 +987,13 @@ class CircularSectionCheck(BaseModel):
         # 1. Solve strains once for this load case; reuse across d, z and rho_l.
         eps_top: Optional[float]
         eps_bottom: Optional[float]
+        strain_state_local: Optional["StrainState"] = None
         if abs(M_Ed) > 1e-6:
-            eps_top, eps_bottom = self._shear_check._get_diagram(
-                ignore_compression_steel
-            ).find_strains_for_MN(M_Ed, N_Ed)
+            diagram = self._shear_check._get_diagram(ignore_compression_steel)
+            eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed)
+            strain_state_local = diagram.find_strain_state_for_MN(
+                M_target=M_Ed, N_target=N_Ed,
+            )
         else:
             eps_top, eps_bottom = None, None
 
@@ -992,6 +1003,7 @@ class CircularSectionCheck(BaseModel):
             eps_top=eps_top,
             eps_bottom=eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
+            strain_state=strain_state_local,
         )
         z_ec2, z_mech = self._shear_check.find_lever_arm(
             M_Ed,
@@ -1000,6 +1012,7 @@ class CircularSectionCheck(BaseModel):
             eps_top=eps_top,
             eps_bottom=eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
+            strain_state=strain_state_local,
         )
         z = z_mech if z_mech is not None else z_ec2
 
@@ -1025,6 +1038,7 @@ class CircularSectionCheck(BaseModel):
             eps_top=eps_top,
             eps_bottom=eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
+            strain_state=strain_state_local,
         )
         V_Rd_c_cracked = find_V_Rd_c_cracked(
             b_w=b_w,
@@ -1339,10 +1353,13 @@ class CircularSectionCheck(BaseModel):
         # Solve strains once; both find_effective_depth and find_lever_arm reuse them.
         _eps_top: Optional[float]
         _eps_bottom: Optional[float]
+        _strain_state: Optional["StrainState"] = None
         if abs(M_Ed) > 1e-6:
-            _eps_top, _eps_bottom = self._shear_check._get_diagram(
-                ignore_compression_steel
-            ).find_strains_for_MN(M_Ed, N_Ed)
+            _diagram = self._shear_check._get_diagram(ignore_compression_steel)
+            _eps_top, _eps_bottom = _diagram.find_strains_for_MN(M_Ed, N_Ed)
+            _strain_state = _diagram.find_strain_state_for_MN(
+                M_target=M_Ed, N_target=N_Ed,
+            )
         else:
             _eps_top, _eps_bottom = None, None
 
@@ -1352,6 +1369,7 @@ class CircularSectionCheck(BaseModel):
             eps_top=_eps_top,
             eps_bottom=_eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
+            strain_state=_strain_state,
         )
         _, z_mech = self._shear_check.find_lever_arm(
             M_Ed,
@@ -1360,6 +1378,7 @@ class CircularSectionCheck(BaseModel):
             eps_top=_eps_top,
             eps_bottom=_eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
+            strain_state=_strain_state,
         )
         z = z_mech if z_mech is not None else 0.9 * d
 

@@ -81,6 +81,9 @@ class _FakeDiagram:
             raise ValueError("outside diagram")
         return self.eps_top, self.eps_bottom
 
+    def find_strain_state_for_MN(self, *args, **kwargs):
+        return None
+
     def get_fibre_forces_from_end_strains(self, eps_top: float, eps_bottom: float):
         y = np.zeros_like(self._forces, dtype=float)
         return self._forces, y, self._areas
@@ -308,13 +311,13 @@ class TestStressLimitsDetailedAndPerform:
             lambda self, E_cm_eff, ignore_compression_steel=False: nl_diag,
         )
 
-        def _fake_peak(self, eps_top, eps_bottom, diagram=None):
+        def _fake_peak(self, eps_top, eps_bottom, diagram=None, **kw):
             diag = diagram if diagram is not None else base_diag
             if diag is base_diag:
                 return self.concrete.f_ck * 0.6
             return self.concrete.f_ck * 0.3
 
-        def _fake_steel(self, eps_top, eps_bottom):
+        def _fake_steel(self, eps_top, eps_bottom, **kw):
             return 350.0 if abs(eps_top - 0.001) < 1e-12 else 250.0
 
         monkeypatch.setattr(StressLimitsCheck, "_get_peak_concrete_stress", _fake_peak)

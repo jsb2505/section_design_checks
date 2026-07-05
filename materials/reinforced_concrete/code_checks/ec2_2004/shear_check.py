@@ -52,6 +52,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.flexure_utils import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from materials.reinforced_concrete.analysis.strain_state import StrainState
 
 class ShearLoadCase(BaseModel):
     """
@@ -589,6 +590,7 @@ class ShearCheck(BaseCodeCheck):
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
         *,
+        strain_state: Optional["StrainState"] = None,
         m_tol: float = 1e-6,
         strain_tol: float = 1e-15,
         warn_on_fallback: bool = True,
@@ -603,7 +605,10 @@ class ShearCheck(BaseCodeCheck):
         the ``d_fallback`` policy on this check instance controls the result.
         """
         # Only build diagram if needed (strains not provided and M_Ed non-zero)
-        need_diagram = (eps_top is None or eps_bottom is None) and abs(M_Ed) > m_tol
+        need_diagram = (
+            (eps_top is None or eps_bottom is None)
+            and abs(M_Ed) > m_tol
+        ) or (strain_state is not None and strain_state.is_biaxial)
         diagram = self._get_diagram(ignore_compression_steel) if need_diagram else None
         return find_effective_depth_for_flexure(
             section=self.section,
@@ -612,6 +617,7 @@ class ShearCheck(BaseCodeCheck):
             N_Ed=N_Ed,
             eps_top=eps_top,
             eps_bottom=eps_bottom,
+            strain_state=strain_state,
             m_tol=m_tol,
             strain_tol=strain_tol,
             warn_on_fallback=warn_on_fallback,
@@ -628,6 +634,8 @@ class ShearCheck(BaseCodeCheck):
         d: float,
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
+        *,
+        strain_state: Optional["StrainState"] = None,
         ignore_compression_steel: bool = False,
         force_virtual: bool = False,
     ) -> tuple[float, Optional[float]]:
@@ -653,6 +661,7 @@ class ShearCheck(BaseCodeCheck):
             d=d,
             eps_top=eps_top,
             eps_bottom=eps_bottom,
+            strain_state=strain_state,
             use_mechanical_lever_arm=True,
             z_d_upper=self.z_d_ratio_upper,
             z_d_lower=self.z_d_ratio_lower,
@@ -668,6 +677,8 @@ class ShearCheck(BaseCodeCheck):
         d: float,
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
+        *,
+        strain_state: Optional["StrainState"] = None,
         ignore_compression_steel: bool = False,
     ) -> float:
         """
@@ -684,6 +695,7 @@ class ShearCheck(BaseCodeCheck):
             d: Effective depth in mm
             eps_top: Pre-computed top strain (optional, avoids re-solving)
             eps_bottom: Pre-computed bottom strain (optional, avoids re-solving)
+            strain_state: Optional full 2D strain state for biaxial evaluation.
 
         Returns:
             ρ_l (dimensionless)
@@ -693,7 +705,9 @@ class ShearCheck(BaseCodeCheck):
             # This handles hogging/sagging and N-M interaction correctly
             if eps_top is not None and eps_bottom is not None:
                 # Use strain-based approach (same as rigorous, just without diagram solver)
-                return self._compute_rho_l_from_strains(eps_top, eps_bottom, d)
+                return self._compute_rho_l_from_strains(
+                    eps_top, eps_bottom, d, strain_state=strain_state,
+                )
 
             # Fallback for truly approximate case (no strain info): centroid-based
             # This assumes sagging (bottom in tension), which may be wrong for hogging
@@ -715,7 +729,9 @@ class ShearCheck(BaseCodeCheck):
         # Rigorous: use actual NA from strain state
         if eps_top is None or eps_bottom is None:
             eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(M_Ed, N_Ed)
-        return self._compute_rho_l_from_strains(eps_top, eps_bottom, d)
+        return self._compute_rho_l_from_strains(
+            eps_top, eps_bottom, d, strain_state=strain_state,
+        )
 
 
     def _find_sigma_cp(
@@ -754,7 +770,8 @@ class ShearCheck(BaseCodeCheck):
         self,
         eps_top: float,
         eps_bottom: float,
-        d: float
+        d: float,
+        strain_state: Optional["StrainState"] = None,
     ) -> float:
         """
         Compute rho_l using actual neutral axis from strain profile.
@@ -763,6 +780,7 @@ class ShearCheck(BaseCodeCheck):
             eps_top: Strain at top fibre
             eps_bottom: Strain at bottom fibre
             d: Effective depth in mm
+            strain_state: Optional full 2D strain state for biaxial evaluation.
 
         Returns:
             ρ_l (dimensionless)
@@ -773,6 +791,7 @@ class ShearCheck(BaseCodeCheck):
             d=d,
             eps_top=eps_top,
             eps_bottom=eps_bottom,
+            strain_state=strain_state,
             rho_l_max=0.02,
         )
 
@@ -1266,15 +1285,29 @@ class ShearCheck(BaseCodeCheck):
         # Solve for strains once (both modes need for compression face detection)
         # This avoids redundant solves and ensures consistency
         # Only solve if M_Ed is non-zero (moment determines compression face, not axial load)
+        strain_state_local: Optional["StrainState"] = None
         if abs(M_Ed) > 1e-6:
-            eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(M_Ed, N_Ed)
+            diagram = self._get_diagram(ignore_compression_steel)
+            eps_top, eps_bottom = diagram.find_strains_for_MN(M_Ed, N_Ed)
+            try:
+                strain_state_local = diagram.find_strain_state_for_MN(M_Ed, N_Ed)
+            except Exception:
+                pass
         else:
             eps_top, eps_bottom = None, None
 
         # Compute load-dependent geometric parameters (pass strains to avoid re-solving)
-        d = self.find_effective_depth(M_Ed, N_Ed, eps_top, eps_bottom, ignore_compression_steel=ignore_compression_steel)
+        d = self.find_effective_depth(
+            M_Ed, N_Ed, eps_top, eps_bottom,
+            strain_state=strain_state_local,
+            ignore_compression_steel=ignore_compression_steel,
+        )
         sigma_cp = self._find_sigma_cp(N_Ed)
-        rho_l = self._find_rho_l(M_Ed, N_Ed, d, eps_top, eps_bottom, ignore_compression_steel=ignore_compression_steel)
+        rho_l = self._find_rho_l(
+            M_Ed, N_Ed, d, eps_top, eps_bottom,
+            strain_state=strain_state_local,
+            ignore_compression_steel=ignore_compression_steel,
+        )
 
         # 1. Initialize variables that might not be reached
         V_Rd_s: Optional[float] = None
@@ -1327,7 +1360,8 @@ class ShearCheck(BaseCodeCheck):
                 d=d,
                 eps_top=eps_top,
                 eps_bottom=eps_bottom,
-                ignore_compression_steel=ignore_compression_steel
+                strain_state=strain_state_local,
+                ignore_compression_steel=ignore_compression_steel,
                 )
 
             # Apply German NA z_cap if applicable: z_cap = max(d - 2·d_2, d - d_2 - 30)
