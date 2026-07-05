@@ -147,6 +147,11 @@ def test_jacobian_convergence_with_options():
 
     With tension_stiffening=True, ensure find_strains_for_MN() converges reliably.
     This is where the analytical Jacobian is most likely to misbehave if implemented incorrectly.
+
+    TODO: Case (M=100, N=100) fails with error=34.5 kN. The solver converges to
+    the wrong branch near the cracking transition with tension stiffening enabled.
+    Investigate initial guess strategy or Jacobian discontinuity handling.
+    See TODO.md for details.
     """
     print("\n=== Test D: Jacobian Convergence with Tension Stiffening ===\n")
 

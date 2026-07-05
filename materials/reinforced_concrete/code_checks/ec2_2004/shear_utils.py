@@ -14,7 +14,7 @@ from materials.utils.helpers import cot
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ShearRebar
 from materials.reinforced_concrete.ndp import get_ndp, get_ndp_callable
-from materials.core.units import LengthUnit, ForceUnit, from_mm, from_kn
+from materials.core.units import LengthUnit, ForceUnit, from_mm, from_kn, to_kn
 
 
 # ==============================================================================

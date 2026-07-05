@@ -29,15 +29,15 @@ class TestConcreteMaterial:
 
     def test_design_strength(self, concrete_c30):
         """Test design strength calculation."""
-        # f_cd = alpha_cc * f_ck / gamma_c = 0.85 * 30 / 1.5 = 17.0
-        # Default alpha_cc is now 0.85 (EC2 §3.1.6(1)P for long-term effects)
-        assert concrete_c30.f_cd == pytest.approx(17.0)
+        # f_cd = alpha_cc * f_ck / gamma_c = 1.0 * 30 / 1.5 = 20.0
+        # EU default alpha_cc = 1.0 (EC2 §3.1.6(1)P)
+        assert concrete_c30.f_cd == pytest.approx(20.0)
 
     def test_custom_gamma_c(self):
         """Test custom partial factor."""
         concrete = ConcreteMaterial(grade="C30/37", gamma_c=1.2)
-        # f_cd = 0.85 * 30 / 1.2 = 21.25 (default alpha_cc=0.85)
-        assert concrete.f_cd == pytest.approx(21.25)
+        # f_cd = 1.0 * 30 / 1.2 = 25.0 (EU default alpha_cc=1.0)
+        assert concrete.f_cd == pytest.approx(25.0)
 
     def test_custom_alpha_cc(self):
         """Test custom alpha_cc."""
@@ -155,7 +155,7 @@ class TestConcreteMaterial:
         s = str(concrete_c30)
         assert "C30/37" in s
         assert "30.0" in s  # f_ck
-        assert "17.0" in s  # f_cd (with default alpha_cc=0.85)
+        assert "20.0" in s  # f_cd (EU default alpha_cc=1.0)
 
     def test_readonly_properties(self, concrete_c30):
         """Test that computed fields are read-only."""
