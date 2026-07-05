@@ -4,7 +4,8 @@ Tests for core.geometry module.
 
 import pytest
 from pydantic import ValidationError
-from materials.core.geometry import Point2D, BaseGeometry
+
+from materials.core.geometry import BaseGeometry, Point2D
 
 
 class ConcreteGeometry(BaseGeometry):

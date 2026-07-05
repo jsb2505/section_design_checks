@@ -84,7 +84,7 @@ class BaseConstitutiveModel(BaseModel, ABC):
         Returns:
             Array of stresses in MPa
         """
-        return np.vectorize(self.get_stress)(strains)
+        return np.asarray(np.vectorize(self.get_stress)(strains), dtype=np.float64)
 
     @abstractmethod
     def get_ultimate_strain(self) -> float:
@@ -138,7 +138,7 @@ class BaseConstitutiveModel(BaseModel, ABC):
         Returns:
             Array of tangent moduli in MPa
         """
-        return np.vectorize(self.get_tangent_modulus)(strains)
+        return np.asarray(np.vectorize(self.get_tangent_modulus)(strains), dtype=np.float64)
 
     def __repr__(self) -> str:
         """String representation."""

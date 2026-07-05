@@ -13,12 +13,12 @@ from materials.reinforced_concrete.analysis.interaction_diagram import (
     MNInteractionDiagram,
     _ray_segment_intersection_alpha,
 )
+from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
 from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
 from materials.reinforced_concrete.geometry import (
-    create_rectangular_section,
     create_linear_rebar_layer,
+    create_rectangular_section,
 )
-from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
 
 
 class _FakeConcreteModel:
@@ -1373,6 +1373,6 @@ class TestLinearElasticTensionConvergence:
         assert abs(state.M_Ed - 45.0) < 1e-6
         # The achieved N from the stress integration should be near zero
         forces = state.forces_N
-        from materials.reinforced_concrete.analysis.interaction_diagram import to_kn, ForceUnit
+        from materials.reinforced_concrete.analysis.interaction_diagram import ForceUnit, to_kn
         achieved_N = to_kn(float(np.sum(forces)), ForceUnit.N)
         assert abs(achieved_N) < 0.5, f"Viewer equilibrium N error: {achieved_N:.3f} kN"

@@ -2,21 +2,23 @@
 Tests for reinforced_concrete.analysis.interaction_diagram module.
 """
 
-import pytest
-import numpy as np
-import json
 import csv
+import json
+
+import numpy as np
+import pytest
 from pydantic import ValidationError
+
 from materials.reinforced_concrete.analysis.interaction_diagram import (
     InteractionPoint,
     MNInteractionDiagram,
     create_interaction_diagram,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial
 from materials.reinforced_concrete.geometry import (
-    create_rectangular_section,
     create_linear_rebar_layer,
+    create_rectangular_section,
 )
+from materials.reinforced_concrete.materials import ConcreteMaterial
 
 
 class TestInteractionPoint:
@@ -86,7 +88,7 @@ class TestInteractionPoint:
         assert data["N"] == 500.0
         assert data["M"] == 150.0
         assert data["neutral_axis_depth"] == 250.0
-        assert data["compression_from_bottom"] == False
+        assert not data["compression_from_bottom"]
         assert data["max_concrete_strain"] == 0.0035
         assert data["max_steel_strain"] == 0.010
         assert len(data) == 6  # All expected keys
@@ -301,7 +303,7 @@ class TestMNInteractionDiagram:
 
         is_safe, utilization = diagram.get_utilization_vector(N_Ed, M_Ed)
 
-        assert is_safe == False
+        assert not is_safe
         assert utilization > 1.0
         assert utilization == pytest.approx(1.5, rel=0.15)  # Should be around 150%
 
@@ -528,7 +530,7 @@ class TestNumericalAccuracy:
         point1 = diagram.calculate_point_from_end_strains(eps_cu * 0.5, -eps_y)
 
         # Case 2: More compression on both ends
-        point2 = diagram.calculate_point_from_end_strains(eps_cu * 0.9, eps_cu * 0.3)
+        diagram.calculate_point_from_end_strains(eps_cu * 0.9, eps_cu * 0.3)
 
         # Case 3: High compression on both
         point3 = diagram.calculate_point_from_end_strains(eps_cu * 0.9, eps_cu * 0.8)
@@ -576,7 +578,7 @@ class TestExportFunctionality:
         assert output_file.exists()
 
         # Load and verify contents
-        with open(output_file, 'r', encoding='utf-8') as f:
+        with open(output_file, encoding='utf-8') as f:
             data = json.load(f)
 
         assert "diagram_points" in data
@@ -606,7 +608,7 @@ class TestExportFunctionality:
 
         diagram.export_to_json(output_file, n_points=15, include_metadata=False)
 
-        with open(output_file, 'r', encoding='utf-8') as f:
+        with open(output_file, encoding='utf-8') as f:
             data = json.load(f)
 
         assert "diagram_points" in data
@@ -624,7 +626,7 @@ class TestExportFunctionality:
         assert output_file.exists()
 
         # Verify it's valid JSON
-        with open(output_file, 'r', encoding='utf-8') as f:
+        with open(output_file, encoding='utf-8') as f:
             data = json.load(f)
         # Note: actual count is higher than requested due to minimum points per segment
         assert len(data["diagram_points"]) > 0
@@ -639,7 +641,7 @@ class TestExportFunctionality:
         assert output_file.exists()
 
         # Load and verify contents
-        with open(output_file, 'r', newline='', encoding='utf-8') as f:
+        with open(output_file, newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             rows = list(reader)
 
@@ -664,7 +666,7 @@ class TestExportFunctionality:
 
         diagram.export_to_csv(output_file, n_points=20, include_strains=False)
 
-        with open(output_file, 'r', newline='', encoding='utf-8') as f:
+        with open(output_file, newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             rows = list(reader)
 
@@ -720,7 +722,7 @@ class TestExportFunctionality:
         diagram.export_to_json(output_file, n_points=30)
 
         # Reload
-        with open(output_file, 'r', encoding='utf-8') as f:
+        with open(output_file, encoding='utf-8') as f:
             reloaded_data = json.load(f)
 
         # Compare with direct dict export
@@ -744,7 +746,7 @@ class TestExportFunctionality:
         points = diagram.generate_diagram_points(n_points=20)
 
         # Read CSV
-        with open(output_file, 'r', newline='', encoding='utf-8') as f:
+        with open(output_file, newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             csv_rows = list(reader)
 
@@ -837,13 +839,13 @@ class TestNonSymmetricSections:
         # Test positive moment (should be safe at 50% capacity)
         M_Ed_pos = M_Rd_pos * 0.5
         is_safe_pos, util_pos = diagram.get_utilization_vector(N_Ed, M_Ed_pos)
-        assert is_safe_pos == True
+        assert is_safe_pos
         assert util_pos == pytest.approx(0.5, rel=0.2)
 
         # Test negative moment (should be safe at 50% capacity)
         M_Ed_neg = M_Rd_neg * 0.5
         is_safe_neg, util_neg = diagram.get_utilization_vector(N_Ed, M_Ed_neg)
-        assert is_safe_neg == True
+        assert is_safe_neg
         # Note: vector projection method may give different utilization than simple ratio
         # due to M-N interaction effects and convex hull geometry
         assert 0.2 < util_neg < 0.8  # Should be somewhere in safe range
@@ -1328,7 +1330,7 @@ class TestConfinedConcrete:
         result = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=100
         )
-        N_Rd, M_Rd, is_safe, utilization = result.N_Rd, result.M_Rd, result.is_safe, result.utilization
+        N_Rd, M_Rd, _is_safe, _utilization = result.N_Rd, result.M_Rd, result.is_safe, result.utilization
 
         assert N_Rd is not None
         assert M_Rd is not None
@@ -1350,7 +1352,7 @@ class TestConfinedConcrete:
         result = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=100
         )
-        N_Rd, M_Rd, is_safe, utilization = result.N_Rd, result.M_Rd, result.is_safe, result.utilization
+        N_Rd, M_Rd, _is_safe, _utilization = result.N_Rd, result.M_Rd, result.is_safe, result.utilization
 
         assert N_Rd is not None
         assert M_Rd is not None
@@ -1510,7 +1512,7 @@ class TestVectorMethodRobustness:
         result_full = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=120
         )
-        N_Rd_full, M_Rd_full, is_safe_full, util_full = result_full.N_Rd, result_full.M_Rd, result_full.is_safe, result_full.utilization
+        _N_Rd_full, _M_Rd_full, is_safe_full, util_full = result_full.N_Rd, result_full.M_Rd, result_full.is_safe, result_full.utilization
 
         # Scale the point by 0.5
         N_Ed_half = N_Ed * 0.5
@@ -1520,7 +1522,7 @@ class TestVectorMethodRobustness:
         result_half = diagram.get_capacity_vector(
             N_Ed=N_Ed_half, M_Ed=M_Ed_half, n_points=120
         )
-        N_Rd_half, M_Rd_half, is_safe_half, util_half = result_half.N_Rd, result_half.M_Rd, result_half.is_safe, result_half.utilization
+        _N_Rd_half, _M_Rd_half, is_safe_half, util_half = result_half.N_Rd, result_half.M_Rd, result_half.is_safe, result_half.utilization
 
         # Both should be safe (inside envelope)
         assert is_safe_full is True
@@ -1556,7 +1558,7 @@ class TestVectorMethodRobustness:
 
         # Generate a coarse diagram which might have local non-convexity
         # or self-intersection due to numerical issues
-        points = diagram.generate_diagram_points(n_points=20)  # Coarse for potential issues
+        diagram.generate_diagram_points(n_points=20)  # Coarse for potential issues
 
         # Test a load case that might intersect the curve multiple times
         # Use a point near the envelope where discretization might cause issues
@@ -1592,7 +1594,7 @@ class TestVectorMethodRobustness:
         result_fine = diagram.get_capacity_vector(
             N_Ed=N_Ed, M_Ed=M_Ed, n_points=200
         )
-        N_Rd_fine, M_Rd_fine, is_safe_fine, util_fine = result_fine.N_Rd, result_fine.M_Rd, result_fine.is_safe, result_fine.utilization
+        _N_Rd_fine, _M_Rd_fine, is_safe_fine, util_fine = result_fine.N_Rd, result_fine.M_Rd, result_fine.is_safe, result_fine.utilization
 
         # Coarse and fine should give consistent results (within tolerance)
         # Coarse might be slightly more conservative

@@ -2,8 +2,9 @@
 Tests for reinforced_concrete.constitutive.steel_stress_strain module.
 """
 
-import pytest
 import numpy as np
+import pytest
+
 from materials.reinforced_concrete.constitutive import (
     SteelStressStrainEC2,
     create_steel_stress_strain,

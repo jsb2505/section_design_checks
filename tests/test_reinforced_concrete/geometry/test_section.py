@@ -2,15 +2,17 @@
 Tests for reinforced_concrete.geometry.section module.
 """
 
-import pytest
 import math
+
+import pytest
 from pydantic import ValidationError
+
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.geometry import (
-    RebarGroup,
     RCSection,
-    create_rectangular_section,
+    RebarGroup,
     create_circular_section,
+    create_rectangular_section,
 )
 from materials.reinforced_concrete.geometry.reinforcement_reconcile import (
     ReinforcementInvalidPolicy,

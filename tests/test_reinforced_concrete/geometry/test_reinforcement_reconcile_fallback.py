@@ -16,8 +16,7 @@ from materials.reinforced_concrete.geometry.reinforcement_reconcile import (
     prune_reinforcement_for_outline,
     update_outline,
 )
-from materials.reinforced_concrete.geometry.section import RCSection
-from materials.reinforced_concrete.geometry.section import RebarGroup
+from materials.reinforced_concrete.geometry.section import RCSection, RebarGroup
 from materials.reinforced_concrete.materials import Rebar
 
 

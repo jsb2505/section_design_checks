@@ -9,11 +9,13 @@ Verifies:
 """
 
 import time
+
 import numpy as np
+
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 
 def create_test_section():
@@ -75,19 +77,15 @@ def test_tension_stiffening_tangent_modulus():
             eps_t = -eps
             if eps_t <= eps_cr:
                 region = "Pre-crack (elastic)"
-                expected = E_cm
             elif eps_t < eps_cr * (1 + 5/0.6):
                 region = "Post-crack (decay)"
-                expected = f_ctm * 0.6 / (5 * eps_cr)
+                f_ctm * 0.6 / (5 * eps_cr)
             else:
                 region = "After cutoff"
-                expected = 0.0
         elif eps > 0:
             region = "Compression"
-            expected = "varies"
         else:
             region = "Zero"
-            expected = 0.0
 
         print(f"  {eps:8.6f}    {Et:10.1f}   {region}")
 

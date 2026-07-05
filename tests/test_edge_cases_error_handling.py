@@ -11,14 +11,15 @@ Tests cover:
 7. Numerical edge cases
 """
 
-import pytest
 import numpy as np
+import pytest
+
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.analysis.interaction_diagram import (
     MNInteractionDiagram,
     create_interaction_diagram,
 )
-from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
+from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 

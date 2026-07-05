@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from shapely.geometry import Polygon
 
+import materials.reinforced_concrete.geometry.section as section_mod
 from materials.core.geometry import Point2D
 from materials.reinforced_concrete.geometry import (
     RCSection,
@@ -18,7 +19,6 @@ from materials.reinforced_concrete.geometry import (
 from materials.reinforced_concrete.geometry.reinforcement_reconcile import (
     ReinforcementInvalidPolicy,
 )
-import materials.reinforced_concrete.geometry.section as section_mod
 
 
 def _section_with_top_bottom_layers(rebar) -> RCSection:

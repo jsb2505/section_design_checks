@@ -3,29 +3,29 @@ Tests for core.units module.
 """
 
 import pytest
+
 from materials.core.units import (
-    LengthUnit,
-    StressUnit,
-    ForceUnit,
-    MomentUnit,
-    LENGTH_TO_MM,
-    STRESS_TO_MPA,
     FORCE_TO_KN,
+    LENGTH_TO_MM,
     MOMENT_TO_KNM,
-    STANDARD_LENGTH_UNIT,
-    STANDARD_STRESS_UNIT,
     STANDARD_FORCE_UNIT,
+    STANDARD_LENGTH_UNIT,
     STANDARD_MOMENT_UNIT,
-    to_mm,
-    to_mpa,
-    to_kn,
-    to_knm,
-    from_mm,
-    from_mpa,
+    STANDARD_STRESS_UNIT,
+    STRESS_TO_MPA,
+    ForceUnit,
+    LengthUnit,
+    MomentUnit,
+    StressUnit,
     from_kn,
     from_knm,
+    from_mm,
+    from_mpa,
+    to_kn,
+    to_knm,
+    to_mm,
+    to_mpa,
 )
-
 
 # --- Enum value tests (serialisation/display strings) ---
 

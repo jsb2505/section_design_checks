@@ -2,9 +2,10 @@
 Tests for reinforced_concrete.analysis.biaxial_interaction module.
 """
 
-import pytest
-import json
 import csv
+import json
+
+import pytest
 from pydantic import ValidationError
 
 from materials.reinforced_concrete.analysis.biaxial_interaction import (
@@ -13,8 +14,8 @@ from materials.reinforced_concrete.analysis.biaxial_interaction import (
     create_biaxial_interaction_surface,
 )
 from materials.reinforced_concrete.geometry import (
-    create_rectangular_section,
     create_linear_rebar_layer,
+    create_rectangular_section,
 )
 
 
@@ -271,7 +272,7 @@ class TestBiaxialMNInteractionSurface:
 
         assert output_file.exists()
 
-        with open(output_file, 'r', encoding='utf-8') as f:
+        with open(output_file, encoding='utf-8') as f:
             data = json.load(f)
 
         assert "surface_points" in data
@@ -291,7 +292,7 @@ class TestBiaxialMNInteractionSurface:
 
         assert output_file.exists()
 
-        with open(output_file, 'r', newline='', encoding='utf-8') as f:
+        with open(output_file, newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             rows = list(reader)
 

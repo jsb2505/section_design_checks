@@ -6,10 +6,11 @@ and may not converge as efficiently.
 """
 
 import numpy as np
+
 from materials.core.geometry import Point2D
-from materials.reinforced_concrete.geometry import create_rectangular_section, RebarGroup
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
+from materials.reinforced_concrete.geometry import RebarGroup, create_rectangular_section
+from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 
 def numerical_jacobian_2point(diagram, eps_top, eps_bottom, M_target, N_target, h=1e-8):

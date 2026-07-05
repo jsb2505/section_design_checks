@@ -14,19 +14,24 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
-      # Blocking gate: the full configured ruff ruleset on production code, minus
-      # E501 (line-length is enforced via pyproject line-length=120 but kept
-      # advisory — the few residual long lines are long HTML/annotation strings).
-      - name: ruff (blocking, materials)
-        run: ruff check materials --extend-ignore E501
-      # Advisory: full ruff incl. E501 and the test tree (surfaces line-length and
-      # any test-file lint without blocking).
-      - name: ruff (full, advisory)
+      # Blocking gate: the full configured ruff ruleset on production AND test
+      # code, minus E501 (line-length is enforced via pyproject line-length=120
+      # but kept advisory — the few residual long lines are long HTML/annotation
+      # strings). The test tree is clean of every other rule, so it blocks too.
+      - name: ruff (blocking, materials + tests)
+        run: ruff check materials tests --extend-ignore E501
+      # Advisory: the same trees incl. E501 (surfaces residual line-length only).
+      - name: ruff (line-length, advisory)
         run: ruff check materials tests
         continue-on-error: true
-      # mypy stays advisory (type-annotation backlog); --ignore-missing-imports
-      # silences third-party stub noise (scipy/shapely/plotly).
-      - name: mypy (advisory)
+      # mypy: the core foundation (materials/core) is fully type-clean and BLOCKS
+      # — it is the most-depended-on layer, so it must not regress. The rest of
+      # the package still has a type-annotation backlog and stays advisory; as
+      # modules are cleaned they get promoted into this blocking gate.
+      # --ignore-missing-imports silences third-party stub noise (scipy/shapely/plotly).
+      - name: mypy (blocking, core)
+        run: mypy materials/core --ignore-missing-imports
+      - name: mypy (advisory, full)
         run: mypy materials --ignore-missing-imports
         continue-on-error: true
 

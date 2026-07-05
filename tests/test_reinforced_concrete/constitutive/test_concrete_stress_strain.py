@@ -2,17 +2,18 @@
 Tests for reinforced_concrete.constitutive.concrete_stress_strain module.
 """
 
-import pytest
 import numpy as np
+import pytest
+
+import materials.reinforced_concrete.constitutive.concrete_stress_strain as css_mod
 from materials.reinforced_concrete.constitutive import (
-    ConcreteStressStrainSchematic,
-    ConcreteStressStrainParabolaRectangle,
+    ConcreteModelType,
     ConcreteStressStrainBilinear,
     ConcreteStressStrainLinearElastic,
-    ConcreteModelType,
+    ConcreteStressStrainParabolaRectangle,
+    ConcreteStressStrainSchematic,
     create_concrete_stress_strain,
 )
-import materials.reinforced_concrete.constitutive.concrete_stress_strain as css_mod
 
 
 class TestConcreteStressStrainSchematic:
