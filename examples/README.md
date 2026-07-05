@@ -37,7 +37,7 @@ Demonstrates the new ShearCheck visualization wrappers:
 3. `plot_link_angle_study`
 4. `plot_link_angle_moment_shift_study`
 5. `plot_cot_theta_link_angle_heatmap`
-6. `plot_axial_cot_theta_contour`
+6. `plot_force_cot_theta_contour`
 
 Includes a complete section/material setup and an example load case.
 

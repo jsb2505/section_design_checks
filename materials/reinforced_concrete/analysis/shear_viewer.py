@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 import numpy as np
 
 from materials.core.units import ForceUnit, to_kn
+from materials.reinforced_concrete.ndp import get_ndp
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_check import ShearLoadCase
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     calculate_tension_shift,
@@ -109,6 +110,158 @@ def _utilization_colorscale(*, zmin: float, zmax: float) -> list[list[Union[floa
         [white_anchor, "#ffffff"],
         [1.0, "#d73027"],
     ]
+
+
+def _build_slider_values(
+    *,
+    value_min: float,
+    value_max: float,
+    n_points: int,
+    step: Optional[float],
+) -> np.ndarray:
+    """
+    Build monotonic slider values.
+
+    If ``step`` is positive, values are sampled on that uniform increment and
+    the upper bound is always included. Otherwise falls back to ``n_points``
+    linear spacing.
+    """
+    v_min = float(value_min)
+    v_max = float(value_max)
+    if v_min > v_max:
+        v_min, v_max = v_max, v_min
+
+    if np.isclose(v_min, v_max):
+        return np.asarray([v_min], dtype=float)
+
+    if step is None or step <= 0.0:
+        return np.linspace(v_min, v_max, max(2, int(n_points)))
+
+    step_f = float(step)
+    n_full = int(np.floor((v_max - v_min) / step_f + 1e-12))
+    vals = v_min + step_f * np.arange(n_full + 1, dtype=float)
+    if vals.size == 0:
+        vals = np.asarray([v_min], dtype=float)
+    if not np.isclose(vals[-1], v_max):
+        vals = np.append(vals, v_max)
+
+    vals[0] = v_min
+    vals[-1] = v_max
+    return np.round(vals, 12)
+
+
+def _build_nice_force_slider_values(
+    *,
+    value_min: float,
+    value_max: float,
+    target_intervals: int = 50,
+) -> np.ndarray:
+    """
+    Build force slider values using "nice" round increments near a target count.
+
+    Step sizes are chosen from ``1, 2, 2.5, 5, 10`` scaled by powers of ten.
+    """
+    v_min = float(value_min)
+    v_max = float(value_max)
+    if v_min > v_max:
+        v_min, v_max = v_max, v_min
+
+    if np.isclose(v_min, v_max):
+        return np.asarray([v_min], dtype=float)
+
+    span = v_max - v_min
+    target = max(1, int(target_intervals))
+    raw_step = span / target
+
+    nice_bases = np.asarray([1.0, 2.0, 2.5, 5.0, 10.0], dtype=float)
+    raw_exp = int(np.floor(np.log10(raw_step))) if raw_step > 0.0 else 0
+
+    candidates: list[float] = []
+    for exp in range(raw_exp - 2, raw_exp + 3):
+        scale = 10.0**exp
+        for base in nice_bases:
+            step = float(base * scale)
+            if step > 0.0:
+                candidates.append(step)
+
+    def _score(step: float) -> tuple[float, float, float]:
+        intervals = max(1, int(np.ceil(span / step)))
+        quotient = span / step
+        fractional = abs(quotient - round(quotient))
+        return (abs(intervals - target), fractional, step)
+
+    step_f = min(candidates, key=_score)
+    n_full = int(np.floor(span / step_f + 1e-12))
+    vals = v_min + step_f * np.arange(n_full + 1, dtype=float)
+    if vals.size == 0:
+        vals = np.asarray([v_min], dtype=float)
+    if not np.isclose(vals[-1], v_max):
+        vals = np.append(vals, v_max)
+
+    vals[0] = v_min
+    vals[-1] = v_max
+    return np.round(vals, 12)
+
+
+def _format_slider_numeric_label(value: float) -> str:
+    """Format slider labels without unnecessary trailing zeros."""
+    return f"{float(value):.6f}".rstrip("0").rstrip(".")
+
+
+def _build_slider_animation_controls(
+    *,
+    steps: Sequence[dict[str, Any]],
+    currentvalue_prefix: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """Build standard slider controls with top-right horizontal play/pause buttons."""
+    return {
+        "sliders": [
+            {
+                "active": 0,
+                "x": 0.1,
+                "len": 0.82,
+                "currentvalue": {"prefix": currentvalue_prefix},
+                "steps": list(steps),
+            },
+        ],
+        "updatemenus": [
+            {
+                "type": "buttons",
+                "showactive": False,
+                "direction": "left",
+                "x": 1.0,
+                "y": 1.16,
+                "xanchor": "right",
+                "yanchor": "top",
+                "buttons": [
+                    {
+                        "label": "Play",
+                        "method": "animate",
+                        "args": [
+                            None,
+                            {
+                                "frame": {"duration": 200, "redraw": True},
+                                "fromcurrent": True,
+                                "transition": {"duration": 0},
+                            },
+                        ],
+                    },
+                    {
+                        "label": "Pause",
+                        "method": "animate",
+                        "args": [
+                            [None],
+                            {
+                                "frame": {"duration": 0, "redraw": False},
+                                "mode": "immediate",
+                                "transition": {"duration": 0},
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
 
 
 class ShearViewer:
@@ -432,7 +585,7 @@ class ShearViewer:
                 y=[context.V_Ed] * len(cot_vals),
                 mode="lines",
                 name="V_Ed",
-                line=dict(color="black", dash="dot"),
+                line=dict(color="black", dash="solid"),
                 hovertemplate="cot(theta): %{x:.3f}<br>V_Ed: %{y:.1f} kN<extra></extra>",
             ),
         )
@@ -496,8 +649,8 @@ class ShearViewer:
                     x=[series.cot_intersection, series.cot_intersection, float(cot_vals[0])],
                     y=[0.0, y_intersection, y_intersection],
                     mode="lines",
-                    name="V_Rd,s = V_Rd,max",
-                    line=dict(color="#ff0000", dash="dash"),
+                    name="V_Ed,max",
+                    line=dict(color="#ff0000", dash="dashdot"),
                     customdata=[
                         [series.cot_intersection, y_intersection],
                         [series.cot_intersection, y_intersection],
@@ -506,6 +659,50 @@ class ShearViewer:
                     hovertemplate=(
                         "cot(theta): %{customdata[0]:.3f}<br>"
                         "V_Ed,max: %{customdata[1]:.1f} kN<extra></extra>"
+                    ),
+                ),
+            )
+
+        cot_theta_min = self._find_curve_intersection_x(
+            cot_vals,
+            series.V_Rd_s_vals,
+            [context.V_Ed] * len(cot_vals),
+        )
+        if cot_theta_min is not None and float(cot_vals[0]) <= cot_theta_min <= float(cot_vals[-1]):
+            y_vertical = np.linspace(0.0, context.V_Ed, 25)
+            fig.add_trace(
+                go.Scatter(
+                    x=[cot_theta_min] * len(y_vertical),
+                    y=y_vertical,
+                    mode="lines",
+                    name="Cot(theta),min",
+                    line=dict(color="#ff0000", dash="dot"),
+                    customdata=[[cot_theta_min, context.V_Ed]] * len(y_vertical),
+                    hovertemplate=(
+                        "cot(theta): %{customdata[0]:.3f}<br>"
+                        "V_Ed: %{customdata[1]:.1f} kN<extra></extra>"
+                    ),
+                ),
+            )
+
+        cot_theta_max = self._find_curve_intersection_x(
+            cot_vals,
+            series.V_Rd_max_theta_vals,
+            [context.V_Ed] * len(cot_vals),
+        )
+        if cot_theta_max is not None and float(cot_vals[0]) <= cot_theta_max <= float(cot_vals[-1]):
+            y_vertical = np.linspace(0.0, context.V_Ed, 25)
+            fig.add_trace(
+                go.Scatter(
+                    x=[cot_theta_max] * len(y_vertical),
+                    y=y_vertical,
+                    mode="lines",
+                    name="Cot(theta),max",
+                    line=dict(color="#ff0000", dash="dot"),
+                    customdata=[[cot_theta_max, context.V_Ed]] * len(y_vertical),
+                    hovertemplate=(
+                        "cot(theta): %{customdata[0]:.3f}<br>"
+                        "V_Ed: %{customdata[1]:.1f} kN<extra></extra>"
                     ),
                 ),
             )
@@ -663,7 +860,7 @@ class ShearViewer:
             )
 
         fig.update_xaxes(title_text="cot(theta)")
-        fig.update_yaxes(title_text="Utilization (-)", secondary_y=False)
+        fig.update_yaxes(title_text="Utilization", secondary_y=False)
         fig.update_yaxes(title_text="M_add (kN·m)", secondary_y=True)
         fig.update_layout(
             title=title or "Tension-Shift Study vs cot(theta)",
@@ -763,7 +960,10 @@ class ShearViewer:
         self,
         *,
         load_case: Union[ShearLoadCase, Dict[str, Any]],
-        cot_theta: Optional[float] = None,
+        cot_theta_min: Optional[float] = None,
+        cot_theta_max: Optional[float] = None,
+        n_cot: int = 20,
+        cot_theta_step: Optional[float] = 0.05,
         angle_min: float = 45.0,
         angle_max: float = 90.0,
         n_points: int = 46,
@@ -778,15 +978,22 @@ class ShearViewer:
         """
         Plot shear-capacity components over a link-angle sweep.
 
-        The sweep is run at a fixed cot(theta). If ``cot_theta`` is not provided,
-        it is back-calculated from the load case using the same internal logic as
-        the shear check.
+        The x-axis is link angle and the figure includes a cot(theta) slider.
+        Each slider step recomputes ``V_Rd,s(alpha)`` and ``V_Rd,max(alpha)``
+        for that cot(theta) value.
 
         Args:
             load_case: Shear demand definition as either ``ShearLoadCase`` or a
                 ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN·m).
-            cot_theta: Fixed cot(theta) used for the angle sweep. If ``None``,
-                it is derived from ``V_Ed`` and section context.
+            cot_theta_min: Optional lower bound for cot(theta). If ``None``,
+                the NDP lower limit is used.
+            cot_theta_max: Optional upper bound for cot(theta). If ``None``,
+                the NDP upper limit is used.
+            n_cot: Number of cot(theta) slider samples used only when
+                ``cot_theta_step`` is ``None`` or non-positive.
+            cot_theta_step: Uniform cot(theta) increment for slider values.
+                Defaults to ``0.05``. Set to ``None`` or non-positive to use
+                ``n_cot`` linear spacing.
             angle_min: Minimum link angle (degrees).
             angle_max: Maximum link angle (degrees).
             n_points: Number of sampled link angles between ``angle_min`` and
@@ -817,22 +1024,59 @@ class ShearViewer:
         except ImportError as e:
             raise ImportError("Plotly is required for plotting. Install with: pip install plotly") from e
 
-        series = self._compute_link_angle_study_series(
-            load_case=load_case,
-            cot_theta=cot_theta,
-            angle_min=angle_min,
-            angle_max=angle_max,
-            n_points=n_points,
-            use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
-            use_note_2=use_note_2,
+        case = _as_load_case(load_case)
+        base_context = self._build_context(load_case=case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
+
+        ndp_cot_min = get_ndp("cot_theta_lower_lim")
+        default_cot_min = float(ndp_cot_min() if callable(ndp_cot_min) else ndp_cot_min)
+        ndp_cot_max = get_ndp("cot_theta_upper_lim")
+        if callable(ndp_cot_max):
+            default_cot_max = base_context.cot_max
+        else:
+            default_cot_max = float(ndp_cot_max)
+
+        cot_min = default_cot_min if cot_theta_min is None else float(cot_theta_min)
+        cot_max = default_cot_max if cot_theta_max is None else float(cot_theta_max)
+        if cot_min > cot_max:
+            cot_min, cot_max = cot_max, cot_min
+
+        cot_vals = _build_slider_values(
+            value_min=cot_min,
+            value_max=cot_max,
+            n_points=n_cot,
+            step=cot_theta_step,
         )
-        context = series.context
+        cot_labels = [f"{float(cot_theta):.2f}" for cot_theta in cot_vals]
+        series_by_cot = [
+            self._compute_link_angle_study_series(
+                load_case=case,
+                cot_theta=float(cot_theta),
+                angle_min=angle_min,
+                angle_max=angle_max,
+                n_points=n_points,
+                use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
+                use_note_2=use_note_2,
+            )
+            for cot_theta in cot_vals
+        ]
+        first_series = series_by_cot[0]
+        context = first_series.context
+        all_cap_vals = [context.V_Ed, context.V_Rd_c]
+        for series in series_by_cot:
+            all_cap_vals.extend(series.V_Rd_s_vals)
+            all_cap_vals.extend(series.V_Rd_max_vals)
+        finite_cap_vals = [float(v) for v in all_cap_vals if np.isfinite(v)]
+        cap_min = min(finite_cap_vals) if finite_cap_vals else 0.0
+        cap_max = max(finite_cap_vals) if finite_cap_vals else 1.0
+        y_min = min(0.0, cap_min)
+        y_span = max(1e-6, cap_max - y_min)
+        y_max = cap_max + 0.05 * y_span
 
         fig = go.Figure()
         fig.add_trace(
             go.Scatter(
-                x=series.angle_vals,
-                y=[context.V_Ed] * len(series.angle_vals),
+                x=first_series.angle_vals,
+                y=[context.V_Ed] * len(first_series.angle_vals),
                 mode="lines",
                 name="V_Ed",
                 line=dict(color="black", dash="dash"),
@@ -841,8 +1085,8 @@ class ShearViewer:
         )
         fig.add_trace(
             go.Scatter(
-                x=series.angle_vals,
-                y=[context.V_Rd_c] * len(series.angle_vals),
+                x=first_series.angle_vals,
+                y=[context.V_Rd_c] * len(first_series.angle_vals),
                 mode="lines",
                 name="V_Rd,c",
                 line=dict(color="#8c564b", dash="dot"),
@@ -851,8 +1095,8 @@ class ShearViewer:
         )
         fig.add_trace(
             go.Scatter(
-                x=series.angle_vals,
-                y=series.V_Rd_s_vals,
+                x=first_series.angle_vals,
+                y=first_series.V_Rd_s_vals,
                 mode="lines",
                 name="V_Rd,s(alpha)",
                 line=dict(color="#1f77b4"),
@@ -861,8 +1105,8 @@ class ShearViewer:
         )
         fig.add_trace(
             go.Scatter(
-                x=series.angle_vals,
-                y=series.V_Rd_max_vals,
+                x=first_series.angle_vals,
+                y=first_series.V_Rd_max_vals,
                 mode="lines",
                 name="V_Rd,max(alpha)",
                 line=dict(color="#ff7f0e"),
@@ -870,13 +1114,56 @@ class ShearViewer:
             ),
         )
 
-        fig.update_xaxes(title_text="Link angle alpha (degrees)")
-        fig.update_yaxes(title_text="Capacity (kN)")
-        fig.update_layout(
-            title=title or f"Shear Capacity Study vs Link Angle (cot(theta)={series.cot_theta:.2f})",
+        frames = []
+        for i, cot_label in enumerate(cot_labels):
+            series = series_by_cot[i]
+            frames.append(
+                {
+                    "name": cot_label,
+                    "data": [
+                        go.Scatter(
+                            x=series.angle_vals,
+                            y=[series.context.V_Ed] * len(series.angle_vals),
+                            mode="lines",
+                            name="V_Ed",
+                            line=dict(color="black", dash="dash"),
+                            hovertemplate="alpha: %{x:.1f}°<br>V_Ed: %{y:.1f} kN<extra></extra>",
+                        ),
+                        go.Scatter(
+                            x=series.angle_vals,
+                            y=[series.context.V_Rd_c] * len(series.angle_vals),
+                            mode="lines",
+                            name="V_Rd,c",
+                            line=dict(color="#8c564b", dash="dot"),
+                            hovertemplate="alpha: %{x:.1f}°<br>V_Rd,c: %{y:.1f} kN<extra></extra>",
+                        ),
+                        go.Scatter(
+                            x=series.angle_vals,
+                            y=series.V_Rd_s_vals,
+                            mode="lines",
+                            name="V_Rd,s(alpha)",
+                            line=dict(color="#1f77b4"),
+                            hovertemplate="alpha: %{x:.1f}°<br>V_Rd,s: %{y:.1f} kN<extra></extra>",
+                        ),
+                        go.Scatter(
+                            x=series.angle_vals,
+                            y=series.V_Rd_max_vals,
+                            mode="lines",
+                            name="V_Rd,max(alpha)",
+                            line=dict(color="#ff7f0e"),
+                            hovertemplate="alpha: %{x:.1f}°<br>V_Rd,max: %{y:.1f} kN<extra></extra>",
+                        ),
+                    ],
+                },
+            )
+        fig.frames = frames
+
+        layout_kwargs: dict[str, Any] = dict(
+            title=title or "Shear Capacity Study vs Link Angle (cot(theta) slider)",
             template="plotly_white",
             width=width,
             height=height,
+            uirevision="link_angle_study",
             legend=dict(
                 orientation="v",
                 yanchor="top",
@@ -885,7 +1172,32 @@ class ShearViewer:
                 x=1.02,
             ),
             margin=dict(r=240),
+            xaxis=dict(title="Link angle alpha (degrees)"),
+            yaxis=dict(title="Capacity (kN)", range=[y_min, y_max], autorange=False),
         )
+        if len(cot_vals) > 1:
+            steps = [
+                {
+                    "label": cot_label,
+                    "method": "animate",
+                    "args": [
+                        [cot_label],
+                        {
+                            "frame": {"duration": 0, "redraw": True},
+                            "mode": "immediate",
+                            "transition": {"duration": 0},
+                        },
+                    ],
+                }
+                for cot_label in cot_labels
+            ]
+            layout_kwargs.update(
+                _build_slider_animation_controls(
+                    steps=steps,
+                    currentvalue_prefix="cot(theta): ",
+                )
+            )
+        fig.update_layout(**layout_kwargs)
 
         _show_or_save(fig, save_path=save_path, show=show)
         return fig
@@ -894,7 +1206,10 @@ class ShearViewer:
         self,
         *,
         load_case: Union[ShearLoadCase, Dict[str, Any]],
-        cot_theta: Optional[float] = None,
+        cot_theta_min: Optional[float] = None,
+        cot_theta_max: Optional[float] = None,
+        n_cot: int = 20,
+        cot_theta_step: Optional[float] = 0.05,
         angle_min: float = 45.0,
         angle_max: float = 90.0,
         n_points: int = 46,
@@ -909,15 +1224,22 @@ class ShearViewer:
         """
         Plot utilization and tension-shift add-on versus link angle.
 
-        The sweep is run at a fixed cot(theta). If ``cot_theta`` is not provided,
-        it is back-calculated from the load case using the same internal logic as
-        the shear check.
+        The x-axis is link angle and the figure includes a cot(theta) slider.
+        Each slider step recomputes utilization and ``M_add`` for that
+        cot(theta) value.
 
         Args:
             load_case: Shear demand definition as either ``ShearLoadCase`` or a
                 ``dict`` with keys ``V_Ed`` and optional ``M_Ed``/``N_Ed`` (kN, kN·m).
-            cot_theta: Fixed cot(theta) used for the angle sweep. If ``None``,
-                it is derived from ``V_Ed`` and section context.
+            cot_theta_min: Optional lower bound for cot(theta). If ``None``,
+                the NDP lower limit is used.
+            cot_theta_max: Optional upper bound for cot(theta). If ``None``,
+                the NDP upper limit is used.
+            n_cot: Number of cot(theta) slider samples used only when
+                ``cot_theta_step`` is ``None`` or non-positive.
+            cot_theta_step: Uniform cot(theta) increment for slider values.
+                Defaults to ``0.05``. Set to ``None`` or non-positive to use
+                ``n_cot`` linear spacing.
             angle_min: Minimum link angle (degrees).
             angle_max: Maximum link angle (degrees).
             n_points: Number of sampled link angles between ``angle_min`` and
@@ -949,21 +1271,67 @@ class ShearViewer:
         except ImportError as e:
             raise ImportError("Plotly is required for plotting. Install with: pip install plotly") from e
 
-        series = self._compute_link_angle_study_series(
-            load_case=load_case,
-            cot_theta=cot_theta,
-            angle_min=angle_min,
-            angle_max=angle_max,
-            n_points=n_points,
-            use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
-            use_note_2=use_note_2,
+        case = _as_load_case(load_case)
+        base_context = self._build_context(load_case=case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
+
+        ndp_cot_min = get_ndp("cot_theta_lower_lim")
+        default_cot_min = float(ndp_cot_min() if callable(ndp_cot_min) else ndp_cot_min)
+        ndp_cot_max = get_ndp("cot_theta_upper_lim")
+        if callable(ndp_cot_max):
+            default_cot_max = base_context.cot_max
+        else:
+            default_cot_max = float(ndp_cot_max)
+
+        cot_min = default_cot_min if cot_theta_min is None else float(cot_theta_min)
+        cot_max = default_cot_max if cot_theta_max is None else float(cot_theta_max)
+        if cot_min > cot_max:
+            cot_min, cot_max = cot_max, cot_min
+
+        cot_vals = _build_slider_values(
+            value_min=cot_min,
+            value_max=cot_max,
+            n_points=n_cot,
+            step=cot_theta_step,
         )
+        cot_labels = [f"{float(cot_theta):.2f}" for cot_theta in cot_vals]
+        series_by_cot = [
+            self._compute_link_angle_study_series(
+                load_case=case,
+                cot_theta=float(cot_theta),
+                angle_min=angle_min,
+                angle_max=angle_max,
+                n_points=n_points,
+                use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
+                use_note_2=use_note_2,
+            )
+            for cot_theta in cot_vals
+        ]
+        first_series = series_by_cot[0]
+        all_util_vals = [1.0]
+        all_m_add_vals: list[float] = []
+        for series in series_by_cot:
+            all_util_vals.extend(series.util_vals)
+            all_m_add_vals.extend(series.M_add_vals)
+
+        finite_util = [float(v) for v in all_util_vals if np.isfinite(v)]
+        util_max = max(finite_util) if finite_util else 1.0
+        util_span = max(1e-6, util_max)
+        util_range = [0.0, util_max + 0.05 * util_span]
+
+        finite_m_add = [float(v) for v in all_m_add_vals if np.isfinite(v)]
+        if finite_m_add:
+            m_min = min(finite_m_add)
+            m_max = max(finite_m_add)
+        else:
+            m_min, m_max = 0.0, 1.0
+        m_span = max(1e-6, m_max - m_min)
+        m_range = [m_min - 0.05 * m_span, m_max + 0.05 * m_span]
 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         fig.add_trace(
             go.Scatter(
-                x=series.angle_vals,
-                y=series.util_vals,
+                x=first_series.angle_vals,
+                y=first_series.util_vals,
                 mode="lines",
                 name="Utilization",
                 line=dict(color="#d62728"),
@@ -973,8 +1341,8 @@ class ShearViewer:
         )
         fig.add_trace(
             go.Scatter(
-                x=series.angle_vals,
-                y=series.M_add_vals,
+                x=first_series.angle_vals,
+                y=first_series.M_add_vals,
                 mode="lines",
                 name="M_add (tension shift)",
                 line=dict(color="#9467bd"),
@@ -984,8 +1352,8 @@ class ShearViewer:
         )
         fig.add_trace(
             go.Scatter(
-                x=series.angle_vals,
-                y=[1.0] * len(series.angle_vals),
+                x=first_series.angle_vals,
+                y=[1.0] * len(first_series.angle_vals),
                 mode="lines",
                 name="Utilization = 1.0",
                 line=dict(color="black", dash="dot"),
@@ -994,14 +1362,48 @@ class ShearViewer:
             secondary_y=False,
         )
 
-        fig.update_xaxes(title_text="Link angle alpha (degrees)")
-        fig.update_yaxes(title_text="Utilization (-)", secondary_y=False)
-        fig.update_yaxes(title_text="M_add (kN·m)", secondary_y=True)
-        fig.update_layout(
-            title=title or f"Tension-Shift Study vs Link Angle (cot(theta)={series.cot_theta:.2f})",
+        frames = []
+        for i, cot_label in enumerate(cot_labels):
+            series = series_by_cot[i]
+            frames.append(
+                {
+                    "name": cot_label,
+                    "data": [
+                        go.Scatter(
+                            x=series.angle_vals,
+                            y=series.util_vals,
+                            mode="lines",
+                            name="Utilization",
+                            line=dict(color="#d62728"),
+                            hovertemplate="alpha: %{x:.1f}°<br>Utilization: %{y:.3f}<extra></extra>",
+                        ),
+                        go.Scatter(
+                            x=series.angle_vals,
+                            y=series.M_add_vals,
+                            mode="lines",
+                            name="M_add (tension shift)",
+                            line=dict(color="#9467bd"),
+                            hovertemplate="alpha: %{x:.1f}°<br>M_add: %{y:.2f} kN·m<extra></extra>",
+                        ),
+                        go.Scatter(
+                            x=series.angle_vals,
+                            y=[1.0] * len(series.angle_vals),
+                            mode="lines",
+                            name="Utilization = 1.0",
+                            line=dict(color="black", dash="dot"),
+                            hovertemplate="Utilization limit<extra></extra>",
+                        ),
+                    ],
+                },
+            )
+        fig.frames = frames
+
+        layout_kwargs: dict[str, Any] = dict(
+            title=title or "Tension-Shift Study vs Link Angle (cot(theta) slider)",
             template="plotly_white",
             width=width,
             height=height,
+            uirevision="link_angle_moment_shift_study",
             legend=dict(
                 orientation="v",
                 yanchor="top",
@@ -1010,7 +1412,33 @@ class ShearViewer:
                 x=1.02,
             ),
             margin=dict(r=240),
+            xaxis=dict(title="Link angle alpha (degrees)"),
+            yaxis=dict(title="Utilization", range=util_range, autorange=False),
+            yaxis2=dict(title="M_add (kN·m)", range=m_range, autorange=False),
         )
+        if len(cot_vals) > 1:
+            steps = [
+                {
+                    "label": cot_label,
+                    "method": "animate",
+                    "args": [
+                        [cot_label],
+                        {
+                            "frame": {"duration": 0, "redraw": True},
+                            "mode": "immediate",
+                            "transition": {"duration": 0},
+                        },
+                    ],
+                }
+                for cot_label in cot_labels
+            ]
+            layout_kwargs.update(
+                _build_slider_animation_controls(
+                    steps=steps,
+                    currentvalue_prefix="cot(theta): ",
+                )
+            )
+        fig.update_layout(**layout_kwargs)
 
         _show_or_save(fig, save_path=save_path, show=show)
         return fig
@@ -1117,7 +1545,7 @@ class ShearViewer:
                 Z[i, j] = value
 
         if metric_key == "utilization":
-            colorbar_title = "Utilization (-)"
+            colorbar_title = "Utilization"
             zmin = 0.0
             zmax = max(1.5, float(np.nanmax(Z)))
             colorscale = _utilization_colorscale(zmin=zmin, zmax=zmax)
@@ -1132,7 +1560,7 @@ class ShearViewer:
                 hoverinfo="skip",
             )
         else:
-            colorbar_title = "kN" if metric_key != "utilization" else "Utilization (-)"
+            colorbar_title = "kN" if metric_key != "utilization" else "Utilization"
             colorscale = "Viridis"
             zmin = None
             zmax = None
@@ -1172,13 +1600,17 @@ class ShearViewer:
         _show_or_save(fig, save_path=save_path, show=show)
         return fig
 
-    def plot_axial_cot_theta_contour(
+    def plot_force_cot_theta_contour(
         self,
         *,
         load_case: Union[ShearLoadCase, Dict[str, Any]],
-        N_min: float,
-        N_max: float,
+        n_min: float,
+        n_max: float,
+        m_min: float,
+        m_max: float,
         n_axial: int = 31,
+        n_moment: int = 31,
+        moment_on_y_axis: bool = False,
         cot_theta_min: Optional[float] = None,
         cot_theta_max: Optional[float] = None,
         n_cot: int = 40,
@@ -1192,18 +1624,25 @@ class ShearViewer:
         height: int = 760,
     ) -> Any:
         """
-        Plot an axial-force-vs-cot(theta) heatmap for shear response metrics.
+        Plot a cot(theta)-vs-force heatmap with a slider for the other force.
 
-        For each axial force level, this method recomputes the section context
-        and evaluates the selected metric over the cot(theta) sweep.
+        Depending on ``moment_on_y_axis``, the y-axis is either ``M_Ed`` or
+        ``N_Ed``. The slider controls the other quantity.
 
         Args:
-            load_case: Base shear load case (``V_Ed`` and ``M_Ed`` are kept fixed).
-                Can be ``ShearLoadCase`` or a ``dict`` with keys ``V_Ed`` and
-                optional ``M_Ed``/``N_Ed``.
-            N_min: Minimum axial force in kN.
-            N_max: Maximum axial force in kN.
-            n_axial: Number of axial-force samples.
+            load_case: Base shear load case (``V_Ed`` is kept fixed). Can be
+                ``ShearLoadCase`` or a ``dict`` with keys ``V_Ed`` and optional
+                ``M_Ed``/``N_Ed``.
+            n_min: Minimum axial force ``N_Ed`` in kN.
+            n_max: Maximum axial force ``N_Ed`` in kN.
+            m_min: Minimum moment ``M_Ed`` in kN·m.
+            m_max: Maximum moment ``M_Ed`` in kN·m.
+            n_axial: Number of axial-force samples used on the heatmap force axis.
+            n_moment: Number of moment samples used on the heatmap force axis.
+            moment_on_y_axis: If ``True``, the y-axis is moment and the slider
+                controls axial force. If ``False``, the y-axis is axial force and
+                the slider controls moment. Slider values are auto-generated
+                with nice round increments targeting about 50 steps.
             cot_theta_min: Optional lower bound for cot(theta). If ``None``,
                 the EC2-based minimum from the current check context is used.
             cot_theta_max: Optional upper bound for cot(theta). If ``None``,
@@ -1223,11 +1662,6 @@ class ShearViewer:
 
         Returns:
             plotly.graph_objects.Figure: Plotly heatmap figure.
-
-        Raises:
-            ValueError: If no shear reinforcement is defined, or if ``metric`` is invalid.
-            TypeError: If ``load_case`` is not a ``ShearLoadCase`` or compatible dict.
-            ImportError: If Plotly is not installed.
         """
         self._require_shear_reinforcement()
 
@@ -1245,88 +1679,365 @@ class ShearViewer:
             cot_min, cot_max = cot_max, cot_min
 
         cot_vals = np.linspace(cot_min, cot_max, max(2, int(n_cot)))
-        n_vals = np.linspace(float(N_min), float(N_max), max(2, int(n_axial)))
-
-        Z = np.zeros((len(n_vals), len(cot_vals)))
+        n_vals = np.linspace(float(n_min), float(n_max), max(2, int(n_axial)))
+        m_vals = np.linspace(float(m_min), float(m_max), max(2, int(n_moment)))
+        n_slider_vals = _build_nice_force_slider_values(value_min=float(n_min), value_max=float(n_max))
+        m_slider_vals = _build_nice_force_slider_values(value_min=float(m_min), value_max=float(m_max))
 
         metric_key = metric.strip().lower()
         valid_metrics = {"utilization", "capacity", "v_rd_s", "v_rd_max"}
         if metric_key not in valid_metrics:
             raise ValueError(f"metric must be one of {sorted(valid_metrics)}.")
 
-        for i, n_ed in enumerate(n_vals):
-            axial_case = ShearLoadCase(V_Ed=case.V_Ed, M_Ed=case.M_Ed, N_Ed=float(n_ed))
-            context = self._build_context(load_case=axial_case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
+        if moment_on_y_axis:
+            y_vals = m_vals
+            slider_vals = n_slider_vals
+            y_label = "Moment M_Ed (kN·m)"
+            y_hover_name = "M_Ed"
+            y_hover_format = ".2f"
+            y_hover_unit = "kN·m"
+            slider_prefix = "N_Ed (kN): "
+        else:
+            y_vals = n_vals
+            slider_vals = m_slider_vals
+            y_label = "Axial force N_Ed (kN)"
+            y_hover_name = "N_Ed"
+            y_hover_format = ".1f"
+            y_hover_unit = "kN"
+            slider_prefix = "M_Ed (kN·m): "
 
-            for j, cot_theta in enumerate(cot_vals):
-                cot_f = float(cot_theta)
-                V_Rd_s = self.check.find_V_Rd_s(cot_f, context.z, use_note_2=use_note_2)
-                V_Rd_max = self.check.find_V_Rd_max(cot_f, context.z, context.sigma_cp, use_note_2=use_note_2)
+        z_volume = np.zeros((len(slider_vals), len(y_vals), len(cot_vals)))
 
-                V_Rd = min(V_Rd_s, V_Rd_max)
-
-                if metric_key == "utilization":
-                    value = context.V_Ed / V_Rd if V_Rd > 0.0 else float("inf")
-                elif metric_key == "capacity":
-                    value = V_Rd
-                elif metric_key == "v_rd_s":
-                    value = V_Rd_s
+        for i_slider, slider_val in enumerate(slider_vals):
+            for i_y, y_val in enumerate(y_vals):
+                if moment_on_y_axis:
+                    m_ed = float(y_val)
+                    n_ed = float(slider_val)
                 else:
-                    value = V_Rd_max
-                Z[i, j] = value
+                    m_ed = float(slider_val)
+                    n_ed = float(y_val)
+
+                sweep_case = ShearLoadCase(V_Ed=case.V_Ed, M_Ed=m_ed, N_Ed=n_ed)
+                context = self._build_context(load_case=sweep_case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
+
+                for i_cot, cot_theta in enumerate(cot_vals):
+                    cot_f = float(cot_theta)
+                    V_Rd_s = self.check.find_V_Rd_s(cot_f, context.z, use_note_2=use_note_2)
+                    V_Rd_max = self.check.find_V_Rd_max(
+                        cot_f,
+                        context.z,
+                        context.sigma_cp,
+                        use_note_2=use_note_2,
+                    )
+                    V_Rd = min(V_Rd_s, V_Rd_max)
+
+                    if metric_key == "utilization":
+                        value = context.V_Ed / V_Rd if V_Rd > 0.0 else float("inf")
+                    elif metric_key == "capacity":
+                        value = V_Rd
+                    elif metric_key == "v_rd_s":
+                        value = V_Rd_s
+                    else:
+                        value = V_Rd_max
+                    z_volume[i_slider, i_y, i_cot] = value
 
         if metric_key == "utilization":
-            colorbar_title = "Utilization (-)"
+            colorbar_title = "Utilization"
             zmin = 0.0
-            zmax = max(1.5, float(np.nanmax(Z)))
+            finite_vals = z_volume[np.isfinite(z_volume)]
+            zmax = max(1.5, float(np.nanmax(finite_vals))) if finite_vals.size else 1.5
+            z_plot_volume = np.where(np.isfinite(z_volume), z_volume, zmax)
             colorscale = _utilization_colorscale(zmin=zmin, zmax=zmax)
-            contour_trace = go.Contour(
-                x=cot_vals,
-                y=n_vals,
-                z=Z,
-                contours=dict(start=1.0, end=1.0, size=1.0, coloring="none"),
-                line=dict(color="black", width=2),
-                showscale=False,
-                name="Utilization = 1.0",
-                hoverinfo="skip",
-            )
         else:
             colorbar_title = "kN"
             colorscale = "Viridis"
             zmin = None
             zmax = None
-            contour_trace = None
+            z_plot_volume = z_volume
+
+        first_slice = z_plot_volume[0, :, :]
+        hovertemplate = (
+            "cot(theta): %{x:.3f}<br>"
+            f"{y_hover_name}: %{{y:{y_hover_format}}} {y_hover_unit}<br>"
+            f"{metric_key}: "
+            "%{z:.3f}<extra></extra>"
+        )
 
         fig = go.Figure()
         fig.add_trace(
             go.Heatmap(
                 x=cot_vals,
-                y=n_vals,
-                z=Z,
+                y=y_vals,
+                z=first_slice,
                 colorscale=colorscale,
                 zmin=zmin,
                 zmax=zmax,
                 colorbar=dict(title=colorbar_title),
-                hovertemplate=(
-                    "cot(theta): %{x:.3f}<br>"
-                    "N_Ed: %{y:.1f} kN<br>"
-                    f"{metric_key}: "
-                    "%{z:.3f}<extra></extra>"
-                ),
+                hovertemplate=hovertemplate,
                 name=metric_key,
-            )
+            ),
         )
-        if contour_trace is not None:
-            fig.add_trace(contour_trace)
+        if metric_key == "utilization":
+            fig.add_trace(
+                go.Contour(
+                    x=cot_vals,
+                    y=y_vals,
+                    z=first_slice,
+                    contours=dict(start=1.0, end=1.0, size=1.0, coloring="none"),
+                    line=dict(color="black", width=2),
+                    showscale=False,
+                    name="Utilization = 1.0",
+                    hoverinfo="skip",
+                ),
+            )
 
-        fig.update_layout(
-            title=title or f"Axial Force vs cot(theta): {metric_key}",
+        frames = []
+        for i_slider, slider_val in enumerate(slider_vals):
+            z_slice = z_plot_volume[i_slider, :, :]
+            slider_label = _format_slider_numeric_label(float(slider_val))
+            frame_data: list[Any] = [
+                go.Heatmap(
+                    x=cot_vals,
+                    y=y_vals,
+                    z=z_slice,
+                    colorscale=colorscale,
+                    zmin=zmin,
+                    zmax=zmax,
+                    showscale=False,
+                    hovertemplate=hovertemplate,
+                    name=metric_key,
+                ),
+            ]
+            if metric_key == "utilization":
+                frame_data.append(
+                    go.Contour(
+                        x=cot_vals,
+                        y=y_vals,
+                        z=z_slice,
+                        contours=dict(start=1.0, end=1.0, size=1.0, coloring="none"),
+                        line=dict(color="black", width=2),
+                        showscale=False,
+                        name="Utilization = 1.0",
+                        hoverinfo="skip",
+                    ),
+                )
+            frames.append({"name": slider_label, "data": frame_data})
+        fig.frames = frames
+
+        mode_title = "Moment on y-axis" if moment_on_y_axis else "Axial force on y-axis"
+        layout_kwargs: dict[str, Any] = dict(
+            title=title or f"Force vs cot(theta): {metric_key} ({mode_title})",
             xaxis_title="cot(theta)",
+            yaxis_title=y_label,
+            template="plotly_white",
+            width=width,
+            height=height,
+        )
+        if len(slider_vals) > 1:
+            steps = [
+                {
+                    "label": _format_slider_numeric_label(float(slider_val)),
+                    "method": "animate",
+                    "args": [
+                        [_format_slider_numeric_label(float(slider_val))],
+                        {
+                            "frame": {"duration": 0, "redraw": True},
+                            "mode": "immediate",
+                            "transition": {"duration": 0},
+                        },
+                    ],
+                }
+                for slider_val in slider_vals
+            ]
+            layout_kwargs.update(
+                _build_slider_animation_controls(
+                    steps=steps,
+                    currentvalue_prefix=slider_prefix,
+                )
+            )
+        fig.update_layout(**layout_kwargs)
+
+        _show_or_save(fig, save_path=save_path, show=show)
+        return fig
+
+    def plot_axial_moment_contour(
+        self,
+        *,
+        load_case: Union[ShearLoadCase, Dict[str, Any]],
+        M_min: float,
+        M_max: float,
+        N_min: float,
+        N_max: float,
+        n_moment: int = 41,
+        n_axial: int = 31,
+        cot_theta_min: Optional[float] = None,
+        cot_theta_max: Optional[float] = None,
+        n_cot: int = 20,
+        cot_theta_step: Optional[float] = 0.05,
+        use_uncracked_V_Rd_c: bool = False,
+        use_note_2: bool = False,
+        save_path: Optional[Union[str, Path]] = None,
+        show: bool = True,
+        title: Optional[str] = None,
+        width: int = 1000,
+        height: int = 760,
+    ) -> Any:
+        """
+        Plot an M-N utilization heatmap with cot(theta) slider.
+
+        The x-axis is ``M_Ed``, y-axis is ``N_Ed`` and heatmap color is shear
+        utilization. A contour line for ``utilization = 1.0`` is included for
+        each cot(theta) frame. Slider values use 0.05 cot(theta) increments by
+        default; set ``cot_theta_step`` to ``None`` or non-positive to use
+        ``n_cot`` linear spacing.
+        """
+        self._require_shear_reinforcement()
+
+        try:
+            import plotly.graph_objects as go
+        except ImportError as e:
+            raise ImportError("Plotly is required for plotting. Install with: pip install plotly") from e
+
+        case = _as_load_case(load_case)
+        base_context = self._build_context(load_case=case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
+
+        cot_min = base_context.cot_min if cot_theta_min is None else float(cot_theta_min)
+        cot_max = base_context.cot_max if cot_theta_max is None else float(cot_theta_max)
+        if cot_min > cot_max:
+            cot_min, cot_max = cot_max, cot_min
+
+        cot_vals = _build_slider_values(
+            value_min=cot_min,
+            value_max=cot_max,
+            n_points=n_cot,
+            step=cot_theta_step,
+        )
+        cot_labels = [f"{float(cot_theta):.2f}" for cot_theta in cot_vals]
+        n_vals = np.linspace(float(N_min), float(N_max), max(2, int(n_axial)))
+        m_vals = np.linspace(float(M_min), float(M_max), max(2, int(n_moment)))
+        util_volume = np.zeros((len(cot_vals), len(n_vals), len(m_vals)))
+
+        for i_n, n_ed in enumerate(n_vals):
+            for i_m, m_ed in enumerate(m_vals):
+                mn_case = ShearLoadCase(V_Ed=case.V_Ed, M_Ed=float(m_ed), N_Ed=float(n_ed))
+                context = self._build_context(load_case=mn_case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
+
+                for i_cot, cot_theta in enumerate(cot_vals):
+                    cot_f = float(cot_theta)
+                    V_Rd_s = self.check.find_V_Rd_s(cot_f, context.z, use_note_2=use_note_2)
+                    V_Rd_max = self.check.find_V_Rd_max(
+                        cot_f,
+                        context.z,
+                        context.sigma_cp,
+                        use_note_2=use_note_2,
+                    )
+                    V_Rd = min(V_Rd_s, V_Rd_max)
+                    util_volume[i_cot, i_n, i_m] = context.V_Ed / V_Rd if V_Rd > 0.0 else float("inf")
+
+        finite_vals = util_volume[np.isfinite(util_volume)]
+        zmax = max(1.5, float(np.nanmax(finite_vals))) if finite_vals.size else 1.5
+        colorscale = _utilization_colorscale(zmin=0.0, zmax=zmax)
+
+        first_slice = util_volume[0, :, :]
+        fig = go.Figure()
+        fig.add_trace(
+            go.Heatmap(
+                x=m_vals,
+                y=n_vals,
+                z=first_slice,
+                colorscale=colorscale,
+                zmin=0.0,
+                zmax=zmax,
+                colorbar=dict(title="Utilization"),
+                hovertemplate=(
+                    "M_Ed: %{x:.2f} kN·m<br>"
+                    "N_Ed: %{y:.1f} kN<br>"
+                    "Utilization: %{z:.3f}<extra></extra>"
+                ),
+                name="utilization",
+            ),
+        )
+        fig.add_trace(
+            go.Contour(
+                x=m_vals,
+                y=n_vals,
+                z=first_slice,
+                contours=dict(start=1.0, end=1.0, size=1.0, coloring="none"),
+                line=dict(color="black", width=2),
+                showscale=False,
+                name="Utilization = 1.0",
+                hoverinfo="skip",
+            ),
+        )
+
+        frames = []
+        for i, cot_label in enumerate(cot_labels):
+            util_slice = util_volume[i, :, :]
+            frames.append(
+                {
+                    "name": cot_label,
+                    "data": [
+                        go.Heatmap(
+                            x=m_vals,
+                            y=n_vals,
+                            z=util_slice,
+                            colorscale=colorscale,
+                            zmin=0.0,
+                            zmax=zmax,
+                            showscale=False,
+                            hovertemplate=(
+                                "M_Ed: %{x:.2f} kN·m<br>"
+                                "N_Ed: %{y:.1f} kN<br>"
+                                "Utilization: %{z:.3f}<extra></extra>"
+                            ),
+                            name="utilization",
+                        ),
+                        go.Contour(
+                            x=m_vals,
+                            y=n_vals,
+                            z=util_slice,
+                            contours=dict(start=1.0, end=1.0, size=1.0, coloring="none"),
+                            line=dict(color="black", width=2),
+                            showscale=False,
+                            name="Utilization = 1.0",
+                            hoverinfo="skip",
+                        ),
+                    ],
+                },
+            )
+        fig.frames = frames
+
+        layout_kwargs: dict[str, Any] = dict(
+            title=title or "Axial-Moment Utilization (cot(theta) slider)",
+            xaxis_title="Moment M_Ed (kN·m)",
             yaxis_title="Axial force N_Ed (kN)",
             template="plotly_white",
             width=width,
             height=height,
         )
+        if len(cot_vals) > 1:
+            steps = [
+                {
+                    "label": cot_label,
+                    "method": "animate",
+                    "args": [
+                        [cot_label],
+                        {
+                            "frame": {"duration": 0, "redraw": True},
+                            "mode": "immediate",
+                            "transition": {"duration": 0},
+                        },
+                    ],
+                }
+                for cot_label in cot_labels
+            ]
+            layout_kwargs.update(
+                _build_slider_animation_controls(
+                    steps=steps,
+                    currentvalue_prefix="cot(theta): ",
+                )
+            )
+        fig.update_layout(**layout_kwargs)
 
         _show_or_save(fig, save_path=save_path, show=show)
         return fig

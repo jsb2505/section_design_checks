@@ -1042,7 +1042,7 @@ class TestPlotWrappers:
             def plot_cot_theta_link_angle_heatmap(self, *, load_case, **kwargs):
                 return ("heatmap", load_case, kwargs)
 
-            def plot_axial_cot_theta_contour(self, *, load_case, **kwargs):
+            def plot_force_cot_theta_contour(self, *, load_case, **kwargs):
                 return ("axial", load_case, kwargs)
 
         fake_module = types.SimpleNamespace(ShearViewer=_FakeViewer)
@@ -1059,7 +1059,14 @@ class TestPlotWrappers:
         out3 = check.plot_link_angle_study(load_case=load_case, show=False)
         out4 = check.plot_link_angle_moment_shift_study(load_case=load_case, show=False)
         out5 = check.plot_cot_theta_link_angle_heatmap(load_case=load_case, show=False)
-        out6 = check.plot_axial_cot_theta_contour(load_case=load_case, N_min=-100.0, N_max=100.0, show=False)
+        out6 = check.plot_force_cot_theta_contour(
+            load_case=load_case,
+            n_min=-100.0,
+            n_max=100.0,
+            m_min=-50.0,
+            m_max=50.0,
+            show=False,
+        )
 
         assert out1[0] == "cot_theta"
         assert out2[0] == "cot_theta_moment_shift"

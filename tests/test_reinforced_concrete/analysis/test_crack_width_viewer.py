@@ -13,6 +13,7 @@ import pytest
 
 from materials.reinforced_concrete.analysis.crack_width_viewer import (
     CrackWidthViewer,
+    _build_compression_mask,
     _compute_load_case_result,
     _eval_w_k,
     _find_crack_width_boundary,
@@ -42,7 +43,7 @@ class _FakeCheck:
         self.section = object()
         self.concrete = object()
 
-    def calculate_detailed(self, *, M_Ed: float, N_Ed: float, force_cracked: bool = False):
+    def calculate_detailed(self, *, M_Ed: float, N_Ed: float, force_cracked: bool = False, **kwargs):
         # simple deterministic shape
         w_k = abs(M_Ed) / 100.0 + abs(N_Ed) / 1000.0
         return CrackingResult(
@@ -58,6 +59,29 @@ class _FakeCheck:
             phi_eq=16.0,
             cover=40.0,
         )
+
+
+class _FakeSection:
+    def __init__(self, area: float):
+        self._area = area
+
+    def get_area(self) -> float:
+        return self._area
+
+
+class _FakeConcrete:
+    def __init__(self, f_ctm: float):
+        self.f_ctm = f_ctm
+
+
+class _FakeCheckWithGeometry:
+    """Fake check with geometry attributes for _build_compression_mask tests."""
+
+    def __init__(self, *, w_k_limit: float, area: float, f_ctm: float, height: float):
+        self.w_k_limit = w_k_limit
+        self.section = _FakeSection(area)
+        self.concrete = _FakeConcrete(f_ctm)
+        self.height = height
 
 
 class _FakeFigure:
@@ -143,7 +167,7 @@ class TestCrackWidthViewerHelpers:
         """Test find crack width boundary finds positive and negative branches."""
         monkeypatch.setattr(
             "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
-            lambda check, M, N, force_cracked: abs(M) / 100.0,
+            lambda check, M, N, force_cracked, skip_stress_checks=True: abs(M) / 100.0,
         )
 
         pos, neg = _find_crack_width_boundary(
@@ -164,7 +188,7 @@ class TestCrackWidthViewerHelpers:
         """Test find crack width boundary handles nan eval."""
         monkeypatch.setattr(
             "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
-            lambda *args, **kwargs: float("nan"),
+            lambda *args, skip_stress_checks=True, **kwargs: float("nan"),
         )
         pos, neg = _find_crack_width_boundary(
             check=_FakeCheck(w_k_limit=0.3),
@@ -181,7 +205,7 @@ class TestCrackWidthViewerHelpers:
         """Test find crack width boundary brentq valueerror is ignored."""
         monkeypatch.setattr(
             "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
-            lambda check, M, N, force_cracked: abs(M) / 100.0,
+            lambda check, M, N, force_cracked, skip_stress_checks=True: abs(M) / 100.0,
         )
         monkeypatch.setattr(
             "scipy.optimize.brentq",
@@ -197,6 +221,60 @@ class TestCrackWidthViewerHelpers:
         )
         assert pos == []
         assert neg == []
+
+
+class TestBuildCompressionMask:
+    """Tests for _build_compression_mask pre-filter."""
+
+    def test_high_compression_low_eccentricity_is_masked(self):
+        """Points with high N and low M/N should be masked."""
+        check = _FakeCheckWithGeometry(
+            w_k_limit=0.3, area=200_000.0, f_ctm=2.9, height=500.0,
+        )
+        # N_decomp = 200_000 * 2.9 / 1000 = 580 kN
+        # e_kern = 0.8 * 500/6 / 1000 = 0.0667 m
+        M_vals = np.array([0.0, 5.0, 50.0])
+        N_vals = np.array([600.0, 700.0])  # both > 580
+
+        mask = _build_compression_mask(check, M_vals, N_vals)
+
+        # M=0: e=0 < 0.0667 → masked
+        assert mask[0, 0] is np.True_
+        assert mask[1, 0] is np.True_
+        # M=5, N=600: e=5/600=0.0083 < 0.0667 → masked
+        assert mask[0, 1] is np.True_
+        # M=50, N=600: e=50/600=0.0833 > 0.0667 → not masked
+        assert mask[0, 2] is np.False_
+
+    def test_low_compression_is_never_masked(self):
+        """Points with N below decompression force should never be masked."""
+        check = _FakeCheckWithGeometry(
+            w_k_limit=0.3, area=200_000.0, f_ctm=2.9, height=500.0,
+        )
+        M_vals = np.array([0.0, 10.0])
+        N_vals = np.array([0.0, 100.0, -500.0])  # all below N_decomp=580
+
+        mask = _build_compression_mask(check, M_vals, N_vals)
+        assert not mask.any()
+
+    def test_tension_is_never_masked(self):
+        """Negative N (tension) should never be masked."""
+        check = _FakeCheckWithGeometry(
+            w_k_limit=0.3, area=200_000.0, f_ctm=2.9, height=500.0,
+        )
+        M_vals = np.array([0.0])
+        N_vals = np.array([-1000.0])
+
+        mask = _build_compression_mask(check, M_vals, N_vals)
+        assert not mask.any()
+
+
+def _patch_no_compression_mask(monkeypatch):
+    """Patch _build_compression_mask to return all-False (no skipping)."""
+    monkeypatch.setattr(
+        "materials.reinforced_concrete.analysis.crack_width_viewer._build_compression_mask",
+        lambda check, M_vals, N_vals: np.zeros((len(N_vals), len(M_vals)), dtype=bool),
+    )
 
 
 class TestCrackWidthViewerPlots:
@@ -259,6 +337,7 @@ class TestCrackWidthViewerPlots:
     def test_plot_contours_builds_contour_and_boundary(self, monkeypatch):
         """Test plot contours builds contour and boundary."""
         _install_fake_plotly(monkeypatch)
+        _patch_no_compression_mask(monkeypatch)
         viewer = CrackWidthViewer(_FakeCheck(w_k_limit=0.4))
 
         monkeypatch.setattr(
@@ -267,11 +346,11 @@ class TestCrackWidthViewerPlots:
         )
         monkeypatch.setattr(
             "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
-            lambda check, M, N, force_cracked: abs(M) / 200.0 + abs(N) / 1000.0,
+            lambda check, M, N, force_cracked, skip_stress_checks=True: abs(M) / 200.0 + abs(N) / 1000.0,
         )
         monkeypatch.setattr(
             "materials.reinforced_concrete.analysis.crack_width_viewer._find_crack_width_boundary",
-            lambda check, N_values, M_min, M_max, w_k_limit, force_cracked: (
+            lambda check, N_values, M_min, M_max, w_k_limit, force_cracked, max_workers=None: (
                 [(20.0, float(n)) for n in N_values[:3]],
                 [(-20.0, float(n)) for n in N_values[:3]],
             ),
@@ -293,6 +372,7 @@ class TestCrackWidthViewerPlots:
     def test_plot_contours_show_true_calls_show(self, monkeypatch):
         """Test plot contours show true calls show."""
         _install_fake_plotly(monkeypatch)
+        _patch_no_compression_mask(monkeypatch)
         viewer = CrackWidthViewer(_FakeCheck())
 
         monkeypatch.setattr(
@@ -301,11 +381,11 @@ class TestCrackWidthViewerPlots:
         )
         monkeypatch.setattr(
             "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
-            lambda check, M, N, force_cracked: 0.1,
+            lambda check, M, N, force_cracked, skip_stress_checks=True: 0.1,
         )
         monkeypatch.setattr(
             "materials.reinforced_concrete.analysis.crack_width_viewer._find_crack_width_boundary",
-            lambda check, N_values, M_min, M_max, w_k_limit, force_cracked: ([], []),
+            lambda check, N_values, M_min, M_max, w_k_limit, force_cracked, max_workers=None: ([], []),
         )
 
         fig = viewer.plot_contours(n_grid=3, n_boundary_points=3, show=True)
@@ -314,6 +394,7 @@ class TestCrackWidthViewerPlots:
     def test_plot_contours_save_path_calls_write_html(self, monkeypatch, tmp_path):
         """Test plot contours save path calls write html."""
         _install_fake_plotly(monkeypatch)
+        _patch_no_compression_mask(monkeypatch)
         viewer = CrackWidthViewer(_FakeCheck())
         save_path = tmp_path / "crack_contours.html"
 
@@ -323,11 +404,11 @@ class TestCrackWidthViewerPlots:
         )
         monkeypatch.setattr(
             "materials.reinforced_concrete.analysis.crack_width_viewer._eval_w_k",
-            lambda check, M, N, force_cracked: 0.1,
+            lambda check, M, N, force_cracked, skip_stress_checks=True: 0.1,
         )
         monkeypatch.setattr(
             "materials.reinforced_concrete.analysis.crack_width_viewer._find_crack_width_boundary",
-            lambda check, N_values, M_min, M_max, w_k_limit, force_cracked: ([], []),
+            lambda check, N_values, M_min, M_max, w_k_limit, force_cracked, max_workers=None: ([], []),
         )
 
         fig = viewer.plot_contours(n_grid=3, n_boundary_points=3, show=False, save_path=save_path)

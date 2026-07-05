@@ -1723,21 +1723,49 @@ class MNInteractionDiagram:
             # model can produce for a vanishingly thin compression zone,
             # ensuring z_virtual ≤ max(z_mech) and a smooth boundary transition.
             conc_mask = self._fibre_mat == "concrete"
-            if eps_top >= eps_bottom:
-                comp_face = (
-                    float(np.max(self._fibre_y[conc_mask]))
-                    if np.any(conc_mask)
-                    else self.section_top
-                )
+            top_face = (
+                float(np.max(self._fibre_y[conc_mask]))
+                if np.any(conc_mask)
+                else self.section_top
+            )
+            bot_face = (
+                float(np.min(self._fibre_y[conc_mask]))
+                if np.any(conc_mask)
+                else self.section_bottom
+            )
+
+            both_tensile = (
+                eps_top is not None
+                and eps_bottom is not None
+                and eps_top <= 0
+                and eps_bottom <= 0
+            )
+
+            if force_virtual or both_tensile:
+                # When strains are projected (force_virtual) or the section is
+                # entirely in tension (no real compression zone), the eps_top
+                # vs eps_bottom comparison is meaningless — a tiny gradient
+                # difference can flip comp_face and produce a large z
+                # discontinuity.  Use the moment direction instead: it tells
+                # us which face *would* be in compression under bending,
+                # giving a stable geometric reference.
+                comp_face = top_face if M_Ed >= 0 else bot_face
+            elif eps_top >= eps_bottom:
+                comp_face = top_face
             else:
-                comp_face = (
-                    float(np.min(self._fibre_y[conc_mask]))
-                    if np.any(conc_mask)
-                    else self.section_bottom
-                )
+                comp_face = bot_face
 
             if T_total > 0.0 and C_total <= 0.0:
-                # No compression: z from section boundary to tension centroid
+                # No compression: z from compression-face reference to tension centroid.
+                y_T = float(
+                    np.sum((-forces[T_mask]) * y_coords[T_mask]) / T_total
+                )
+                z_fb = abs(comp_face - y_T)
+            elif T_total > 0.0 and C_total > 0.0:
+                # Both tension and compression: use the same comp_face–to–tension-centroid
+                # formula as the pure-T branch.  This provides a smooth transition as the
+                # compression zone vanishes (C_total → 0) — y_T shifts continuously and
+                # comp_face is already a stable geometric reference.
                 y_T = float(
                     np.sum((-forces[T_mask]) * y_coords[T_mask]) / T_total
                 )
@@ -1750,7 +1778,7 @@ class MNInteractionDiagram:
                 y_rebar = self._extreme_tension_rebar_y(eps_top, eps_bottom)
                 z_fb = abs(y_C - y_rebar)
             else:
-                # Both zero or edge case — strain-sign heuristic
+                # Both zero — strain-sign heuristic
                 both_compressive = eps_top >= 0 and eps_bottom >= 0
                 both_tensile = eps_top <= 0 and eps_bottom <= 0
                 if both_compressive:

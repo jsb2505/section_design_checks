@@ -2350,6 +2350,7 @@ class CrackingCheck(BaseCodeCheck):
         suppress_warnings: bool = False,
         actual_bar_diameter: Optional[float] = None,
         cover_override: Optional[float] = None,
+        skip_stress_checks: bool = False,
     ) -> CrackingResult:
         """
         Calculate detailed cracking results without creating CheckResult.
@@ -2367,6 +2368,9 @@ class CrackingCheck(BaseCodeCheck):
                 bar substitution. See ``perform_check`` for details.
             cover_override: If provided, use this value (mm) as the concrete cover
                 instead of auto-computing from section geometry.
+            skip_stress_checks: If True, skip stress limitation checks and
+                nonlinear creep iteration. Only the crack width is computed.
+                Useful for parametric sweeps where only w_k is needed.
 
         Returns:
             CrackingResult dataclass with all intermediate values.
@@ -2420,11 +2424,15 @@ class CrackingCheck(BaseCodeCheck):
             )
 
         # Stress limitation and non-linear creep (same logic as _check_single_case)
-        sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_for_check)
         nonlinear_creep_applied = False
         creep_coefficient_used = self.creep_coefficient
 
-        if self.check_k2_stress and self.apply_nonlinear_creep:
+        if skip_stress_checks:
+            sigma_c_peak = 0.0
+        else:
+            sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram_for_check)
+
+        if not skip_stress_checks and self.check_k2_stress and self.apply_nonlinear_creep:
             exceeded_qp, _ = check_quasi_permanent_concrete_stress(sigma_c_peak, self.concrete.f_ck)
             if exceeded_qp:
                 max_iterations = 5 if self.iterate_nonlinear_creep else 1

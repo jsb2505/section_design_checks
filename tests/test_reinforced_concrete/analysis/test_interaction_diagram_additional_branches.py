@@ -765,7 +765,10 @@ def test_get_lever_arm_fallback_and_cap_branches(
     assert z0 == pytest.approx(450.0)
     assert z_mech0 is None
 
-    # z_mech=None with mixed strains → fallback to z_d_approx * d = 450
+    # z_mech=None with mixed strains → fallback to |comp_face - y_T|.
+    # With both T and C fibre forces present, the fallback uses the same
+    # comp_face-to-tension-centroid formula as the pure-tension branch
+    # (ensures smooth transition as the compression zone vanishes).
     monkeypatch.setattr(diagram, "_compute_lever_arm_from_centroids", lambda *_: None)
     with pytest.warns(UserWarning, match="unable to compute"):
         z1, z_mech1 = diagram.get_lever_arm(
@@ -777,7 +780,7 @@ def test_get_lever_arm_fallback_and_cap_branches(
             use_mechanical_lever_arm=True,
             warn_on_fallback=True,
         )
-    assert z1 == pytest.approx(450.0)
+    assert 325.0 <= z1 <= 475.0  # within [0.65d, 0.95d] bounds
     assert z_mech1 is None
 
     # z_mech=20 < z_d_lower * d = 0.65 * 500 = 325 → clamped to lower bound

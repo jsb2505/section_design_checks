@@ -8,7 +8,8 @@ Provides two plot types:
 
 from __future__ import annotations
 
-import warnings
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
@@ -92,19 +93,114 @@ def _eval_w_k(
     M: float,
     N: float,
     force_cracked: bool,
+    skip_stress_checks: bool = True,
 ) -> float:
     """Evaluate crack width, returning NaN on failure."""
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            result = check.calculate_detailed(
-                M_Ed=M, N_Ed=N, force_cracked=force_cracked,
-            )
+        result = check.calculate_detailed(
+            M_Ed=M, N_Ed=N,
+            force_cracked=force_cracked,
+            suppress_warnings=True,
+            skip_stress_checks=skip_stress_checks,
+        )
         if not bool(getattr(result, "solved", True)):
             return float("nan")
         return float(result.w_k) if result.w_k is not None else float("nan")
     except (ValueError, ZeroDivisionError):
         return float("nan")
+
+
+def _build_compression_mask(
+    check: CrackingCheck,
+    M_vals: np.ndarray,
+    N_vals: np.ndarray,
+) -> np.ndarray:
+    """Return boolean mask (n_N, n_M) where True means compression-dominated (skip).
+
+    Points are skipped when the axial force exceeds the decompression force
+    (entire section in compression at M=0) AND the eccentricity is small enough
+    that the resultant stays within the section kern.
+    """
+    A_c = check.section.get_area()              # mm²
+    f_ctm = check.concrete.f_ctm                # MPa
+    h = check.height                            # mm
+
+    # Decompression force: N that puts entire section into compression at M=0
+    N_decomp = A_c * f_ctm / 1000.0             # kN
+
+    # Kern eccentricity limit with 0.8 safety factor for non-rectangular sections
+    # e = M(kN·m) / N(kN) gives metres; h/6 in mm → convert to m
+    e_kern_m = 0.8 * h / 6.0 / 1000.0           # m
+
+    # Vectorised: N_vals as column, M_vals as row
+    N_col = N_vals[:, np.newaxis]                # (n_N, 1)
+    M_row = M_vals[np.newaxis, :]                # (1, n_M)
+
+    above_decomp = N_col > N_decomp
+    # Safe divide: only compute eccentricity where N > 0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        eccentricity = np.where(N_col > 0, np.abs(M_row / N_col), np.inf)
+
+    return above_decomp & (eccentricity < e_kern_m)
+
+
+def _find_boundary_for_n_slice(
+    check: CrackingCheck,
+    N_i: float,
+    M_min: float,
+    M_max: float,
+    w_k_limit: float,
+    force_cracked: bool,
+    n_bracket: int = 30,
+) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+    """Find boundary points for a single N slice. Returns (pos_point, neg_point)."""
+    from scipy.optimize import brentq
+
+    LARGE_VALUE = 10.0
+
+    def g(M: float) -> float:
+        w_k = _eval_w_k(check, M, N_i, force_cracked)
+        if np.isnan(w_k):
+            return LARGE_VALUE
+        return w_k - w_k_limit
+
+    pos_point: Optional[Tuple[float, float]] = None
+    neg_point: Optional[Tuple[float, float]] = None
+
+    # --- Positive M direction (sagging) ---
+    M_probe = np.linspace(0.0, M_max, n_bracket)
+    g_vals = [g(float(m)) for m in M_probe]
+
+    for k in range(len(g_vals) - 1):
+        if g_vals[k] < 0 and g_vals[k + 1] >= 0:
+            try:
+                M_star = cast(float, brentq(
+                    g, float(M_probe[k]), float(M_probe[k + 1]),
+                    xtol=0.1, maxiter=30,
+                ))
+                pos_point = (M_star, N_i)
+            except ValueError:
+                pass
+            break
+
+    # --- Negative M direction (hogging) ---
+    if M_min < 0:
+        M_probe_neg = np.linspace(0.0, M_min, n_bracket)
+        g_vals_neg = [g(float(m)) for m in M_probe_neg]
+
+        for k in range(len(g_vals_neg) - 1):
+            if g_vals_neg[k] < 0 and g_vals_neg[k + 1] >= 0:
+                try:
+                    M_star = cast(float, brentq(
+                        g, float(M_probe_neg[k]), float(M_probe_neg[k + 1]),
+                        xtol=0.1, maxiter=30,
+                    ))
+                    neg_point = (M_star, N_i)
+                except ValueError:
+                    pass
+                break
+
+    return pos_point, neg_point
 
 
 def _find_crack_width_boundary(
@@ -114,72 +210,102 @@ def _find_crack_width_boundary(
     M_max: float,
     w_k_limit: float,
     force_cracked: bool,
+    max_workers: Optional[int] = None,
 ) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]:
     """Find (M, N) boundary points where w_k = w_k_limit.
 
     For each N_i, use brentq to find M* where w_k(M*, N_i) = w_lim.
     Searches both positive M (sagging) and negative M (hogging) directions.
+    When ``max_workers`` > 1, N slices are evaluated in parallel using a
+    thread pool; by default a serial loop is used.
 
     Returns:
         (positive_boundary, negative_boundary) — each a list of (M, N) tuples.
     """
-    from scipy.optimize import brentq
-
-    LARGE_VALUE = 10.0  # Sentinel for "outside capacity"
-    n_bracket = 30  # Coarse bracket resolution
-
-    def g(M: float, N: float) -> float:
-        w_k = _eval_w_k(check, M, N, force_cracked)
-        if np.isnan(w_k):
-            return LARGE_VALUE  # Acts as upper bracket
-        return w_k - w_k_limit
+    workers = max_workers or 1
 
     pos_boundary: List[Tuple[float, float]] = []
     neg_boundary: List[Tuple[float, float]] = []
 
-    for N_i in N_values:
-        N_i_float = float(N_i)
+    if workers <= 1:
+        for N_i in N_values:
+            pos_pt, neg_pt = _find_boundary_for_n_slice(
+                check, float(N_i), M_min, M_max, w_k_limit, force_cracked,
+            )
+            if pos_pt is not None:
+                pos_boundary.append(pos_pt)
+            if neg_pt is not None:
+                neg_boundary.append(neg_pt)
+    else:
+        def _worker(N_i: float) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+            return _find_boundary_for_n_slice(
+                check, float(N_i), M_min, M_max, w_k_limit, force_cracked,
+            )
 
-        # --- Positive M direction (sagging) ---
-        M_probe = np.linspace(0.0, M_max, n_bracket)
-        g_vals = [g(float(m), N_i_float) for m in M_probe]
-
-        for k in range(len(g_vals) - 1):
-            if g_vals[k] < 0 and g_vals[k + 1] >= 0:
-                try:
-                    M_star = cast(float, brentq(
-                        lambda m: g(m, N_i_float),
-                        float(M_probe[k]),
-                        float(M_probe[k + 1]),
-                        xtol=0.1,
-                        maxiter=30,
-                    ))
-                    pos_boundary.append((M_star, N_i_float))
-                except ValueError:
-                    pass
-                break  # Only first crossing per N slice
-
-        # --- Negative M direction (hogging) ---
-        if M_min < 0:
-            M_probe_neg = np.linspace(0.0, M_min, n_bracket)
-            g_vals_neg = [g(float(m), N_i_float) for m in M_probe_neg]
-
-            for k in range(len(g_vals_neg) - 1):
-                if g_vals_neg[k] < 0 and g_vals_neg[k + 1] >= 0:
-                    try:
-                        M_star = cast(float, brentq(
-                            lambda m: g(m, N_i_float),
-                            float(M_probe_neg[k]),
-                            float(M_probe_neg[k + 1]),
-                            xtol=0.1,
-                            maxiter=30,
-                        ))
-                        neg_boundary.append((M_star, N_i_float))
-                    except ValueError:
-                        pass
-                    break
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for pos_pt, neg_pt in pool.map(_worker, N_values):
+                if pos_pt is not None:
+                    pos_boundary.append(pos_pt)
+                if neg_pt is not None:
+                    neg_boundary.append(neg_pt)
 
     return pos_boundary, neg_boundary
+
+
+def _eval_grid(
+    check: CrackingCheck,
+    M_vals: np.ndarray,
+    N_vals: np.ndarray,
+    force_cracked: bool,
+    comp_mask: np.ndarray,
+    max_workers: Optional[int] = None,
+) -> np.ndarray:
+    """Evaluate w_k grid with compression pre-filter.
+
+    When ``max_workers`` > 1 a thread pool is used, but note that CPython's
+    GIL limits true parallelism for CPU-bound solvers — the benefit depends
+    on how much time the underlying C extensions spend outside the GIL.
+    By default (``max_workers=1``) a simple serial loop is used to avoid
+    thread-dispatch overhead.
+    """
+    n_N, n_M = len(N_vals), len(M_vals)
+    W = np.full((n_N, n_M), np.nan)
+
+    # Pre-fill compression-dominated points
+    W[comp_mask] = 0.0
+
+    workers = max_workers or 1
+
+    if workers <= 1:
+        # Fast serial path — no thread overhead
+        for i in range(n_N):
+            for j in range(n_M):
+                if not comp_mask[i, j]:
+                    W[i, j] = _eval_w_k(
+                        check, float(M_vals[j]), float(N_vals[i]), force_cracked,
+                    )
+        return W
+
+    # Parallel path (opt-in via max_workers > 1)
+    tasks = [
+        (i, j, float(M_vals[j]), float(N_vals[i]))
+        for i in range(n_N)
+        for j in range(n_M)
+        if not comp_mask[i, j]
+    ]
+
+    if not tasks:
+        return W
+
+    def _worker(args: Tuple[int, int, float, float]) -> Tuple[int, int, float]:
+        i, j, m, n = args
+        return i, j, _eval_w_k(check, m, n, force_cracked)
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for i, j, val in pool.map(_worker, tasks):
+            W[i, j] = val
+
+    return W
 
 
 class CrackWidthViewer:
@@ -344,6 +470,7 @@ class CrackWidthViewer:
         width: int = 900,
         height: int = 700,
         n_envelope_points: int = 120,
+        max_workers: Optional[int] = None,
     ) -> Any:
         """
         2D contour map of crack width across the M-N domain.
@@ -368,6 +495,8 @@ class CrackWidthViewer:
             width: Figure width in pixels.
             height: Figure height in pixels.
             n_envelope_points: Resolution for diagram point generation.
+            max_workers: Maximum threads for parallel evaluation. Defaults to
+                ``min(os.cpu_count(), 4)``.
 
         Returns:
             Plotly ``Figure`` object.
@@ -389,23 +518,25 @@ class CrackWidthViewer:
         # --- Build evaluation grid ---
         M_vals = np.linspace(M_min, M_max, n_grid)
         N_vals = np.linspace(N_min, N_max, n_grid)
-        W = np.full((n_grid, n_grid), np.nan)
 
-        for i, n_val in enumerate(N_vals):
-            for j, m_val in enumerate(M_vals):
-                W[i, j] = _eval_w_k(
-                    self.check, float(m_val), float(n_val), force_cracked,
-                )
+        # Pre-filter compression-dominated points (w_k = 0 without solver)
+        comp_mask = _build_compression_mask(self.check, M_vals, N_vals)
+
+        # Parallel grid evaluation
+        W = _eval_grid(
+            self.check, M_vals, N_vals, force_cracked, comp_mask, max_workers,
+        )
 
         # Cap display range at 3x w_k_limit to prevent outliers distorting colourscale
         w_max_display = w_k_limit * 3
         w_max_data = float(np.nanmax(W)) if np.any(~np.isnan(W)) else w_k_limit * 2
         w_max = min(w_max_data, w_max_display)
 
-        # --- Boundary curve via root-finding ---
+        # --- Boundary curve via root-finding (parallel) ---
         N_boundary = np.linspace(N_min, N_max, n_boundary_points)
         pos_boundary, neg_boundary = _find_crack_width_boundary(
             self.check, N_boundary, M_min, M_max, w_k_limit, force_cracked,
+            max_workers,
         )
 
         fig = go.Figure()

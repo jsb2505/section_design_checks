@@ -5,6 +5,7 @@ Tests for shear viewer plotting helpers.
 from __future__ import annotations
 
 import builtins
+import math
 import sys
 import types
 from dataclasses import dataclass
@@ -138,6 +139,7 @@ def _install_fake_plotly(monkeypatch):
     go_mod.Scatter = lambda **kwargs: {"type": "Scatter", **kwargs}
     go_mod.Heatmap = lambda **kwargs: {"type": "Heatmap", **kwargs}
     go_mod.Contour = lambda **kwargs: {"type": "Contour", **kwargs}
+    go_mod.Isosurface = lambda **kwargs: {"type": "Isosurface", **kwargs}
 
     subplots_mod = types.ModuleType("plotly.subplots")
     subplots_mod.make_subplots = lambda **kwargs: _FakeFigure()
@@ -149,6 +151,36 @@ def _install_fake_plotly(monkeypatch):
     monkeypatch.setitem(sys.modules, "plotly", plotly_mod)
     monkeypatch.setitem(sys.modules, "plotly.graph_objects", go_mod)
     monkeypatch.setitem(sys.modules, "plotly.subplots", subplots_mod)
+
+
+def _assert_slider_animation_controls_top_right(layout: dict) -> None:
+    assert "updatemenus" in layout
+    assert len(layout["updatemenus"]) == 1
+    controls = layout["updatemenus"][0]
+    assert controls["type"] == "buttons"
+    assert controls["direction"] == "left"
+    assert controls["x"] == 1.0
+    assert controls["y"] == 1.16
+    assert controls["xanchor"] == "right"
+    assert controls["yanchor"] == "top"
+    assert [button["label"] for button in controls["buttons"]] == ["Play", "Pause"]
+
+
+def _assert_force_slider_has_nice_steps(layout: dict) -> None:
+    slider_steps = layout["sliders"][0]["steps"]
+    assert 30 <= len(slider_steps) <= 70
+
+    values = [float(step["label"]) for step in slider_steps]
+    increments = [values[i + 1] - values[i] for i in range(len(values) - 1)]
+    assert increments
+    assert all(delta > 0.0 for delta in increments)
+
+    main_step = round(increments[0], 6)
+    assert all(abs(round(delta, 6) - main_step) <= 1e-6 for delta in increments)
+
+    magnitude = 10.0 ** math.floor(math.log10(abs(main_step)))
+    normalized = main_step / magnitude
+    assert any(abs(normalized - candidate) <= 1e-6 for candidate in (1.0, 2.0, 2.5, 5.0, 10.0))
 
 
 class TestShearViewer:
@@ -170,8 +202,52 @@ class TestShearViewer:
         trace_names = [t[0].get("name") for t in fig.traces if t[0]["type"] == "Scatter"]
         assert "V_Rd,max design" in trace_names
         assert "V_Rd,s design" in trace_names
-        assert "V_Rd,s = V_Rd,max" in trace_names
+        assert any(name in trace_names for name in ("V_Rd,s = V_Rd,max", "V_Ed,max"))
+        assert "Cot(theta),min" not in trace_names
+        assert "Cot(theta),max" not in trace_names
         assert fig.shown is False
+
+    def test_plot_cot_theta_study_adds_cot_theta_min_intercept_trace(self, monkeypatch):
+        _install_fake_plotly(monkeypatch)
+        viewer = ShearViewer(_FakeCheck())
+
+        fig = viewer.plot_cot_theta_study(
+            load_case={"V_Ed": 220.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            n_points=12,
+            show=False,
+        )
+
+        scatter_traces = [t[0] for t in fig.traces if t[0]["type"] == "Scatter"]
+        names = [t.get("name") for t in scatter_traces]
+        assert "Cot(theta),min" in names
+
+        intercept_trace = next(t for t in scatter_traces if t.get("name") == "Cot(theta),min")
+        assert len({float(x) for x in intercept_trace["x"]}) == 1
+        assert min(intercept_trace["y"]) == pytest.approx(0.0)
+        assert max(intercept_trace["y"]) == pytest.approx(220.0)
+        assert "cot(theta)" in intercept_trace.get("hovertemplate", "")
+        assert "V_Ed" in intercept_trace.get("hovertemplate", "")
+
+    def test_plot_cot_theta_study_adds_cot_theta_max_intercept_trace(self, monkeypatch):
+        _install_fake_plotly(monkeypatch)
+        viewer = ShearViewer(_FakeCheck())
+
+        fig = viewer.plot_cot_theta_study(
+            load_case={"V_Ed": 250.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            n_points=12,
+            show=False,
+        )
+
+        scatter_traces = [t[0] for t in fig.traces if t[0]["type"] == "Scatter"]
+        names = [t.get("name") for t in scatter_traces]
+        assert "Cot(theta),max" in names
+
+        intercept_trace = next(t for t in scatter_traces if t.get("name") == "Cot(theta),max")
+        assert len({float(x) for x in intercept_trace["x"]}) == 1
+        assert min(intercept_trace["y"]) == pytest.approx(0.0)
+        assert max(intercept_trace["y"]) == pytest.approx(250.0)
+        assert "cot(theta)" in intercept_trace.get("hovertemplate", "")
+        assert "V_Ed" in intercept_trace.get("hovertemplate", "")
 
     def test_plot_cot_theta_moment_shift_study_builds_traces(self, monkeypatch):
         _install_fake_plotly(monkeypatch)
@@ -203,14 +279,26 @@ class TestShearViewer:
 
         intercept_trace = next(t for t in scatter_traces if t.get("name") == "Utilization = 1.0 intercept")
         assert "cot(theta)" in intercept_trace.get("hovertemplate", "")
-        assert "M_add at util=1.0" in intercept_trace.get("hovertemplate", "")
+        assert "M_add" in intercept_trace.get("hovertemplate", "")
 
     def test_plot_link_angle_study_builds_traces(self, monkeypatch):
         _install_fake_plotly(monkeypatch)
         viewer = ShearViewer(_FakeCheck())
+        import materials.reinforced_concrete.analysis.shear_viewer as sv_mod
+
+        monkeypatch.setattr(
+            sv_mod,
+            "get_ndp",
+            lambda key: {
+                "cot_theta_lower_lim": 1.0,
+                "cot_theta_upper_lim": 2.5,
+            }[key],
+        )
+        monkeypatch.setattr(viewer.check, "_find_cot_theta_limits", lambda sigma_cp, z, V_Ed: (1.4, 1.6))
 
         fig = viewer.plot_link_angle_study(
             load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            n_cot=3,
             n_points=6,
             show=False,
         )
@@ -221,13 +309,33 @@ class TestShearViewer:
         trace_names = [t[0].get("name") for t in fig.traces if t[0]["type"] == "Scatter"]
         assert "V_Rd,s(alpha)" in trace_names
         assert "V_Rd,max(alpha)" in trace_names
+        assert hasattr(fig, "frames")
+        assert len(fig.frames) == 31
+        layout = fig.layout_updates[-1]
+        assert "sliders" in layout
+        assert layout["sliders"][0]["steps"][0]["label"] == "1.00"
+        assert layout["sliders"][0]["steps"][-1]["label"] == "2.50"
+        _assert_slider_animation_controls_top_right(layout)
+        assert layout["yaxis"]["autorange"] is False
 
     def test_plot_link_angle_moment_shift_study_builds_traces(self, monkeypatch):
         _install_fake_plotly(monkeypatch)
         viewer = ShearViewer(_FakeCheck())
+        import materials.reinforced_concrete.analysis.shear_viewer as sv_mod
+
+        monkeypatch.setattr(
+            sv_mod,
+            "get_ndp",
+            lambda key: {
+                "cot_theta_lower_lim": 1.0,
+                "cot_theta_upper_lim": 2.5,
+            }[key],
+        )
+        monkeypatch.setattr(viewer.check, "_find_cot_theta_limits", lambda sigma_cp, z, V_Ed: (1.4, 1.6))
 
         fig = viewer.plot_link_angle_moment_shift_study(
             load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            n_cot=3,
             n_points=6,
             show=False,
         )
@@ -235,6 +343,15 @@ class TestShearViewer:
         assert isinstance(fig, _FakeFigure)
         trace_types = [t[0]["type"] for t in fig.traces]
         assert trace_types.count("Scatter") >= 3
+        assert hasattr(fig, "frames")
+        assert len(fig.frames) == 31
+        layout = fig.layout_updates[-1]
+        assert "sliders" in layout
+        assert layout["sliders"][0]["steps"][0]["label"] == "1.00"
+        assert layout["sliders"][0]["steps"][-1]["label"] == "2.50"
+        _assert_slider_animation_controls_top_right(layout)
+        assert layout["yaxis"]["autorange"] is False
+        assert layout["yaxis2"]["autorange"] is False
 
     def test_plot_cot_theta_link_angle_heatmap_has_heatmap_and_contour(self, monkeypatch):
         _install_fake_plotly(monkeypatch)
@@ -252,15 +369,18 @@ class TestShearViewer:
         assert "Heatmap" in trace_types
         assert "Contour" in trace_types
 
-    def test_plot_axial_cot_theta_contour_has_heatmap_and_contour(self, monkeypatch):
+    def test_plot_force_cot_theta_contour_has_heatmap_and_contour(self, monkeypatch):
         _install_fake_plotly(monkeypatch)
         viewer = ShearViewer(_FakeCheck())
 
-        fig = viewer.plot_axial_cot_theta_contour(
+        fig = viewer.plot_force_cot_theta_contour(
             load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
-            N_min=-200.0,
-            N_max=200.0,
+            n_min=-200.0,
+            n_max=200.0,
+            m_min=-100.0,
+            m_max=100.0,
             n_axial=4,
+            n_moment=3,
             n_cot=4,
             metric="utilization",
             show=False,
@@ -269,6 +389,66 @@ class TestShearViewer:
         trace_types = [t[0]["type"] for t in fig.traces]
         assert "Heatmap" in trace_types
         assert "Contour" in trace_types
+        assert hasattr(fig, "frames")
+        assert 30 <= len(fig.frames) <= 70
+        layout = fig.layout_updates[-1]
+        assert "sliders" in layout
+        _assert_slider_animation_controls_top_right(layout)
+        _assert_force_slider_has_nice_steps(layout)
+
+    def test_plot_force_cot_theta_contour_moment_on_y_axis_uses_axial_slider(self, monkeypatch):
+        _install_fake_plotly(monkeypatch)
+        viewer = ShearViewer(_FakeCheck())
+
+        fig = viewer.plot_force_cot_theta_contour(
+            load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            n_min=-150.0,
+            n_max=150.0,
+            m_min=-80.0,
+            m_max=80.0,
+            n_axial=5,
+            n_moment=4,
+            moment_on_y_axis=True,
+            n_cot=4,
+            metric="utilization",
+            show=False,
+        )
+
+        assert hasattr(fig, "frames")
+        assert 30 <= len(fig.frames) <= 70
+        layout = fig.layout_updates[-1]
+        _assert_slider_animation_controls_top_right(layout)
+        assert "sliders" in layout
+        assert layout.get("yaxis_title") == "Moment M_Ed (kN·m)"
+        assert layout["sliders"][0]["currentvalue"]["prefix"] == "N_Ed (kN): "
+        _assert_force_slider_has_nice_steps(layout)
+
+    def test_plot_axial_moment_contour_has_heatmap_contour_and_frames(self, monkeypatch):
+        _install_fake_plotly(monkeypatch)
+        viewer = ShearViewer(_FakeCheck())
+
+        fig = viewer.plot_axial_moment_contour(
+            load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            M_min=-100.0,
+            M_max=100.0,
+            N_min=-200.0,
+            N_max=200.0,
+            n_moment=4,
+            n_axial=4,
+            n_cot=3,
+            show=False,
+        )
+
+        trace_types = [t[0]["type"] for t in fig.traces]
+        assert "Heatmap" in trace_types
+        assert "Contour" in trace_types
+        assert hasattr(fig, "frames")
+        assert len(fig.frames) == 31
+        layout = fig.layout_updates[-1]
+        _assert_slider_animation_controls_top_right(layout)
+        assert "sliders" in layout
+        assert layout["sliders"][0]["steps"][0]["label"] == "1.00"
+        assert layout["sliders"][0]["steps"][-1]["label"] == "2.50"
 
     def test_plot_methods_require_shear_reinforcement(self):
         viewer = ShearViewer(_FakeCheck(with_rebar=False))
