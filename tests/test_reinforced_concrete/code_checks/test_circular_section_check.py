@@ -228,6 +228,41 @@ class TestCircularShearCapacityPolicy:
         )
 
 
+class TestUncrackedVRdcEq65Cap:
+    """perform_shear_check must apply the EC2 Eq. 6.5 crushing cap to the uncracked
+    V_Rd,c (0.5·b_w·d·ν·f_cd), which the docstring promised but never did."""
+
+    def test_uncracked_vrdc_capped(self):
+        from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import find_nu_factor
+
+        section = _make_circular_section()
+        check = CircularSectionCheck(
+            section=section,
+            concrete=ConcreteMaterial(grade="C30/37"),
+            diameter=600.0,
+            cover=50.0,
+            shear_reinforcement=ShearRebar(diameter=12, link_spacing=200, n_legs=2, grade="B500B"),
+        )
+        # High axial force -> large σ_cp -> uncracked principal-stress V_Rd,c that
+        # exceeds the crushing cap, so the cap must bind.
+        load = LoadCase(V_Ed=200.0, M_Ed=150.0, N_Ed=3000.0)
+        result = check.perform_shear_check(
+            load_case=load, use_uncracked_V_Rd_c=True, suppress_warnings=True,
+        )
+
+        b_w = result.details["b_w"]
+        d = result.details["d"]
+        sigma_cp = result.details["sigma_cp"]
+        nu = find_nu_factor(f_ck=check._concrete_uls.f_ck)
+        cap_kN = 0.5 * b_w * d * nu * check._f_cd_design / 1000.0
+
+        reported = result.details["V_Rd_c_uncracked"]
+        raw = check.calculate_V_Rd_c_uncracked(sigma_cp)  # uncapped principal-stress value
+
+        assert raw > cap_kN, "scenario must make the cap bind for the test to be meaningful"
+        assert reported == pytest.approx(cap_kN, rel=1e-6)
+
+
 class TestCircularRhoLFromStrains:
     """Tests for TestCircularRhoLFromStrains."""
     def test_rho_l_uses_tension_side_not_centroid_side(self):

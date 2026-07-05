@@ -566,6 +566,34 @@ class TestTensionCotThetaLimit:
             set_ndp_context(code=old_code, country=old_country)
 
 
+class TestUncrackedVRdcRotatedFirstMoment:
+    """find_V_Rd_c_uncracked must take the first moment S about the SAME axis as
+    I_eff. For a non-square section the 90° (minor-axis) result must use the
+    vertical-axis first moment, not the horizontal one."""
+
+    def test_90deg_uses_vertical_axis_first_moment(self):
+        import math
+
+        section = create_rectangular_section(width=300, height=500)  # non-square
+        check = ShearCheck(section=section, concrete=ConcreteMaterial(grade="C30/37"))
+        sigma_cp, b_w = 2.0, 200.0
+
+        v0 = check.find_V_Rd_c_uncracked(sigma_cp=sigma_cp, b_w=b_w, shear_angle_deg=0.0)
+        v90 = check.find_V_Rd_c_uncracked(sigma_cp=sigma_cp, b_w=b_w, shear_angle_deg=90.0)
+
+        # Independent reference for 90°: I_yy with the vertical-axis first moment of
+        # the right half of the 300-wide rectangle (A=150*500, centroid x=225, cx=150).
+        _, I_yy, _ = section.get_second_moment_area()
+        cx, _cy = section.get_centroid()
+        S_y = (150.0 * 500.0) * (225.0 - cx)
+        f_ctd = check.f_ctd_design
+        v90_ref = (I_yy * b_w / S_y) * math.sqrt(f_ctd**2 + sigma_cp * f_ctd) / 1000.0
+
+        assert v90 == pytest.approx(v90_ref, rel=1e-3)
+        # For a non-square section the minor-axis result genuinely differs from 0°.
+        assert v90 != pytest.approx(v0, rel=1e-2)
+
+
 class TestRequiredReinforcementMz:
     """get_required_shear_reinforcement must not silently ignore Mz_Ed. With a
     non-biaxial diagram it now raises clearly instead of using a My-only state."""
