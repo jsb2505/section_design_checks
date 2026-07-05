@@ -2013,6 +2013,7 @@ class ShearCheck(BaseCodeCheck):
         N_Ed: float,
         cot_theta: float = 2.5,
         f_ywd: Optional[float] = None,
+        Mz_Ed: float = 0.0,
     ) -> float:
         """
         Calculate required A_sw/s for given shear force.
@@ -2023,6 +2024,9 @@ class ShearCheck(BaseCodeCheck):
             N_Ed: Design axial force in kN
             cot_theta: Cotangent of strut angle
             f_ywd: Design yield strength (uses rebar f_yd if None)
+            Mz_Ed: Design minor axis moment in kN·m. When non-zero the effective
+                depth, reinforcement ratio and lever arm are derived from the
+                biaxial (skewed neutral-axis) strain state rather than a My-only one.
 
         Returns:
             Required A_sw/s in mm²/mm
@@ -2031,16 +2035,45 @@ class ShearCheck(BaseCodeCheck):
         # Negative shear from FEA sign conventions should not give negative reinforcement
         V_Ed = abs(V_Ed)
 
-        d = self.find_effective_depth(My_Ed, N_Ed)
-        sigma_cp = self._find_sigma_cp(N_Ed)
-        rho_l = self._find_rho_l(My_Ed, N_Ed, d)
+        # For biaxial loads, solve the strain state including Mz so d, rho_l and z
+        # reflect the actual skewed neutral axis. For pure-My loads the strain args
+        # stay None and the path is unchanged (the helpers solve internally).
+        eps_top: Optional[float] = None
+        eps_bottom: Optional[float] = None
+        strain_state_local: Optional["StrainState"] = None
+        if abs(Mz_Ed) > 1e-9:
+            diagram = self._get_diagram()
+            if not hasattr(diagram, "get_capacity_biaxial"):
+                raise ValueError(
+                    f"Mz_Ed={Mz_Ed:.1f} kN·m requires a biaxial-capable diagram; "
+                    "set free_neutral_axis=True on the check."
+                )
+            eps_top, eps_bottom = diagram.find_strains_for_MN(My_Ed, N_Ed, Mz_target=Mz_Ed)
+            try:
+                strain_state_local = diagram.find_strain_state_for_MN(
+                    My_target=My_Ed, N_target=N_Ed, Mz_target=Mz_Ed,
+                )
+            except Exception:
+                strain_state_local = None
+
+        if strain_state_local is not None or eps_top is not None:
+            d = self.find_effective_depth(My_Ed, N_Ed, eps_top, eps_bottom, strain_state=strain_state_local)
+            sigma_cp = self._find_sigma_cp(N_Ed)
+            rho_l = self._find_rho_l(My_Ed, N_Ed, d, eps_top, eps_bottom, strain_state=strain_state_local)
+        else:
+            d = self.find_effective_depth(My_Ed, N_Ed)
+            sigma_cp = self._find_sigma_cp(N_Ed)
+            rho_l = self._find_rho_l(My_Ed, N_Ed, d)
 
         V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
 
         if V_Ed <= V_Rd_c:
             return 0.0
 
-        z_ec2, _ = self.find_lever_arm(My_Ed, N_Ed, d)
+        if strain_state_local is not None or eps_top is not None:
+            z_ec2, _ = self.find_lever_arm(My_Ed, N_Ed, d, eps_top, eps_bottom, strain_state=strain_state_local)
+        else:
+            z_ec2, _ = self.find_lever_arm(My_Ed, N_Ed, d)
 
         if f_ywd is None and self.shear_reinforcement is not None:
             f_ywd = self.f_ywd_design

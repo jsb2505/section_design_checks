@@ -565,3 +565,25 @@ class TestTensionCotThetaLimit:
         finally:
             set_ndp_context(code=old_code, country=old_country)
 
+
+class TestRequiredReinforcementMz:
+    """get_required_shear_reinforcement must not silently ignore Mz_Ed. With a
+    non-biaxial diagram it now raises clearly instead of using a My-only state."""
+
+    def test_mz_without_biaxial_diagram_raises(self):
+        check = ShearCheck(section=create_test_section(), concrete=ConcreteMaterial(grade="C30/37"))
+        with pytest.raises(ValueError, match="biaxial"):
+            check.get_required_shear_reinforcement(
+                V_Ed=200.0, My_Ed=50.0, N_Ed=0.0, Mz_Ed=30.0,
+            )
+
+    def test_uniaxial_unaffected(self):
+        # Mz_Ed=0 keeps the original behaviour (no exception, returns a value).
+        check = ShearCheck(
+            section=create_test_section(),
+            concrete=ConcreteMaterial(grade="C30/37"),
+            shear_reinforcement=ShearRebar(grade="B500B", diameter=10, link_spacing=200, n_legs=2),
+        )
+        req = check.get_required_shear_reinforcement(V_Ed=200.0, My_Ed=50.0, N_Ed=0.0)
+        assert req >= 0.0
+
