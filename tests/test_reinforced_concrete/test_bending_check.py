@@ -471,28 +471,38 @@ class TestPureAxialAndBending:
 
 
 class TestOutsideDiagramDomain:
-    """Tests for load points outside the interaction diagram."""
+    """Tests for load points outside the interaction diagram (but with valid utilization)."""
 
     def test_excessive_axial_compression(self, test_beam, concrete_c30):
-        """Test excessive axial compression is detected."""
+        """Test excessive axial compression returns meaningful utilization."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        # Very high axial - should be outside diagram
+        # Very high axial - well beyond capacity but still calculable
         result = check.perform_check(M_Ed=10.0, N_Ed=50000.0)
 
         assert result.status == CheckStatus.FAIL
-        assert result.utilization == float("inf")
-        assert "outside" in result.message.lower() or "no capacity" in result.message.lower()
+        # Now returns actual utilization (not inf) - load is ~16x beyond capacity
+        assert result.utilization > 1.0
+        assert result.utilization != float("inf")
+        assert "exceeded" in result.message.lower()
+        # Capacity components should be populated
+        assert result.capacity_components is not None
+        assert result.details["N_Rd"] is not None
+        assert result.details["M_Rd"] is not None
 
     def test_excessive_tension(self, test_beam, concrete_c30):
-        """Test excessive tension is detected."""
+        """Test excessive tension returns meaningful utilization."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        # Very high tension - should be outside diagram
+        # Very high tension - well beyond capacity but still calculable
         result = check.perform_check(M_Ed=10.0, N_Ed=-10000.0)
 
         assert result.status == CheckStatus.FAIL
-        assert result.utilization == float("inf")
+        # Now returns actual utilization (not inf) - load is ~16x beyond capacity
+        assert result.utilization > 1.0
+        assert result.utilization != float("inf")
+        # Capacity components should be populated
+        assert result.capacity_components is not None
 
 
 class TestCheckResultDetails:
@@ -578,67 +588,50 @@ class TestTensionShiftResultDataclass:
     """Tests for the internal _TensionShiftResult dataclass."""
 
     def test_tension_shift_result_details_dict_disabled(self, test_beam, concrete_c30):
-        """Test details_dict() when tension shift is disabled."""
+        """Test details_dict() when tension shift is disabled (no M_cap provided)."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        # Access internal method for testing
-        shift_result = check._apply_tension_shift_if_enabled(
-            M_Ed_original=100.0,
-            N_Ed=500.0,
-            V_Ed=None,
-            M_cap=None,
-            shear_reinforcement=None,
-            enabled=False,
-        )
+        # When tension shift is not applied, _check_single_case creates a disabled result
+        # We can test this by checking the result details from perform_check without M_cap
+        result = check.perform_check(M_Ed=100.0, N_Ed=500.0)  # No M_cap, no tension shift
 
-        assert shift_result.applied is False
-        assert shift_result.M_design == 100.0
-
-        details = shift_result.details_dict()
-        assert details["tension_shift_applied"] is False
-        assert details["M_add"] is None
-        assert details["V_Ed"] is None
-        assert details["cot_theta"] is None
+        assert result.details["tension_shift_applied"] is False
+        assert result.details["M_add"] is None
+        assert result.details["V_Ed"] is None
+        assert result.details["cot_theta"] is None
+        assert result.details["M_Ed_design"] == 100.0  # Unchanged
 
     def test_tension_shift_result_details_dict_enabled(self, test_beam, concrete_c30):
-        """Test details_dict() when tension shift is enabled."""
+        """Test details when tension shift is enabled via diagram.apply_tension_shift."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
         shear_rebar = ShearRebar(grade="B500B", diameter=10, spacing=200, n_legs=2)
 
-        shift_result = check._apply_tension_shift_if_enabled(
-            M_Ed_original=100.0,
+        # Use the diagram's apply_tension_shift method
+        shift_result = check._diagram.apply_tension_shift(
+            M_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=300.0,
             shear_reinforcement=shear_rebar,
-            enabled=True,
         )
 
-        assert shift_result.applied is True
         assert shift_result.M_design > 100.0  # Increased by shift
-
-        details = shift_result.details_dict()
-        assert details["tension_shift_applied"] is True
-        assert details["M_add"] is not None
-        assert details["V_Ed"] == 150.0
-        assert details["M_cap"] == 300.0
-        assert details["cot_theta"] is not None
-        assert 1.0 <= details["cot_theta"] <= 2.5
-        assert details["shift_distance_a_l_mm"] is not None
-        assert details["z_lever_arm_mm"] is not None
-        assert details["shear_reinforcement_provided"] is True
+        assert shift_result.M_add is not None
+        assert shift_result.cot_theta is not None
+        assert 1.0 <= shift_result.cot_theta <= 2.5
+        assert shift_result.shift_distance_a_l_mm is not None
+        assert shift_result.z_mm is not None
 
     def test_tension_shift_without_rebar_uses_d(self, test_beam, concrete_c30):
         """Test that shift distance equals d when no shear reinforcement."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
-        shift_result = check._apply_tension_shift_if_enabled(
-            M_Ed_original=100.0,
+        shift_result = check._diagram.apply_tension_shift(
+            M_Ed=100.0,
             N_Ed=500.0,
             V_Ed=150.0,
             M_cap=300.0,
             shear_reinforcement=None,  # No shear rebar
-            enabled=True,
         )
 
         # a_l should equal d (effective depth)
@@ -646,7 +639,6 @@ class TestTensionShiftResultDataclass:
         assert shift_result.shift_distance_a_l_mm is not None
         assert 400 < shift_result.shift_distance_a_l_mm < 460  # Reasonable range for d
         assert shift_result.cot_theta is None  # Not calculated without shear rebar
-        assert shift_result.shear_reinforcement_provided is False
 
 
 class TestConcreteAndSteelModels:

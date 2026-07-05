@@ -20,6 +20,14 @@ from materials.reinforced_concrete.materials.reinforcing_steel import Reinforcin
 
 
 class SteelModelType(StrEnum):
+    '''
+    Reinforcing steel stress-strain relationship branch types
+    as per Figure 3.8 EC2.
+
+    Attributes:
+        INCLINED: Strain-hardening, the stress increases with strain post-yield.
+        HORIZONTAL: Steel is perfectly-plastic post-yield.
+    '''
     INCLINED = "inclined"
     HORIZONTAL = "horizontal"
 

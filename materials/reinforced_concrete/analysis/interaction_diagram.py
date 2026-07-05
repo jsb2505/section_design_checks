@@ -41,7 +41,11 @@ Notes on confinement:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, NamedTuple, Sequence, Literal
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, NamedTuple, Sequence, Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
+    from materials.reinforced_concrete.materials.rebar import ShearRebar
 import warnings
 import csv
 import json
@@ -211,8 +215,18 @@ class MNInteractionDiagram:
             for g in section.rebar_groups
         ]
 
+        # Check if concrete model already has EC2 3.1.9 confinement
+        _model_has_ec2_confinement = getattr(self.concrete_model, 'is_ec2_confined', False)
+
         # Confined concrete parameter checks
         if self.confined_concrete:
+            # Prevent double confinement: Mander + EC2 3.1.9
+            if _model_has_ec2_confinement:
+                raise ValueError(
+                    "Cannot use confined_concrete=True (Mander model) when the concrete stress-strain "
+                    "model already has EC2 §3.1.9 confinement (sigma_2 > 0). Use one or the other."
+                )
+
             if self.confinement_rho_s is None:
                 raise ValueError("confinement_rho_s must be provided when confined_concrete=True")
             if not (0.0 < self.confinement_rho_s <= 0.1):
@@ -1771,8 +1785,29 @@ class MNInteractionDiagram:
         """
         Plot M-N interaction diagram with optional load points using Plotly.
 
-        Thin wrapper that delegates to a viewer class in a separate module
-        to keep MNInteractionDiagram focused on analysis rather than plotting.
+        Creates an interactive plot with:
+        - M-N interaction curve boundary
+        - Optional load points with color-coded utilization
+        - Optional vector projection rays from origin to boundary
+        - Interactive hover tooltips with metadata
+
+        Args:
+            load_points: List of load case dictionaries with format:
+                {
+                    "N_Ed": float,      # Axial force (kN)
+                    "M_Ed": float,      # Moment (kN·m)
+                    "name": str,        # Load case name (optional)
+                }
+            show_vectors: If True, show vector projection rays from origin through
+                            load points to capacity boundary
+            show_metadata: If True, show metadata in hover tooltips
+            n_points: Number of points to generate M-N curve
+            save_path: If provided, save plot to this file path (HTML format)
+            show: If True, display plot (fig.show())
+            title: Custom plot title (optional)
+
+        Returns:
+            Plotly Figure object
         """
         from materials.reinforced_concrete.analysis.mn_diagram_viewer import MNDiagramViewer
 
@@ -1819,6 +1854,173 @@ class MNInteractionDiagram:
             section_render=section_render,
         )
 
+
+    def _compute_z_d_for_moment(self, *, M_Ed: float, N_Ed: float) -> tuple[float, float]:
+        """
+        Compute lever arm z and effective depth d for a given moment value.
+
+        Args:
+            M_Ed: Moment for strain analysis (kN·m)
+            N_Ed: Axial force (kN, positive = compression)
+
+        Returns:
+            (z, d) in mm, where z is capped to 0.9d per EC2
+        """
+        eps_top, eps_bottom = None, None
+        if abs(M_Ed) > 1e-6:
+            eps_top, eps_bottom = self.find_strains_for_MN(M_Ed, N_Ed)
+
+        d = self.get_effective_depth(
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+        )
+        z, _ = self.get_lever_arm(
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            d=d,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+            prefer_rigorous=False,
+            cap_to_09d=True,
+            warn_on_fallback=False,
+        )
+        return z, d
+
+    def apply_tension_shift(
+        self,
+        *,
+        M_Ed: float,
+        V_Ed: float,
+        N_Ed: float = 0.0,
+        M_cap: Optional[float] = None,
+        shear_reinforcement: Optional["ShearRebar"] = None,
+        iterate_z: bool = False,
+    ) -> "TensionShiftResult":
+        """
+        Apply EC2 §9.2.1.3 tension shift rule to a bending moment.
+
+        This method computes z and d from the diagram's strain analysis and applies
+        the tension shift rule. Use this when you want to shift load cases before
+        plotting with `plot_stress_strain` or checking capacity.
+
+        Args:
+            M_Ed: Design bending moment (kN·m)
+            V_Ed: Design shear force (kN)
+            N_Ed: Design axial force (kN, positive = compression). Default 0.
+            M_cap: Optional moment capacity cap (kN·m). Limits |M_design| ≤ |M_cap|.
+            shear_reinforcement: Optional ShearRebar object. If provided, calculates
+                                cot(θ) using the variable strut angle method.
+                                If not provided, uses a_l = d (no shear reinforcement).
+            iterate_z: If True, iteratively recalculate z based on M_design until
+                      convergence (0.5% tolerance, max 5 iterations). Only affects
+                      cases with shear reinforcement where a_l depends on z.
+
+        Returns:
+            TensionShiftResult with shifted moment and calculation details.
+
+        Example:
+            >>> diagram = MNInteractionDiagram(section, concrete)
+            >>> # Shift moment for plotting
+            >>> result = diagram.apply_tension_shift(M_Ed=100, V_Ed=50, N_Ed=200)
+            >>> diagram.plot_stress_strain(M_Ed=result.M_design, N_Ed=200)
+        """
+        # Local imports to avoid circular dependencies
+        from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
+            calculate_tension_shift,
+            calculate_section_breadth,
+        )
+
+        M_Ed_original = float(M_Ed)
+        N_Ed = float(N_Ed)
+
+        # Compute initial z and d
+        z, d = self._compute_z_d_for_moment(M_Ed=M_Ed_original, N_Ed=N_Ed)
+
+        # Compute parameters needed for shear reinforcement case
+        b_w: Optional[float] = None
+        f_cd: Optional[float] = None
+        f_ck: Optional[float] = None
+        sigma_cp: float = 0.0
+
+        if shear_reinforcement is not None:
+            from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
+                sigma_cp_from_N_and_area,
+                cap_sigma_cp_upper,
+            )
+            b_w = calculate_section_breadth(section=self.section)
+            f_cd = self.concrete.f_cd
+            f_ck = self.concrete.f_ck
+            A_transformed = self.section.get_transformed_area(self.concrete.E_cm)
+            sigma_cp_uncapped = sigma_cp_from_N_and_area(N_Ed=N_Ed, A_mm2=A_transformed)
+            sigma_cp = cap_sigma_cp_upper(sigma_cp=sigma_cp_uncapped, f_cd=f_cd)
+
+        # Initial calculation
+        shift_result = calculate_tension_shift(
+            M_Ed=M_Ed_original,
+            V_Ed=V_Ed,
+            z_mm=z,
+            d_mm=d,
+            M_cap=M_cap,
+            b_w_mm=b_w,
+            f_cd=f_cd,
+            f_ck=f_ck,
+            sigma_cp=sigma_cp,
+            shear_reinforcement=shear_reinforcement,
+        )
+
+        # Iterate z if requested and shear reinforcement is provided
+        # (without shear reinforcement, a_l = d which doesn't depend on z)
+        if iterate_z and shear_reinforcement is not None:
+            MAX_ITERATIONS = 5
+            CONVERGENCE_TOL = 0.005  # 0.5%
+
+            # TODO check why z_original is created but not used? Artifact from old logic before refactoring?
+            z_original = z
+
+            for iteration in range(MAX_ITERATIONS):
+                # Recalculate z for the current M_design
+                z_new, d_new = self._compute_z_d_for_moment(M_Ed=shift_result.M_design, N_Ed=N_Ed)
+
+                # Check convergence
+                if z > 1e-6:
+                    rel_change = abs(z_new - z) / z
+                    if rel_change < CONVERGENCE_TOL:
+                        # Converged - update final values
+                        z = z_new
+                        d = d_new
+                        shift_result = calculate_tension_shift(
+                            M_Ed=M_Ed_original,
+                            V_Ed=V_Ed,
+                            z_mm=z,
+                            d_mm=d,
+                            M_cap=M_cap,
+                            b_w_mm=b_w,
+                            f_cd=f_cd,
+                            f_ck=f_ck,
+                            sigma_cp=sigma_cp,
+                            shear_reinforcement=shear_reinforcement,
+                        )
+                        break
+
+                # Update for next iteration
+                z = z_new
+                d = d_new
+                shift_result = calculate_tension_shift(
+                    M_Ed=M_Ed_original,
+                    V_Ed=V_Ed,
+                    z_mm=z,
+                    d_mm=d,
+                    M_cap=M_cap,
+                    b_w_mm=b_w,
+                    f_cd=f_cd,
+                    f_ck=f_ck,
+                    sigma_cp=sigma_cp,
+                    shear_reinforcement=shear_reinforcement,
+                )
+
+        return shift_result
 
     def __repr__(self) -> str:
         return (

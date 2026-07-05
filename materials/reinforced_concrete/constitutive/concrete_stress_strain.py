@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import cached_property
+from typing import Optional
 
 import numpy as np
 import numpy.typing as npt
@@ -33,6 +34,15 @@ from materials.reinforced_concrete.materials.concrete import ConcreteMaterial
 
 
 class ConcreteModelType(StrEnum):
+    '''
+    Concrete stress-strain relationships types
+    as per Figure 3.2, 3.3 and 3.4  EC2.
+
+    Attributes:
+        SCHEMATIC: for structural analysis
+        PARABOLA_RECTANGLE: for design of cross-sections
+        BILINEAR: for (simplified) design of cross-sections
+    '''
     SCHEMATIC = "schematic"
     PARABOLA_RECTANGLE = "parabola-rectangle"
     BILINEAR = "bilinear"
@@ -227,8 +237,8 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
 
     Formulation:
         σ_c = f_c · [1 - (1 - ε/ε_c2)^n]  for 0 ≤ ε ≤ ε_c2
-        σ_c = f_c                          for ε_c2 < ε ≤ ε_cu2
-        σ_c = 0                             for ε > ε_cu2
+        σ_c = f_c                         for ε_c2 < ε ≤ ε_cu2
+        σ_c = 0                           for ε > ε_cu2
 
     The strength f_c can be (mutually exclusive):
         - f_cd (design strength) when use_characteristic=False and use_accidental=False (default)
@@ -236,6 +246,15 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         - f_cd_accidental (accidental design strength) when use_accidental=True
 
     Note: use_characteristic and use_accidental cannot both be True.
+
+    EC2 §3.1.9 Confinement:
+        When sigma_2 > 0 is provided, confined concrete properties are used per EC2 §3.1.9:
+        - fck,c = fck(1.000 + 5.0·σ₂/fck)  for σ₂ ≤ 0.05·fck  (Eq. 3.24)
+        - fck,c = fck(1.125 + 2.5·σ₂/fck)  for σ₂ > 0.05·fck  (Eq. 3.25)
+        - εc2,c = εc2·(fck,c/fck)²         (Eq. 3.26)
+        - εcu2,c = εcu2 + 0.2·σ₂/fck       (Eq. 3.27)
+
+        where σ₂ is the effective lateral compressive stress at ULS due to confinement.
     """
 
     concrete: ConcreteMaterial = Field(..., description="Concrete material")
@@ -250,6 +269,13 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         description="Use f_cd_accidental instead of f_cd (mutually exclusive with use_characteristic)"
     )
 
+    sigma_2: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="EC2 §3.1.9: Effective lateral compressive stress (MPa) for confinement. "
+                    "When provided, confined concrete properties are used."
+    )
+
     name: str = Field(default="EC2 Parabola-Rectangle", description="Model name")
 
     ultimate_strain_tol: float = Field(
@@ -258,15 +284,103 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         description="Tolerance for ultimate strain clipping (dimensionless strain).",
     )
 
+    @property
+    def is_ec2_confined(self) -> bool:
+        """True if EC2 §3.1.9 confinement is active (sigma_2 > 0)."""
+        return self.sigma_2 is not None and self.sigma_2 > 0.0
+
+    @cached_property
+    def f_ck_c(self) -> float:
+        """
+        Confined characteristic strength per EC2 §3.1.9.
+
+        fck,c = fck(1.000 + 5.0·σ₂/fck)  for σ₂ ≤ 0.05·fck
+        fck,c = fck(1.125 + 2.5·σ₂/fck)  for σ₂ > 0.05·fck
+
+        Returns unconfined f_ck if sigma_2 is None or zero.
+        """
+        f_ck = float(self.concrete.f_ck)
+        if not self.is_ec2_confined:
+            return f_ck
+
+        sigma_2 = float(self.sigma_2)  # type: ignore[arg-type]
+        ratio = sigma_2 / f_ck
+
+        if sigma_2 <= 0.05 * f_ck:
+            return f_ck * (1.000 + 5.0 * ratio)
+        else:
+            return f_ck * (1.125 + 2.5 * ratio)
+
+    @cached_property
+    def epsilon_c2_c(self) -> float:
+        """
+        Confined strain at peak stress per EC2 §3.1.9 Eq. 3.26.
+
+        εc2,c = εc2·(fck,c/fck)²
+
+        Returns unconfined ε_c2 if sigma_2 is None or zero.
+        """
+        eps_c2 = float(self.concrete.epsilon_c2)
+        if not self.is_ec2_confined:
+            return eps_c2
+
+        f_ck = float(self.concrete.f_ck)
+        strength_ratio = self.f_ck_c / f_ck
+        return eps_c2 * (strength_ratio ** 2)
+
+    @cached_property
+    def epsilon_cu2_c(self) -> float:
+        """
+        Confined ultimate strain per EC2 §3.1.9 Eq. 3.27.
+
+        εcu2,c = εcu2 + 0.2·σ₂/fck
+
+        Returns unconfined ε_cu2 if sigma_2 is None or zero.
+        """
+        eps_cu2 = float(self.concrete.epsilon_cu2)
+        if not self.is_ec2_confined:
+            return eps_cu2
+
+        f_ck = float(self.concrete.f_ck)
+        sigma_2 = float(self.sigma_2)  # type: ignore[arg-type]
+        return eps_cu2 + 0.2 * sigma_2 / f_ck
 
     @cached_property
     def f_c(self) -> float:
-        """Design, characteristic, or accidental strength depending on flags."""
+        """
+        Design, characteristic, or accidental strength depending on flags.
+
+        When EC2 §3.1.9 confinement is active (sigma_2 > 0), the confined
+        characteristic strength f_ck_c is used as the base, then:
+        - If use_characteristic=True: returns f_ck_c (no reduction)
+        - If use_accidental=True: returns f_ck_c * alpha_cc / gamma_c_accidental
+        - Otherwise (default): returns f_ck_c * alpha_cc / gamma_c
+        """
+        if self.is_ec2_confined:
+            if self.use_characteristic:
+                return self.f_ck_c
+            if self.use_accidental:
+                accidental_factor = float(self.concrete.alpha_cc) / float(self.concrete.gamma_c_accidental)
+                return self.f_ck_c * accidental_factor
+            # Default: design strength
+            design_factor = float(self.concrete.alpha_cc) / float(self.concrete.gamma_c)
+            return self.f_ck_c * design_factor
+
         if self.use_characteristic:
             return self.concrete.f_ck
         if self.use_accidental:
             return self.concrete.f_cd_accidental
         return self.concrete.f_cd
+
+    @property
+    def epsilon_c2_eff(self) -> float:
+        """Effective strain at peak (confined or unconfined)."""
+        return self.epsilon_c2_c if self.is_ec2_confined else float(self.concrete.epsilon_c2)
+
+    @property
+    def epsilon_cu2_eff(self) -> float:
+        """Effective ultimate strain (confined or unconfined)."""
+        return self.epsilon_cu2_c if self.is_ec2_confined else float(self.concrete.epsilon_cu2)
 
     @model_validator(mode="after")
     def validate_parameters(self) -> "ConcreteStressStrainParabolaRectangle":
@@ -293,7 +407,8 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         if strain <= 0.0:
             return 0.0
 
-        eps_cu = float(self.concrete.epsilon_cu2)
+        eps_cu = self.epsilon_cu2_eff
+        eps_c2 = self.epsilon_c2_eff
         tol = float(self.ultimate_strain_tol)
 
         if strain > eps_cu + tol:
@@ -302,11 +417,11 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
             strain = eps_cu
 
         # Rectangular portion
-        if strain >= self.concrete.epsilon_c2:
+        if strain >= eps_c2:
             return float(self.f_c)
 
         # Parabolic portion
-        ratio = 1.0 - strain / self.concrete.epsilon_c2
+        ratio = 1.0 - strain / eps_c2
         return float(self.f_c * (1.0 - ratio ** self.concrete.n))
 
 
@@ -327,7 +442,8 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         if not np.any(comp):
             return stresses
 
-        eps_cu = float(self.concrete.epsilon_cu2)
+        eps_cu = self.epsilon_cu2_eff
+        eps_c2 = self.epsilon_c2_eff
 
         # Clip using real part, but preserve complex
         strains_real_clipped, killed = _apply_ultimate_tolerance_clip(
@@ -346,21 +462,21 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
             return stresses
 
         # Parabolic region: 0 < ε <= ε_c2 (use real for comparison)
-        parabolic = valid & (strains_real_clipped <= self.concrete.epsilon_c2)
+        parabolic = valid & (strains_real_clipped <= eps_c2)
         if np.any(parabolic):
-            ratio = 1.0 - strains_clipped[parabolic] / self.concrete.epsilon_c2
+            ratio = 1.0 - strains_clipped[parabolic] / eps_c2
             stresses[parabolic] = self.f_c * (1.0 - ratio ** self.concrete.n)
 
         # Rectangular region: ε_c2 < ε <= ε_cu2 (use real for comparison)
-        rectangular = valid & (strains_real_clipped > self.concrete.epsilon_c2)
+        rectangular = valid & (strains_real_clipped > eps_c2)
         stresses[rectangular] = self.f_c
 
         return stresses
 
 
     def get_ultimate_strain(self) -> float:
-        """Return ultimate strain."""
-        return float(self.concrete.epsilon_cu2)
+        """Return ultimate strain (confined or unconfined)."""
+        return self.epsilon_cu2_eff
 
 
     def get_yield_stress(self) -> float:
@@ -393,8 +509,8 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         if strain <= 0.0:
             return 0.0  # No tensile stiffness
 
-        eps_c2 = float(self.concrete.epsilon_c2)
-        eps_cu = float(self.concrete.epsilon_cu2)
+        eps_c2 = self.epsilon_c2_eff
+        eps_cu = self.epsilon_cu2_eff
 
         if strain > eps_cu:
             return 0.0  # Post-crushing: no stiffness
@@ -423,8 +539,7 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         strains = np.asarray(strains)
         E_t = np.zeros_like(strains, dtype=float)
 
-        eps_c2 = float(self.concrete.epsilon_c2)
-        eps_cu = float(self.concrete.epsilon_cu2)
+        eps_c2 = self.epsilon_c2_eff
         n = float(self.concrete.n)
 
         # Only parabolic region has non-zero gradient

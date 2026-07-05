@@ -4,9 +4,185 @@ Docstring for materials.reinforced_concrete.code_checks.ec2.shear_utils
 
 Utility functions for shear design checks according to Eurocode 2 (EC2).
 '''
-from math import sqrt, isfinite, radians
+from dataclasses import dataclass
+from math import sqrt, isfinite, radians, copysign
+from typing import Optional
+
 from materials.utils.helpers import cot
 from materials.reinforced_concrete.geometry import RCSection
+from materials.reinforced_concrete.materials import ShearRebar
+
+
+# ==============================================================================
+# Tension Shift Rule (EC2 §9.2.1.3)
+# ==============================================================================
+
+@dataclass(frozen=True)
+class TensionShiftResult:
+    """
+    Result of tension shift calculation (EC2 §9.2.1.3).
+
+    The tension shift rule accounts for the additional tensile force in
+    longitudinal reinforcement due to the truss model for shear. This shifts
+    the moment envelope by a_l towards the support.
+
+    Attributes:
+        M_design: The design moment after applying tension shift (kN·m).
+                  Sign matches M_Ed.
+        M_add: Additional moment magnitude from tension shift (kN·m), always >= 0.
+        shift_distance_a_l_mm: Shift distance a_l (mm).
+        cot_theta: Strut angle cotangent, if shear reinforcement was provided.
+        capped_by_M_cap: True if M_design was capped by M_cap.
+        z_mm: Lever arm used in calculation (mm).
+        d_mm: Effective depth used in calculation (mm).
+    """
+    M_design: float
+    M_add: float
+    shift_distance_a_l_mm: float
+    cot_theta: Optional[float]
+    capped_by_M_cap: bool
+    z_mm: float
+    d_mm: float
+
+
+def calculate_tension_shift(
+    *,
+    M_Ed: float,
+    V_Ed: float,
+    z_mm: float,
+    d_mm: float,
+    M_cap: Optional[float] = None,
+    b_w_mm: Optional[float] = None,
+    f_cd: Optional[float] = None,
+    f_ck: Optional[float] = None,
+    sigma_cp: float = 0.0,
+    shear_reinforcement: Optional[ShearRebar] = None,
+) -> TensionShiftResult:
+    """
+    Apply EC2 §9.2.1.3 tension shift rule to a bending moment.
+
+    The tension shift accounts for the additional tensile force in longitudinal
+    reinforcement due to shear (truss analogy). The moment envelope is effectively
+    shifted towards the support by distance a_l.
+
+    With shear reinforcement (variable strut angle method):
+        - cot(θ) is calculated from V_Ed using the V_Rd,max formula
+        - a_l = 0.5 · z · cot(θ) for vertical links (EC2 Eq. 9.2)
+
+    Without shear reinforcement:
+        - a_l = d (EC2 §9.2.1.3(2))
+
+    The shifted moment is: M_design = M_Ed + sign(M_Ed) * M_add
+    where M_add = |V_Ed| * a_l / 1000 (converting a_l from mm to m)
+
+    If M_cap is provided, the result is capped: |M_design| ≤ |M_cap|
+
+    Args:
+        M_Ed: Design bending moment (kN·m)
+        V_Ed: Design shear force (kN)
+        z_mm: Lever arm (mm). Typically 0.9d or from strain analysis.
+        d_mm: Effective depth (mm). Used as a_l when no shear reinforcement.
+        M_cap: Optional moment capacity cap (kN·m). Limits |M_design| ≤ |M_cap|.
+        b_w_mm: Web width (mm). Required if shear_reinforcement is provided.
+        f_cd: Design concrete strength (MPa). Required if shear_reinforcement is provided.
+        f_ck: Characteristic concrete strength (MPa). Required if shear_reinforcement is provided.
+        sigma_cp: Axial stress in concrete (MPa), for α_cw calculation. Default 0.
+        shear_reinforcement: Optional ShearRebar object. If provided, calculates
+                            cot(θ) from V_Ed using the variable strut angle method.
+
+    Returns:
+        TensionShiftResult with shifted moment and calculation details.
+
+    Raises:
+        ValueError: If shear_reinforcement is provided but b_w_mm, f_cd, or f_ck is missing.
+
+    Example:
+        >>> # Without shear reinforcement (simple case)
+        >>> result = calculate_tension_shift(
+        ...     M_Ed=100.0, V_Ed=50.0, z_mm=450.0, d_mm=500.0
+        ... )
+        >>> print(f"M_design = {result.M_design:.1f} kN·m")  # M_Ed + V_Ed * d / 1000
+
+        >>> # With shear reinforcement
+        >>> from materials.reinforced_concrete.materials import ShearRebar, Rebar
+        >>> links = ShearRebar(rebar=Rebar(diameter=10), spacing=150, n_legs=2)
+        >>> result = calculate_tension_shift(
+        ...     M_Ed=100.0, V_Ed=150.0, z_mm=450.0, d_mm=500.0,
+        ...     b_w_mm=300.0, f_cd=20.0, f_ck=30.0,
+        ...     shear_reinforcement=links
+        ... )
+    """
+    # Validate inputs for shear reinforcement case
+    if shear_reinforcement is not None:
+        missing = []
+        if b_w_mm is None:
+            missing.append("b_w_mm")
+        if f_cd is None:
+            missing.append("f_cd")
+        if f_ck is None:
+            missing.append("f_ck")
+        if missing:
+            raise ValueError(
+                f"When shear_reinforcement is provided, the following parameters "
+                f"are required: {', '.join(missing)}"
+            )
+
+    abs_M_Ed = abs(float(M_Ed))
+    abs_V_Ed = abs(float(V_Ed))
+    z = float(z_mm)
+    d = float(d_mm)
+
+    # Calculate shift distance a_l and cot(θ)
+    cot_theta: Optional[float] = None
+
+    if shear_reinforcement is not None:
+        # Type narrowing: validation above ensures these are not None
+        assert f_cd is not None
+        assert f_ck is not None
+        assert b_w_mm is not None
+
+        # Variable strut angle method (EC2 §6.2.3)
+        # K = α_cw · b_w · z · ν · f_cd
+        alpha_cw = find_alpha_cw(f_cd=f_cd, sigma_cp=sigma_cp)
+        nu = find_nu_factor(f_ck=f_ck)
+        K = alpha_cw * b_w_mm * z * nu * f_cd  # in N
+
+        cot_theta = find_cot_theta_for_V_Ed(
+            V_Ed=V_Ed,
+            K=K,
+            link_angle_degrees=shear_reinforcement.angle,
+        )
+        a_l = 0.5 * z * cot_theta
+    else:
+        # No shear reinforcement: a_l = d (EC2 §9.2.1.3(2))
+        a_l = d
+
+    # Calculate additional moment
+    M_add = abs_V_Ed * (a_l / 1000.0)  # Convert a_l from mm to m
+
+    # Calculate shifted moment magnitude
+    abs_M_design = abs_M_Ed + M_add
+
+    # Apply M_cap if provided
+    capped = False
+    if M_cap is not None:
+        abs_M_cap = abs(float(M_cap))
+        if abs_M_design > abs_M_cap:
+            abs_M_design = abs_M_cap
+            capped = True
+
+    # Restore sign of original moment
+    M_design = copysign(abs_M_design, float(M_Ed))
+
+    return TensionShiftResult(
+        M_design=M_design,
+        M_add=M_add,
+        shift_distance_a_l_mm=a_l,
+        cot_theta=cot_theta,
+        capped_by_M_cap=capped,
+        z_mm=z,
+        d_mm=d,
+    )
 
 
 def calculate_section_breadth(section: RCSection) -> float:

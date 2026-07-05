@@ -2,6 +2,7 @@
 Base geometric abstractions for cross-sections.
 """
 
+import math
 from abc import ABC, abstractmethod
 from typing import Tuple
 from pydantic import BaseModel, Field, ConfigDict
@@ -68,6 +69,18 @@ class Point2D(BaseModel):
 
     x: float = Field(..., description="X coordinate (mm)")
     y: float = Field(..., description="Y coordinate (mm)")
+
+    def distance_to(self, other: "Point2D") -> float:
+        """Euclidean distance to another point."""
+        return math.hypot(self.x - other.x, self.y - other.y)
+
+    def __add__(self, other: "Point2D") -> "Point2D":
+        """Vector addition."""
+        return Point2D(x=self.x + other.x, y=self.y + other.y)
+
+    def __sub__(self, other: "Point2D") -> "Point2D":
+        """Vector subtraction."""
+        return Point2D(x=self.x - other.x, y=self.y - other.y)
 
     def __repr__(self) -> str:
         return f"Point2D(x={self.x:.2f}, y={self.y:.2f})"
