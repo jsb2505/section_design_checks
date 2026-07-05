@@ -1884,7 +1884,14 @@ class ShearViewer:
         if metric_key == "utilization":
             colorbar_title = "Utilization"
             zmin = 0.0
-            zmax = max(1.5, float(np.nanmax(Z)))
+            # Non-computable cells (V_Rd <= 0) are set to +inf above. np.nanmax
+            # does NOT ignore inf, so derive zmax from finite cells only and then
+            # render the inf cells at the saturated colour (mirrors the sibling
+            # contour methods).
+            finite_vals = Z[np.isfinite(Z)]
+            zmax = max(1.5, float(np.nanmax(finite_vals))) if finite_vals.size else 1.5
+            Z = np.array(Z, copy=True)
+            Z[np.isinf(Z)] = zmax
             colorscale = _utilization_colorscale(zmin=zmin, zmax=zmax)
             contour_trace = go.Contour(
                 x=cot_vals,

@@ -264,6 +264,18 @@ def _create_linear_group_from_line(
         positions = [Point2D(x=(x0 + x1) / 2.0, y=(y0 + y1) / 2.0)]
     else:
         spacing = float(bar_spacing)
+        # Guard: with explicit spacing the bars are centred on the line midpoint,
+        # so a requested span larger than the (already side-cover-trimmed) line
+        # would silently place bars beyond the face ends. Reject it here so every
+        # call site is protected (mirrors the multi-layer span check).
+        required_span = (n_bars - 1) * spacing
+        if required_span > line_length + _GEOM_TOL:
+            raise ValueError(
+                f"Cannot fit {n_bars} bars at {spacing:.1f} mm spacing on a line of "
+                f"length {line_length:.1f} mm: required span {required_span:.1f} mm exceeds "
+                f"the available length (bars would fall outside the face). "
+                f"Reduce n_bars or spacing."
+            )
         tx = dx / line_length
         ty = dy / line_length
         mx = 0.5 * (x0 + x1)

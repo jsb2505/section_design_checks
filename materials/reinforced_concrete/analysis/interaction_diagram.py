@@ -2863,6 +2863,7 @@ class MNInteractionDiagram:
                             shear_reinforcement=shear_reinforcement,
                             cot_theta_override=cot_theta_override,
                             use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
+                            cot_max_override=cot_max_override,
                         )
                         break
 
@@ -2882,6 +2883,7 @@ class MNInteractionDiagram:
                     shear_reinforcement=shear_reinforcement,
                     cot_theta_override=cot_theta_override,
                     use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
+                    cot_max_override=cot_max_override,
                 )
 
         return shift_result

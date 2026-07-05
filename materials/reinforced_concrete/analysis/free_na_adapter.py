@@ -605,9 +605,6 @@ class FreeNADiagramAdapter:
         cos_a = np.cos(angle_rad)
         sin_a = np.sin(angle_rad)
 
-        # The solved point
-        pt = self._biaxial.calculate_point_pivot(na_depth_sol, angle_sol)
-
         # Compute strains at top and bottom of the vertical centroidal axis
         # Using the same strain computation as calculate_point_pivot
         x_rel = np.array([0.0, 0.0])  # centroidal axis
