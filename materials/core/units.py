@@ -10,7 +10,7 @@ All calculations use SI base units internally:
 """
 
 from collections.abc import Mapping
-from enum import Enum
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Literal
 
@@ -42,7 +42,7 @@ __all__ = [
 ]
 
 
-class LengthUnit(str, Enum):
+class LengthUnit(StrEnum):
     """Length units."""
     MM = "mm"
     M = "m"
@@ -51,7 +51,7 @@ class LengthUnit(str, Enum):
     FT = "ft"
 
 
-class StressUnit(str, Enum):
+class StressUnit(StrEnum):
     """Stress/pressure units."""
     MPA = "MPa"
     PA = "Pa"
@@ -61,7 +61,7 @@ class StressUnit(str, Enum):
     KSI = "ksi"
 
 
-class ForceUnit(str, Enum):
+class ForceUnit(StrEnum):
     """Force units."""
     N = "N"
     KN = "kN"
@@ -70,7 +70,7 @@ class ForceUnit(str, Enum):
     KIPS = "kips"
 
 
-class MomentUnit(str, Enum):
+class MomentUnit(StrEnum):
     """Moment units."""
     NMM = "N·mm"
     NM = "N·m"

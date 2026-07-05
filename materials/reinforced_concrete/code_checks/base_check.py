@@ -5,13 +5,13 @@ Provides common interface for all design checks (bending, shear, etc.).
 """
 
 from abc import ABC, abstractmethod
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class CheckStatus(str, Enum):
+class CheckStatus(StrEnum):
     """Status of a design check."""
     PASS = "pass"
     FAIL = "fail"
