@@ -4,11 +4,13 @@ Tests for reinforced_concrete.materials.rebar module.
 
 import pytest
 import math
+import warnings
 from pydantic import ValidationError
 from materials.reinforced_concrete.materials import (
     Rebar,
     ShearRebar,
 )
+from materials.core.units import LENGTH_TO_MM, LengthUnit
 
 
 class TestRebar:
@@ -64,12 +66,34 @@ class TestRebar:
         with pytest.raises(ValidationError):
             Rebar(diameter=-10, grade="B500B")
 
+    def test_is_standard_no_warning(self):
+        """Test that standard diameters don't warn."""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            bar = Rebar(diameter=16, grade="B500B")
+            rebar_warnings = [x for x in w if "not in standard list" in str(x.message)]
+        assert bar.is_standard is True
+        assert len(rebar_warnings) == 0
+
+    def test_mass_per_metre(self, rebar_16):
+        """Test mass per unit length calculation."""
+        mm_per_m = LENGTH_TO_MM[LengthUnit.M]
+        expected = (rebar_16.area / mm_per_m ** 2) * rebar_16.density
+        assert rebar_16.mass_per_metre == pytest.approx(expected, rel=1e-12)
+
+    def test_perimeter_in_model_dump(self, rebar_16):
+        """Test that perimeter appears in serialisation (computed_field)."""
+        data = rebar_16.model_dump()
+        assert "perimeter" in data
+        assert data["perimeter"] == pytest.approx(math.pi * 16, rel=1e-6)
+
     def test_str_representation(self, rebar_16):
         """Test __str__ method."""
         s = str(rebar_16)
-        assert "16" in s
+        assert "ϕ16" in s
         assert "B500B" in s
-        assert "201" in s  # Area
+        assert "A=" in s
+        assert "mm²" in s
 
     def test_json_serialization(self, rebar_16):
         """Test JSON serialization."""
@@ -169,12 +193,45 @@ class TestShearRebar:
                 angle=120.0,
             )
 
+    def test_max_link_spacing_vertical(self, shear_links):
+        """Test EC2 §9.2.2(6) for vertical links: s_l,max = 0.75d."""
+        d = 500.0
+        # alpha=90 => cot(alpha)=0 => 0.75 d
+        assert shear_links.max_link_spacing(d) == pytest.approx(0.75 * d, rel=1e-12)
+
+    def test_max_link_spacing_inclined(self):
+        """Test EC2 §9.2.2(6) for inclined links: s_l,max = 0.75d(1+cot α)."""
+        links = ShearRebar(diameter=10, grade="B500B", spacing=200, n_legs=2, angle=45.0)
+        d = 500.0
+        # cot(45)=1 => 0.75 d (1+1) = 1.5 d
+        assert links.max_link_spacing(d) == pytest.approx(1.5 * d, rel=1e-12)
+
+    def test_max_link_spacing_invalid_depth(self, shear_links):
+        """Test that non-positive depth raises ValueError."""
+        with pytest.raises(ValueError):
+            shear_links.max_link_spacing(0.0)
+
+    def test_max_leg_spacing(self, shear_links):
+        """Test EC2 §9.2.2(8): s_t,max = min(600, 0.75d)."""
+        # d=500 => 0.75*500=375 < 600 => 375
+        assert shear_links.max_leg_spacing(500.0) == pytest.approx(375.0, rel=1e-12)
+
+    def test_max_leg_spacing_large_depth(self, shear_links):
+        """Test EC2 §9.2.2(8): cap at 600mm for large depths."""
+        # d=1000 => 0.75*1000=750 > 600 => 600
+        assert shear_links.max_leg_spacing(1000.0) == pytest.approx(600.0, rel=1e-12)
+
+    def test_a_sw_over_s_sin_alpha_in_model_dump(self, shear_links):
+        """Test that a_sw_over_s_sin_alpha appears in serialisation."""
+        data = shear_links.model_dump()
+        assert "a_sw_over_s_sin_alpha" in data
+
     def test_str_representation(self, shear_links):
         """Test __str__ method."""
         s = str(shear_links)
-        assert "10" in s  # diameter
+        assert "ϕ10" in s
         assert "200" in s  # spacing
-        assert "2" in s  # n_legs
+        assert "2 legs" in s
         assert "90" in s  # angle
 
 

@@ -1,4 +1,4 @@
-# utils.py
+# shear_utils.py
 '''
 Docstring for materials.reinforced_concrete.code_checks.ec2.shear_utils
 
@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from math import sqrt, isfinite, radians, copysign, tan
 from typing import Optional
 
-from shapely.geometry import LineString, MultiLineString, Point
+from shapely.geometry import MultiLineString, Point
 
 from materials.utils.helpers import cot
 from materials.reinforced_concrete.geometry import RCSection
@@ -313,7 +313,11 @@ def find_cot_theta_for_V_Ed(
     # Normalise inputs
     V_Ed_N = from_kn(abs(float(V_Ed)), ForceUnit.N)
     K = float(K)
-    C = cot(radians(link_angle_degrees))
+
+    if abs(link_angle_degrees - 90.0) < 1e-9:
+        C = 0.0
+    else:
+        C = cot(radians(link_angle_degrees))
 
     if K <= 0.0 or V_Ed_N <= 1e-9:  # guard against invalid inputs and div zero error
         return float(cot_min)  # use maximum angle (θ = 45°, cot = 1.0)

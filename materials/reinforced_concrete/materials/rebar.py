@@ -2,12 +2,13 @@
 Rebar (reinforcing bar) with geometry and material properties.
 """
 
-from functools import cached_property
+import warnings
 from typing import Final
-from math import pi, tan, sin, radians
+from math import pi, sin, radians
 from pydantic import Field, computed_field, field_validator
 from materials.reinforced_concrete.materials.reinforcing_steel import ReinforcingSteel
-
+from materials.utils.helpers import cot
+from materials.core.units import LengthUnit, LENGTH_TO_MM
 
 # Standard bar diameters in mm (EC2 common practice) - single source of truth
 STANDARD_BAR_DIAMETERS: Final = (6, 8, 10, 12, 16, 20, 25, 28, 32, 40)
@@ -28,7 +29,8 @@ class Rebar(ReinforcingSteel):
         """Cross-sectional area (mm²): A = π d² / 4."""
         return pi * (float(self.diameter) ** 2) / 4.0
 
-    @cached_property
+    @computed_field
+    @property
     def perimeter(self) -> float:
         """Perimeter (mm): P = π d."""
         return pi * float(self.diameter)
@@ -40,8 +42,8 @@ class Rebar(ReinforcingSteel):
         Mass per unit length (kg/m).
         Calculation: Area(m²) * Density(kg/m³)
         """
-        # area is in mm², divide by 1,000,000 to get m²
-        area_m2 = self.area / 1_000_000.0
+        mm_per_m = LENGTH_TO_MM[LengthUnit.M]
+        area_m2 = self.area / mm_per_m ** 2
         return area_m2 * self.density
     
     @property
@@ -53,8 +55,10 @@ class Rebar(ReinforcingSteel):
     @classmethod
     def check_standard_size(cls, v: float) -> float:
         if v not in STANDARD_BAR_DIAMETERS:
-            import warnings
-            warnings.warn(f"Diameter {v}mm is not in standard list: {STANDARD_BAR_DIAMETERS}")
+            warnings.warn(
+                f"Diameter {v}mm is not in standard list: {STANDARD_BAR_DIAMETERS}",
+                category=UserWarning,
+            )
         return v
 
     def __str__(self) -> str:
@@ -80,7 +84,8 @@ class ShearRebar(Rebar):
         """A_sw / s (mm²/mm)."""
         return self.total_area_per_spacing / self.spacing
 
-    @cached_property
+    @computed_field
+    @property
     def a_sw_over_s_sin_alpha(self) -> float:
         """
         A_sw / (s · sin α) in mm²/mm.
@@ -102,15 +107,15 @@ class ShearRebar(Rebar):
         if abs(self.angle - 90.0) < 1e-9:
             cot_alpha = 0.0
         else:
-            cot_alpha = 1.0 / tan(radians(self.angle))
+            cot_alpha = cot(radians(self.angle))
 
         return 0.75 * effective_depth * (1.0 + cot_alpha)
 
     def max_leg_spacing(self, effective_depth: float) -> float:
-        """EC2 §9.2.2(8): s_t,max = max(600 mm, 0.75 d)."""
+        """EC2 §9.2.2(8): s_t,max = min(600 mm, 0.75 d)."""
         if effective_depth <= 0:
             raise ValueError("effective_depth must be > 0")
-        return max(600.0, 0.75 * effective_depth)
+        return min(600.0, 0.75 * effective_depth)
 
     def __str__(self) -> str:
         return (

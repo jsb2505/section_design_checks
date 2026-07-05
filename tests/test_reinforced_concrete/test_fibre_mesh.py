@@ -4,6 +4,7 @@ Tests for reinforced_concrete.geometry.fibre_mesh module.
 
 import pytest
 import numpy as np
+from shapely.geometry import Point
 from materials.reinforced_concrete.geometry import FibreMesh, create_linear_rebar_layer
 from materials.core.geometry import Point2D
 
@@ -20,21 +21,28 @@ class TestFibreMesh:
             n_fibres_height=20,
         )
 
-    def test_create_mesh(self, mesh_simple):
+    def test_create_mesh(self, mesh_simple, rectangular_beam_with_rebars):
         """Test creating fibre mesh."""
+        expected_steel = sum(
+            len(g.positions) for g in rectangular_beam_with_rebars.rebar_groups
+        )
         assert mesh_simple.n_concrete_fibres > 0
-        assert mesh_simple.n_steel_fibres == 3  # 3 rebars
-        assert mesh_simple.total_fibres == mesh_simple.n_concrete_fibres + 3
+        assert mesh_simple.n_steel_fibres == expected_steel
+        assert mesh_simple.total_fibres == mesh_simple.n_concrete_fibres + expected_steel
 
-    def test_concrete_fibres_generated(self, mesh_simple):
-        """Test that concrete fibres are generated."""
+    def test_concrete_fibres_generated(self, mesh_simple, rectangular_beam_with_rebars):
+        """Test that concrete fibres lie within section bounding box and outline."""
         assert len(mesh_simple.concrete_fibres) > 0
+
+        min_x, min_y, max_x, max_y = rectangular_beam_with_rebars.get_bounding_box()
+        outline_buffered = rectangular_beam_with_rebars.outline.buffer(1e-6)
 
         for fibre in mesh_simple.concrete_fibres:
             assert fibre.material_type == "concrete"
             assert fibre.area > 0
-            assert fibre.x >= 0
-            assert fibre.y >= 0
+            assert min_x - 1e-9 <= fibre.x <= max_x + 1e-9
+            assert min_y - 1e-9 <= fibre.y <= max_y + 1e-9
+            assert outline_buffered.covers(Point(fibre.x, fibre.y))
 
     def test_steel_fibres_generated(self, mesh_simple):
         """Test that steel fibres are generated."""
@@ -154,6 +162,63 @@ class TestFibreMesh:
         # Check they're at expected y-coordinate (50mm from bottom)
         for x, y in steel_positions:
             assert y == pytest.approx(50.0)
+
+    def test_concrete_fibre_grid_indices(self, mesh_simple):
+        """Test that concrete fibres have valid grid indices."""
+        for f in mesh_simple.concrete_fibres:
+            assert 0 <= f.i < mesh_simple.n_fibres_width
+            assert 0 <= f.j < mesh_simple.n_fibres_height
+
+    def test_steel_fibre_grid_indices(self, mesh_simple):
+        """Test that steel fibres have sentinel grid indices (-1)."""
+        for f in mesh_simple.steel_fibres:
+            assert f.i == -1
+            assert f.j == -1
+
+    def test_exclude_steel_area_approximates_bar_area(self, rectangular_beam_with_rebars):
+        """Test that excluded area is approximately equal to total bar area."""
+        mesh_excluded = FibreMesh(
+            section=rectangular_beam_with_rebars,
+            n_fibres_width=60,
+            n_fibres_height=60,
+            exclude_steel_area=True,
+        )
+        mesh_included = FibreMesh(
+            section=rectangular_beam_with_rebars,
+            n_fibres_width=60,
+            n_fibres_height=60,
+            exclude_steel_area=False,
+        )
+
+        area_excluded = sum(f.area for f in mesh_excluded.concrete_fibres)
+        area_included = sum(f.area for f in mesh_included.concrete_fibres)
+        removed = area_included - area_excluded
+
+        steel_area = sum(
+            len(g.positions) * g.rebar.area
+            for g in rectangular_beam_with_rebars.rebar_groups
+        )
+        # Loose tolerance: circle approximation + discretization
+        assert removed == pytest.approx(steel_area, rel=0.05)
+
+    def test_n_fibres_rejects_float(self, rectangular_beam):
+        """Test that float fibre counts are rejected."""
+        with pytest.raises(TypeError):
+            FibreMesh(section=rectangular_beam, n_fibres_width=9.9, n_fibres_height=20)
+        with pytest.raises(TypeError):
+            FibreMesh(section=rectangular_beam, n_fibres_width=10, n_fibres_height=20.5)
+
+    def test_n_fibres_rejects_zero(self, rectangular_beam):
+        """Test that zero fibre counts are rejected."""
+        with pytest.raises(ValueError):
+            FibreMesh(section=rectangular_beam, n_fibres_width=0, n_fibres_height=20)
+        with pytest.raises(ValueError):
+            FibreMesh(section=rectangular_beam, n_fibres_width=10, n_fibres_height=0)
+
+    def test_n_fibres_rejects_negative(self, rectangular_beam):
+        """Test that negative fibre counts are rejected."""
+        with pytest.raises(ValueError):
+            FibreMesh(section=rectangular_beam, n_fibres_width=-5, n_fibres_height=20)
 
     def test_repr(self, mesh_simple):
         """Test __repr__ method."""

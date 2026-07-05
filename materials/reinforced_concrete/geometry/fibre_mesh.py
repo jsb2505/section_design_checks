@@ -87,12 +87,17 @@ class FibreMesh:
         exclude_steel_area: bool = True,
     ) -> None:
         # Validate cheap things early (fail fast)
+        if not isinstance(n_fibres_width, int) or not isinstance(n_fibres_height, int):
+            raise TypeError(
+                f"n_fibres_width and n_fibres_height must be int, "
+                f"got {type(n_fibres_width).__name__} and {type(n_fibres_height).__name__}"
+            )
         if n_fibres_width <= 0 or n_fibres_height <= 0:
             raise ValueError("n_fibres_width and n_fibres_height must be > 0")
 
         self.section = section
-        self.n_fibres_width = int(n_fibres_width)
-        self.n_fibres_height = int(n_fibres_height)
+        self.n_fibres_width = n_fibres_width
+        self.n_fibres_height = n_fibres_height
         self.exclude_steel_area = bool(exclude_steel_area)
 
         self.concrete_fibres: list[Fibre] = []
@@ -185,9 +190,8 @@ class FibreMesh:
                 # Subtract steel overlap geometrically (accurate)
                 # Use difference() so area and centroid are consistent.
                 remaining = cell_concrete
-                if self.exclude_steel_area and self._bar_union is not None:
-                    # Quick reject: if bar union doesn't intersect cell, avoid difference call
-                    if self._bar_union_prepared is None or self._bar_union_prepared.intersects(cell):
+                if self.exclude_steel_area and self._bar_union_prepared is not None:
+                    if self._bar_union_prepared.intersects(cell_concrete):
                         remaining = cell_concrete.difference(self._bar_union)
 
                 if remaining.is_empty:
