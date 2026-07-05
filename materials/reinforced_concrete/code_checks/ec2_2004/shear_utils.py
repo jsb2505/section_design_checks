@@ -13,6 +13,7 @@ from shapely.geometry import MultiLineString, Point
 from materials.utils.helpers import cot
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ShearRebar
+from materials.reinforced_concrete.ndp import get_ndp
 from materials.core.units import LengthUnit, ForceUnit, from_mm, from_kn
 
 
@@ -355,18 +356,27 @@ def find_cot_theta_for_V_Ed(
     return cot_theta
 
 
-def clamp_cot_theta(cot_theta: float, *, cot_min: float = 1.0, cot_max: float = 2.5) -> float:
+def clamp_cot_theta(
+    cot_theta: float,
+    *,
+    cot_min: Optional[float] = None,
+    cot_max: Optional[float] = None,
+) -> float:
     """
     Clamps the cotangent of the compressive strut angle to within bounds.
 
     Args:
         cot_theta: calculated or user supplied theta value unbounded
-        cot_min: lower bound cotangent of angle of strut (default = 1.0)
-        cot_max: upper bound cotangent of angle of strut (default = 2.5)
+        cot_min: lower bound cotangent of angle of strut (default from NDP)
+        cot_max: upper bound cotangent of angle of strut (default from NDP)
 
     Returns:
         Clamped cot theta within bounds
     """
+    if cot_min is None:
+        cot_min = get_ndp("cot_theta_lower_lim")
+    if cot_max is None:
+        cot_max = get_ndp("cot_theta_upper_lim")
     return max(cot_min, min(cot_max, cot_theta))
 
 

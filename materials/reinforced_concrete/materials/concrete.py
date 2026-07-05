@@ -11,6 +11,7 @@ from pydantic import Field, ConfigDict
 
 from materials.core.base_material import BaseMaterial
 from materials.core.units import StressUnit, to_mpa
+from materials.reinforced_concrete.ndp import get_ndp
 
 
 # Concrete grades according to EC2 Table 3.1 (single source of truth)
@@ -120,27 +121,27 @@ class ConcreteMaterial(BaseMaterial):
     grade: ConcreteGrade = Field(..., description="Concrete grade per EC2 Table 3.1")
 
     gamma_c: float = Field(
-        default=1.5,
-        description="Partial factor for concrete for ULS persistent/transient (§2.4.2.4)",
+        default_factory=lambda: get_ndp("gamma_c"),
+        description="Partial factor for concrete for ULS persistent/transient (§2.4.2.4, NDP)",
         gt=0,
     )
 
     gamma_c_accidental: float = Field(
-        default=1.2,
-        description="Partial factor for concrete for ULS accidental (§2.4.2.4, National Annex)",
+        default_factory=lambda: get_ndp("gamma_c_accidental"),
+        description="Partial factor for concrete for ULS accidental (§2.4.2.4, NDP)",
         gt=0,
     )
 
     alpha_cc: float = Field(
-        default=0.85,
-        description="Coefficient for long-term effects on strength (§3.1.6(1)P)",
+        default_factory=lambda: get_ndp("alpha_cc"),
+        description="Coefficient for long-term effects on strength (§3.1.6(1)P, NDP)",
         gt=0,
         le=1.0,
     )
 
     alpha_ct: float = Field(
-        default=1.0,
-        description="Coefficient for long-term effects on tensile strength",
+        default_factory=lambda: get_ndp("alpha_ct"),
+        description="Coefficient for long-term effects on tensile strength (NDP)",
         gt=0,
         le=1.0,
     )

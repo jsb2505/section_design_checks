@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import List, Tuple, TYPE_CHECKING
+
+from materials.core.units import MomentUnit, to_knm
 import numpy as np
 
 try:
@@ -523,7 +525,7 @@ def calculate_tension_shift_envelope_simplified(
         V = node.V_kN
 
         # M_add = |V| * a_l / 1000 (convert mm to m)
-        M_add = abs(V) * a_l_mm / 1000  # TODO use unit conversion here
+        M_add = to_knm(abs(V) * a_l_mm, MomentUnit.NM)  # kN·mm = N·m → kN·m
 
         # Apply shift: increase magnitude, then cap
         sign = 1 if M_orig >= 0 else -1

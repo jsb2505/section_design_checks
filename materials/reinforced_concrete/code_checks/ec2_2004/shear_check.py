@@ -13,6 +13,9 @@ from math import atan, degrees, radians, sin, sqrt
 import warnings
 from pydantic import BaseModel, Field, PrivateAttr
 
+from materials.core.units import ForceUnit, to_kn
+from materials.reinforced_concrete.ndp import get_ndp
+
 from materials.utils.helpers import cot
 from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
@@ -228,9 +231,9 @@ class ShearCheck(BaseCodeCheck):
     _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
     _diagram_snapshot: Optional[dict] = PrivateAttr(default=None)
 
-    # Constants from EC2
-    MIN_COT_THETA: ClassVar[float] = 1.0  # θ = 45°
-    MAX_COT_THETA: ClassVar[float] = 2.5  # θ = 21.8°
+    # NDP cot(θ) limits from National Annex (EC2 §6.2.3(2))
+    MIN_COT_THETA: ClassVar[float] = get_ndp("cot_theta_lower_lim")  # θ = 45°
+    MAX_COT_THETA: ClassVar[float] = get_ndp("cot_theta_upper_lim")  # θ = 21.8°
 
     def _take_snapshot(self) -> dict:
         """Capture current state of inputs that affect the interaction diagram."""
@@ -614,8 +617,7 @@ class ShearCheck(BaseCodeCheck):
         # Minimum value (Eq. 6.2b)
         v_min = find_v_min(f_ck, k)
         V_Rd_c_min = (v_min + k_1 * sigma_cp) * b_w * d
-        # TODO use unit conversion here
-        V_Rd_c_kN = max(V_Rd_c, V_Rd_c_min) / 1000  # Convert to kN
+        V_Rd_c_kN = to_kn(max(V_Rd_c, V_Rd_c_min), ForceUnit.N)
 
         return max(V_Rd_c_kN, 0)  # Prevents negative values if sigma_cp is large negative
 

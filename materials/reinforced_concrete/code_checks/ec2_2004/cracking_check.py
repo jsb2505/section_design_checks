@@ -22,7 +22,8 @@ from materials.reinforced_concrete.materials import ConcreteMaterial
 from materials.reinforced_concrete.analysis import create_interaction_diagram
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
-from materials.core.units import MomentUnit, to_knm
+from materials.core.units import ForceUnit, MomentUnit, from_kn, to_knm
+from materials.reinforced_concrete.ndp import get_ndp
 
 
 class LoadDuration(StrEnum):
@@ -150,13 +151,13 @@ class CrackingCheck(BaseCodeCheck):
 
     # National Annex coefficients for crack spacing (EC2 §7.3.4(3))
     k_3: float = Field(
-        default=3.4,
-        description="National Annex coefficient k_3 for crack spacing",
+        default_factory=lambda: get_ndp("k_3_crack"),
+        description="National Annex coefficient k_3 for crack spacing (NDP)",
     )
 
     k_4: float = Field(
-        default=0.425,
-        description="National Annex coefficient k_4 for crack spacing",
+        default_factory=lambda: get_ndp("k_4_crack"),
+        description="National Annex coefficient k_4 for crack spacing (NDP)",
     )
 
     # ===========================
@@ -670,7 +671,7 @@ class CrackingCheck(BaseCodeCheck):
 
         # Concrete stress from axial force
         A_eff = self.section.get_transformed_area(self.concrete.E_cm)
-        sigma_c = N_Ed * 1000 / A_eff  # MPa  # TODO use unit conversion here
+        sigma_c = from_kn(N_Ed, ForceUnit.N) / A_eff  # MPa
 
         f_ct_eff = self.concrete.f_ctm
 
