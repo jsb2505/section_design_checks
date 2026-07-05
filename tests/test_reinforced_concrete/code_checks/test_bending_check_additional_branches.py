@@ -28,7 +28,10 @@ class _FakeDiagram:
 
     def find_strains_for_MN(self, M_Ed: float, N_Ed: float):
         if self.raise_on_find:
-            raise RuntimeError("no strains")
+            # Solver non-convergence is signalled by ValueError (which the A_s,min
+            # path now narrowly catches); a non-ValueError would be a real bug and
+            # must propagate.
+            raise ValueError("no strains")
         return 0.001, -0.001
 
     def find_strain_state_for_MN(self, *args, **kwargs):
