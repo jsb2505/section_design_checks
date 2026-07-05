@@ -90,6 +90,17 @@ class _StressStrainPlotState:
     is_biaxial: bool = False
     na_angle_deg: float | None = None
 
+    # Projected coordinates along compression direction (biaxial profiles)
+    proj_bottom: float = 0.0         # Min projected coord (tension side)
+    proj_top: float = 0.0            # Max projected coord (compression side)
+    proj_h: float = 0.0              # proj_top - proj_bottom
+    proj_na: float | None = None     # Projected coord where strain = 0
+    proj_na_in_section: bool = False  # Whether projected NA is within extent
+    proj_c_comp: float | None = None  # Projected centroid: concrete compression
+    proj_c_tens: float | None = None  # Projected centroid: concrete tension
+    proj_s_comp: float | None = None  # Projected centroid: steel compression
+    proj_s_tens: float | None = None  # Projected centroid: steel tension
+
     @property
     def M_Ed(self) -> float:
         """Legacy alias for My_Ed."""
@@ -336,6 +347,36 @@ class StressStrainViewer:
             is_biaxial = strain_state_obj.is_biaxial
             na_angle_deg = strain_state_obj.get_na_angle_deg()
 
+        # 11) Projected coordinates along compression direction (biaxial profiles)
+        proj_bottom = 0.0
+        proj_top = 0.0
+        proj_h = 0.0
+        proj_na: float | None = None
+        proj_na_in_section = False
+        proj_c_comp: float | None = None
+        proj_c_tens: float | None = None
+        proj_s_comp: float | None = None
+        proj_s_tens: float | None = None
+
+        if is_biaxial and strain_state_obj is not None:
+            dx, dy = strain_state_obj.compression_direction
+            proj_all = dx * (x_coords - centroid_x) + dy * (y_coords - centroid_y)
+            proj_bottom = float(np.min(proj_all))
+            proj_top = float(np.max(proj_all))
+            proj_h = proj_top - proj_bottom
+
+            # NA location along compression direction: strain = gradient * proj + c
+            gradient = math.hypot(strain_state_obj.plane_a, strain_state_obj.plane_b)
+            if gradient > 1e-18:
+                proj_na = -strain_state_obj.plane_c / gradient
+                proj_na_in_section = proj_bottom <= proj_na <= proj_top
+
+            # Per-component projected centroids for resultant arrows
+            proj_c_comp = self._weighted_centroid_y(forces_N, proj_all, conc_comp_mask)
+            proj_c_tens = self._weighted_centroid_y(forces_N, proj_all, conc_tens_mask)
+            proj_s_comp = self._weighted_centroid_y(forces_N, proj_all, steel_comp_mask)
+            proj_s_tens = self._weighted_centroid_y(forces_N, proj_all, steel_tens_mask)
+
         return _StressStrainPlotState(
             My_Ed=float(My_Ed),
             N_Ed=float(N_Ed),
@@ -382,6 +423,15 @@ class StressStrainViewer:
             strain_state=strain_state_obj,
             is_biaxial=is_biaxial,
             na_angle_deg=na_angle_deg,
+            proj_bottom=proj_bottom,
+            proj_top=proj_top,
+            proj_h=proj_h,
+            proj_na=proj_na,
+            proj_na_in_section=proj_na_in_section,
+            proj_c_comp=proj_c_comp,
+            proj_c_tens=proj_c_tens,
+            proj_s_comp=proj_s_comp,
+            proj_s_tens=proj_s_tens,
             **self._get_capacity(My_Ed=My_Ed, N_Ed=N_Ed, Mz_Ed=Mz_Ed),
         )
 
@@ -569,14 +619,36 @@ class StressStrainViewer:
         )
 
     def _add_strain_subplot(self, fig: Any, go: Any, s: _StressStrainPlotState, *, row: int = 2, col: int = 1) -> None:
-        # TODO: When biaxial, project fibres onto compression_direction and use
-        # projected coordinate as the y-axis instead of section y-coordinate.
-        # Currently uses eps_top/eps_bottom (y-axis projection) even for skewed NA.
-        eps_bottom_permille = s.eps_bottom * 1000.0
-        eps_top_permille = s.eps_top * 1000.0
+        if s.is_biaxial and s.strain_state is not None and s.proj_h > 0:
+            # Biaxial: project along compression_direction
+            ss = s.strain_state
+            gradient = math.hypot(ss.plane_a, ss.plane_b)
+            # Strain at projected extremes (strain varies linearly with projection)
+            eps_at_bottom = ss.plane_c + gradient * s.proj_bottom  # tension side
+            eps_at_top = ss.plane_c + gradient * s.proj_top        # compression side
+            eps_bottom_permille = eps_at_bottom * 1000.0
+            eps_top_permille = eps_at_top * 1000.0
+            p_bot = s.proj_bottom
+            p_top = s.proj_top
+            coord_label = "proj"
+            na_pos = s.proj_na
+            na_in = s.proj_na_in_section
+            line_bot = p_bot - 20
+            line_top = p_top + 20
+        else:
+            # Uniaxial: use section y-coordinates
+            eps_bottom_permille = s.eps_bottom * 1000.0
+            eps_top_permille = s.eps_top * 1000.0
+            p_bot = s.y_bottom
+            p_top = s.y_top
+            coord_label = "y"
+            na_pos = s.y_na
+            na_in = s.na_in_section
+            line_bot = p_bot - 20
+            line_top = p_top + 20
 
         strain_polygon_x = [0.0, eps_bottom_permille, eps_top_permille, 0.0, 0.0]
-        strain_polygon_y = [s.y_bottom, s.y_bottom, s.y_top, s.y_top, s.y_bottom]
+        strain_polygon_y = [p_bot, p_bot, p_top, p_top, p_bot]
 
         # Use red when section fails (bounded solution), blue otherwise
         if s.section_failed:
@@ -588,6 +660,8 @@ class StressStrainViewer:
             strain_fill_color = "rgba(0, 0, 255, 0.15)"
             strain_name = "Strain"
 
+        hover_tpl = f"ε: %{{x:.3f}} ‰<br>{coord_label}: %{{y:.1f}} mm<extra></extra>"
+
         fig.add_trace(
             go.Scatter(
                 x=strain_polygon_x,
@@ -597,7 +671,7 @@ class StressStrainViewer:
                 fill="toself",
                 fillcolor=strain_fill_color,
                 name=strain_name,
-                hovertemplate="ε: %{x:.3f} ‰<br>y: %{y:.1f} mm<extra></extra>",
+                hovertemplate=hover_tpl,
             ),
             row=row,
             col=col,
@@ -606,11 +680,11 @@ class StressStrainViewer:
         fig.add_trace(
             go.Scatter(
                 x=[eps_bottom_permille, eps_top_permille],
-                y=[s.y_bottom, s.y_top],
+                y=[p_bot, p_top],
                 mode="markers",
                 marker=dict(size=8, color=strain_line_color),
                 showlegend=False,
-                hovertemplate="ε: %{x:.3f} ‰<br>y: %{y:.1f} mm<extra></extra>",
+                hovertemplate=hover_tpl,
             ),
             row=row,
             col=col,
@@ -619,7 +693,7 @@ class StressStrainViewer:
         fig.add_trace(
             go.Scatter(
                 x=[0, 0],
-                y=[s.y_bottom - 20, s.y_top + 20],
+                y=[line_bot, line_top],
                 mode="lines",
                 line=dict(color="gray", width=1, dash="dot"),
                 showlegend=False,
@@ -628,32 +702,33 @@ class StressStrainViewer:
             col=col,
         )
 
-        if s.y_na is not None and s.na_in_section:
+        if na_pos is not None and na_in:
             fig.add_trace(
                 go.Scatter(
                     x=[0],
-                    y=[s.y_na],
+                    y=[na_pos],
                     mode="markers",
                     marker=dict(size=10, color="purple", symbol="diamond"),
                     name="NA",
                     showlegend=False,
-                    hovertemplate=f"Neutral Axis<br>y: {s.y_na:.1f} mm<extra></extra>",
+                    hovertemplate=f"Neutral Axis<br>{coord_label}: {na_pos:.1f} mm<extra></extra>",
                 ),
                 row=row,
                 col=col,
             )
 
     def _add_stress_subplot(self, fig: Any, go: Any, s: _StressStrainPlotState, *, row: int = 2, col: int = 2) -> None:
+        use_proj = s.is_biaxial and s.strain_state is not None and s.proj_h > 0
+        coord_label = "proj" if use_proj else "y"
+
         # Concrete stress profile polygon + hover markers
         if np.any(s.conc_mask):
             # Use interpolated profile for smooth stress block visualization
-            # This gives much better resolution in compression zones which are typically
-            # only 20-30% of section depth but contain the important stress block shape
-            interp_y, interp_strains, interp_stresses = self._interpolate_concrete_stress_profile(s, n_points=100)
+            interp_coords, interp_strains, interp_stresses = self._interpolate_concrete_stress_profile(s, n_points=100)
 
             # Build polygon: start at zero, trace up the stress curve, back to zero
             stress_polygon_x = np.concatenate([[0.0], interp_stresses, [0.0]])
-            stress_polygon_y = np.concatenate([[interp_y[0]], interp_y, [interp_y[-1]]])
+            stress_polygon_y = np.concatenate([[interp_coords[0]], interp_coords, [interp_coords[-1]]])
 
             # Use red/pink when section fails, gray otherwise
             if s.section_failed:
@@ -687,14 +762,14 @@ class StressStrainViewer:
             hover_texts = [
                 f"σ: {interp_stresses[i]:.2f} MPa<br>"
                 f"ε: {interp_strains[i]*1000:.3f} ‰<br>"
-                f"y: {interp_y[i]:.1f} mm"
+                f"{coord_label}: {interp_coords[i]:.1f} mm"
                 for i in range(len(interp_stresses))
             ]
 
             fig.add_trace(
                 go.Scatter(
                     x=interp_stresses,
-                    y=interp_y,
+                    y=interp_coords,
                     mode="markers",
                     marker=dict(size=3, color=stress_marker_color, opacity=0.3),
                     text=hover_texts,
@@ -706,17 +781,29 @@ class StressStrainViewer:
                 col=col,
             )
 
-        # Resultant arrows
-        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>cc</sub>", force=s.F_c_comp, y=s.y_c_comp, force_scale=s.force_scale, line_color="red", tip_symbol="triangle-right", extra="Concrete Compression")
-        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>ct</sub>", force=s.F_c_tens, y=s.y_c_tens, force_scale=s.force_scale, line_color="blue", tip_symbol="triangle-left", extra="Concrete Tension")
-        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>sc</sub>", force=s.F_s_comp, y=s.y_s_comp, force_scale=s.force_scale, line_color="darkorange", tip_symbol="triangle-right", extra="Steel Compression")
-        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>st</sub>", force=s.F_s_tens, y=s.y_s_tens, force_scale=s.force_scale, line_color="green", tip_symbol="triangle-left", extra="Steel Tension")
+        # Resultant arrows — use projected centroids when biaxial
+        if use_proj:
+            y_cc, y_ct = s.proj_c_comp, s.proj_c_tens
+            y_sc, y_st = s.proj_s_comp, s.proj_s_tens
+        else:
+            y_cc, y_ct = s.y_c_comp, s.y_c_tens
+            y_sc, y_st = s.y_s_comp, s.y_s_tens
+
+        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>cc</sub>", force=s.F_c_comp, y=y_cc, force_scale=s.force_scale, line_color="red", tip_symbol="triangle-right", extra="Concrete Compression")
+        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>ct</sub>", force=s.F_c_tens, y=y_ct, force_scale=s.force_scale, line_color="blue", tip_symbol="triangle-left", extra="Concrete Tension")
+        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>sc</sub>", force=s.F_s_comp, y=y_sc, force_scale=s.force_scale, line_color="darkorange", tip_symbol="triangle-right", extra="Steel Compression")
+        self._add_resultant_arrow(fig, go, row=row, col=col, name="F<sub>st</sub>", force=s.F_s_tens, y=y_st, force_scale=s.force_scale, line_color="green", tip_symbol="triangle-left", extra="Steel Tension")
 
         # Zero stress line
+        if use_proj:
+            line_bot, line_top = s.proj_bottom - 20, s.proj_top + 20
+        else:
+            line_bot, line_top = s.y_bottom - 20, s.y_top + 20
+
         fig.add_trace(
             go.Scatter(
                 x=[0, 0],
-                y=[s.y_bottom - 20, s.y_top + 20],
+                y=[line_bot, line_top],
                 mode="lines",
                 line=dict(color="gray", width=1, dash="dot"),
                 showlegend=False,
@@ -726,15 +813,20 @@ class StressStrainViewer:
         )
 
         # NA marker on stress plot
-        if s.y_na is not None and s.na_in_section:
+        if use_proj:
+            na_pos, na_in = s.proj_na, s.proj_na_in_section
+        else:
+            na_pos, na_in = s.y_na, s.na_in_section
+
+        if na_pos is not None and na_in:
             fig.add_trace(
                 go.Scatter(
                     x=[0],
-                    y=[s.y_na],
+                    y=[na_pos],
                     mode="markers",
                     marker=dict(size=10, color="purple", symbol="diamond"),
                     showlegend=False,
-                    hovertemplate=f"Neutral Axis<br>y: {s.y_na:.1f} mm<extra></extra>",
+                    hovertemplate=f"Neutral Axis<br>{coord_label}: {na_pos:.1f} mm<extra></extra>",
                 ),
                 row=row,
                 col=col,
@@ -790,10 +882,18 @@ class StressStrainViewer:
         fig.update_yaxes(visible=False, row=1, col=2)
 
         # ---- Bottom row: Strain + Stress (shared y-axes) ----
-        y_range_min = s.y_bottom - 20
-        y_range_max = s.y_top + 20
+        use_proj = s.is_biaxial and s.strain_state is not None and s.proj_h > 0
+        if use_proj:
+            y_range_min = s.proj_bottom - 20
+            y_range_max = s.proj_top + 20
+            angle_str = f", θ={s.na_angle_deg:.1f}°" if s.na_angle_deg is not None else ""
+            y_label = f"Projected coord (mm){angle_str}"
+        else:
+            y_range_min = s.y_bottom - 20
+            y_range_max = s.y_top + 20
+            y_label = "y (mm)"
 
-        fig.update_yaxes(title_text="y (mm)", range=[y_range_min, y_range_max], row=2, col=1)
+        fig.update_yaxes(title_text=y_label, range=[y_range_min, y_range_max], row=2, col=1)
         fig.update_yaxes(matches="y3", showticklabels=False, row=2, col=2)
 
         fig.update_xaxes(title_text="Strain (‰)", row=2, col=1)
@@ -1212,20 +1312,34 @@ class StressStrainViewer:
         n_points: int = 100,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Generate a smooth concrete stress profile by interpolating across section height.
+        Generate a smooth concrete stress profile by interpolating across section depth.
 
         The fibre mesh may have sparse points in the compression zone (e.g., only 6-9 points
         if compression is 20-30% of section depth with 30 fibres total). This method generates
         a dense set of points for smoother visualization.
 
+        When biaxial, the profile is interpolated along the compression direction
+        (projected coordinates) rather than the section y-axis.
+
         Args:
             s: Plot state containing strain endpoints and section geometry
-            n_points: Number of interpolation points across section height
+            n_points: Number of interpolation points across section depth
 
         Returns:
-            (y_coords, strains, stresses): Arrays of y-coordinates, strains, and stresses (MPa)
+            (coords, strains, stresses): Arrays of coordinates (y or projected),
+            strains, and stresses (MPa)
         """
-        # Generate dense y-coordinates across section height
+        if s.is_biaxial and s.strain_state is not None and s.proj_h > 0:
+            # Biaxial: interpolate along compression direction
+            ss = s.strain_state
+            gradient = math.hypot(ss.plane_a, ss.plane_b)
+            proj_coords = np.linspace(s.proj_bottom, s.proj_top, n_points)
+            # Strain varies linearly with projection: strain = gradient * proj + plane_c
+            strains = gradient * proj_coords + ss.plane_c
+            stresses = self._get_concrete_stress_for_plot(strains)
+            return proj_coords, strains, stresses
+
+        # Uniaxial: interpolate along section y-axis
         y_coords = np.linspace(s.y_bottom, s.y_top, n_points)
 
         # Compute strain at each y using linear interpolation
