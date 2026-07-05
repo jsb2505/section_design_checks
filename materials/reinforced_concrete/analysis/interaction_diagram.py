@@ -2970,25 +2970,24 @@ def create_interaction_diagram(
     is_asymmetric = not section.is_symmetric_about_vertical_axis()
 
     if free_neutral_axis and is_asymmetric:
-        # The biaxial solver only supports ULS-style parameters.
-        # SLS-specific kwargs (elastic_modulus, include_tension,
-        # crack_to_neutral_axis_on_first_tension_failure, concrete_model_override,
-        # steel_models_override) are not supported — fall back to 2D with a warning.
-        sls_only_keys = {
-            'elastic_modulus', 'include_tension',
-            'crack_to_neutral_axis_on_first_tension_failure',
-            'concrete_model_override', 'steel_models_override',
+        # Model-instance overrides (concrete_model_override, steel_models_override) cannot
+        # be forwarded to the biaxial solver — fall back to 1D with a warning.
+        # All other parameters (including SLS: elastic_modulus, include_tension,
+        # crack_to_neutral_axis_on_first_tension_failure) are now supported by
+        # BiaxialMNInteractionSurface.
+        instance_override_keys = {
+            'concrete_model_override',
+            'steel_models_override',
         }
-        has_sls_kwargs = any(
-            kwargs.get(k) not in (None, False) for k in sls_only_keys
+        has_instance_overrides = any(
+            kwargs.get(k) not in (None, False) for k in instance_override_keys
         )
 
-        if has_sls_kwargs:
+        if has_instance_overrides:
             warnings.warn(
                 "free_neutral_axis=True requested on asymmetric section, but "
-                "SLS-specific parameters (elastic_modulus, include_tension, etc.) "
-                "are not supported by the biaxial solver. Falling back to 2D solver "
-                "with horizontal NA for this diagram.",
+                "concrete_model_override / steel_models_override are not supported by "
+                "the biaxial solver. Falling back to 1D solver with horizontal NA.",
                 stacklevel=2,
             )
         else:
@@ -3006,6 +3005,9 @@ def create_interaction_diagram(
                 'tension_stiffening', 'use_characteristic', 'use_accidental',
                 'confined_concrete', 'confinement_rho_s', 'confinement_f_yh',
                 'ignore_compression_steel',
+                'elastic_modulus',
+                'include_tension',
+                'crack_to_neutral_axis_on_first_tension_failure',
             }
             biaxial_kwargs = {k: v for k, v in kwargs.items() if k in biaxial_kwargs_keys}
 

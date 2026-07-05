@@ -39,6 +39,9 @@ def _make_surface_stub() -> BiaxialMNInteractionSurface:
     s._hull_cache = {}
     s._dense_surface_points = None
     s._dense_params = None
+    s.elastic_modulus = None
+    s.include_tension = False
+    s.crack_to_neutral_axis_on_first_tension_failure = True
     return s
 
 

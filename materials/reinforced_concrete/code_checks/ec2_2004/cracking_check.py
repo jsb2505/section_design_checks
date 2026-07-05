@@ -1648,6 +1648,7 @@ class CrackingCheck(BaseCodeCheck):
         return create_interaction_diagram(
             section=self.section,
             concrete=self.concrete,
+            free_neutral_axis=self.free_neutral_axis,
             concrete_model_type=self.concrete_model_type,
             steel_model_type=self.steel_model_type,
             n_fibres_width=self.n_fibres_width,
@@ -1735,11 +1736,18 @@ class CrackingCheck(BaseCodeCheck):
             (is_cracked, eps_top, eps_bottom, min_tension_concrete_strain, cracking_strain)
         """
         probe_diagram = self._get_uncracked_diagram(ignore_compression_steel)
+        # The uncracked probe uses SLS parameters (linear-elastic concrete with tension),
+        # which causes create_interaction_diagram to fall back to a 1D MNInteractionDiagram
+        # even when free_neutral_axis=True (the biaxial solver does not support SLS params).
+        # For cracking detection the probe only needs to identify whether concrete is in
+        # tension — calling it without Mz_target (horizontal NA approximation) is adequate.
+        from materials.reinforced_concrete.analysis.free_na_adapter import FreeNADiagramAdapter as _FreeNA
+        probe_mz_kw = (_mz_kw or {}) if isinstance(probe_diagram, _FreeNA) else {}
         eps_top, eps_bottom = probe_diagram.find_strains_for_MN(
             My_target=M_Ed,
             N_target=N_Ed,
             strict=True,
-            **(_mz_kw or {}),
+            **probe_mz_kw,
         )
 
         # No concrete tension zone -> uncracked for cracking-width purposes

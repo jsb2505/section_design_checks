@@ -49,6 +49,7 @@ from materials.reinforced_concrete.constitutive import (
     create_steel_stress_strain,
     SteelModelType,
     ConcreteModelType,
+    ConcreteStressStrainLinearElastic,
 )
 from materials.reinforced_concrete.materials import ConcreteMaterial
 
@@ -120,6 +121,9 @@ class BiaxialMNInteractionSurface:
         confinement_rho_s: Optional[float] = None,
         confinement_f_yh: Optional[float] = None,
         ignore_compression_steel: bool = False,
+        elastic_modulus: Optional[float] = None,
+        include_tension: bool = False,
+        crack_to_neutral_axis_on_first_tension_failure: bool = True,
     ):
         """
         Initialize biaxial M-M-N surface generator.
@@ -138,6 +142,15 @@ class BiaxialMNInteractionSurface:
             confinement_rho_s: Volumetric ratio of transverse reinforcement (required if confined_concrete=True)
             confinement_f_yh: Characteristic yield strength of transverse steel (MPa)
             ignore_compression_steel: If True, zero out compression steel contribution
+            elastic_modulus: Explicit elastic modulus (MPa). Only used when
+                concrete_model_type=LINEAR_ELASTIC (e.g. E_cm,eff for SLS).
+                Defaults to E_cm from the concrete material.
+            include_tension: If True, model concrete tension up to f_ctm (brittle cutoff).
+                Only used when concrete_model_type=LINEAR_ELASTIC.
+            crack_to_neutral_axis_on_first_tension_failure: If True and once any tensile
+                concrete fibre exceeds the cracking strain, zero all concrete tension
+                (fully cracked tension zone). Only active for LINEAR_ELASTIC with
+                include_tension=True. Mirrors the 1D MNInteractionDiagram behaviour.
         """
         self.section = section
         self.concrete = concrete
@@ -146,6 +159,9 @@ class BiaxialMNInteractionSurface:
         self.ignore_compression_steel = ignore_compression_steel
         self.confinement_rho_s = confinement_rho_s
         self.confinement_f_yh = confinement_f_yh
+        self.elastic_modulus = elastic_modulus
+        self.include_tension = include_tension
+        self.crack_to_neutral_axis_on_first_tension_failure = crack_to_neutral_axis_on_first_tension_failure
 
         # Create constitutive models
         self.concrete_model = create_concrete_stress_strain(
@@ -153,6 +169,8 @@ class BiaxialMNInteractionSurface:
             model_type=concrete_model_type,
             use_characteristic=use_characteristic,
             use_accidental=use_accidental,
+            elastic_modulus=elastic_modulus,
+            include_tension=include_tension,
         )
 
         if len(section.rebar_groups) == 0:
@@ -329,6 +347,21 @@ class BiaxialMNInteractionSurface:
                     -f_ctm * np.maximum(0.0, 1.0 - beta * (eps_t - eps_cr) / (eps_cr * 5.0)),
                 )
                 concrete_stresses[ten_mask] = sigma_t
+
+        # Crack-to-neutral-axis: once any tension fibre exceeds the cracking strain,
+        # zero all concrete tension (fully cracked tension zone).
+        # Mirrors MNInteractionDiagram._should_force_cracked_tension_zone.
+        if (
+            self.crack_to_neutral_axis_on_first_tension_failure
+            and not self.tension_stiffening
+            and isinstance(self.concrete_model, ConcreteStressStrainLinearElastic)
+            and bool(getattr(self.concrete_model, "include_tension", False))
+        ):
+            ten_mask = concrete_strains < 0.0
+            if np.any(ten_mask):
+                cracking_strain = float(self.concrete_model.cracking_strain)
+                if float(np.min(concrete_strains[ten_mask])) < cracking_strain:
+                    concrete_stresses[ten_mask] = 0.0
 
         return concrete_stresses
 

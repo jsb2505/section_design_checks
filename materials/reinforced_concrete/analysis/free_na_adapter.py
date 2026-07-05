@@ -62,14 +62,18 @@ class FreeNADiagramAdapter:
         self.tension_stiffening = biaxial_surface.tension_stiffening
         self.confined_concrete = biaxial_surface.confined_concrete
         self.ignore_compression_steel = biaxial_surface.ignore_compression_steel
+        self.include_tension = biaxial_surface.include_tension
+        self.crack_to_neutral_axis_on_first_tension_failure = (
+            biaxial_surface.crack_to_neutral_axis_on_first_tension_failure
+        )
 
         # Geometry refs matching MNInteractionDiagram convention
         _, min_y, _, max_y = self.section.get_bounding_box()
         self.section_top = max_y
         self.section_bottom = min_y
         self.section_height = max_y - min_y
-        _, self._section_cy = self.section.get_centroid()
-        self.section_centroid_x, self.section_centroid_y = self.section.get_centroid()
+        self._section_cx, self._section_cy = self.section.get_centroid()
+        self.section_centroid_x, self.section_centroid_y = self._section_cx, self._section_cy
 
         # Forward fibre arrays (accessed directly by CrackingCheck)
         self._fibre_x = biaxial_surface._fibre_x
@@ -446,6 +450,14 @@ class FreeNADiagramAdapter:
         # Try multiple initial guesses
         best_result = None
         best_cost = float('inf')
+
+        # TODO (tasks/TODO.md — "Biaxial solver convergence at low SLS loads"):
+        # scipy.optimize.least_squares (L-M) is a local optimizer. At SLS load
+        # levels (loads far below capacity) the objective surface has multiple
+        # local minima and this sweep can converge to a physically incorrect
+        # equilibrium with a nearly-vertical NA (~±88°), producing wrong steel
+        # strains. Fix: add small-phi guesses (0.05, 0.1) at angle≈0° to seed
+        # the shallow-NA equilibrium, or validate the result sign and retry.
 
         # Include angle hint based on moment ratio when Mz != 0
         angle_inits = [0.0, 5.0, -5.0, 10.0, -10.0]
