@@ -15,11 +15,10 @@ from scipy.optimize import root_scalar
 
 from materials.reinforced_concrete.geometry import RCSection, FiberMesh
 from materials.reinforced_concrete.constitutive import (
-    BaseConstitutiveModel,
     create_concrete_stress_strain,
     create_steel_stress_strain,
 )
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from materials.reinforced_concrete.materials import ConcreteMaterial
 
 
 class InteractionPoint(BaseModel):
@@ -120,17 +119,19 @@ class MNInteractionDiagram:
             use_characteristic=False,  # Use f_cd
         )
 
-        # Assume all steel has same properties (use first rebar group)
+        # Create steel models for each rebar group (to support different steel grades)
         if len(section.rebar_groups) == 0:
             raise ValueError("Section must have at least one rebar group")
 
-        # Get steel from first rebar group
-        first_rebar = section.rebar_groups[0].rebar
-        self.steel_model = create_steel_stress_strain(
-            steel=first_rebar,
-            branch_type=steel_branch_type,
-            use_characteristic=False,  # Use f_yd
-        )
+        # Create a steel model for each rebar group
+        self.steel_models = []
+        for group in section.rebar_groups:
+            steel_model = create_steel_stress_strain(
+                steel=group.rebar,
+                branch_type=steel_branch_type,
+                use_characteristic=False,  # Use f_yd
+            )
+            self.steel_models.append(steel_model)
 
         # Validate confined concrete parameters
         if self.confined_concrete:
@@ -144,7 +145,7 @@ class MNInteractionDiagram:
                 )
             # Default to longitudinal steel yield strength if not provided
             if self.confinement_f_yh is None:
-                self.confinement_f_yh = first_rebar.f_yd
+                self.confinement_f_yh = section.rebar_groups[0].rebar.f_yd
 
         # Generate fiber mesh
         self.mesh = FiberMesh(
@@ -315,12 +316,26 @@ class MNInteractionDiagram:
 
         stresses[concrete_mask] = concrete_stresses
 
-        # Steel fibers
+        # Steel fibers - apply correct steel model for each rebar group
         steel_mask = material_type == 'steel'
-        stresses[steel_mask] = self.steel_model.get_stress_array(strains[steel_mask])
+        steel_strains = strains[steel_mask]
+        steel_indices = material_index[steel_mask]
+
+        # Calculate stresses for each rebar group separately
+        steel_stresses = np.zeros_like(steel_strains)
+        for group_idx in range(len(self.steel_models)):
+            # Find fibers belonging to this rebar group
+            group_mask = steel_indices == group_idx
+            if np.any(group_mask):
+                # Apply the steel model for this specific group
+                steel_stresses[group_mask] = self.steel_models[group_idx].get_stress_array(
+                    steel_strains[group_mask]
+                )
+
+        stresses[steel_mask] = steel_stresses
 
         # Calculate resultant forces
-        N, M = self.mesh.calculate_section_forces(strains, stresses)
+        N, M = self.mesh.calculate_section_forces(stresses)
 
         # Get maximum strains for reporting
         max_conc_strain = np.max(strains[concrete_mask]) if np.any(concrete_mask) else 0.0
@@ -411,9 +426,11 @@ class MNInteractionDiagram:
         # Steel contribution (all steel at yield in compression)
         N_steel = 0.0
         M_steel = 0.0
-        for group in self.section.rebar_groups:
+        max_steel_strain = 0.0
+
+        for group_idx, group in enumerate(self.section.rebar_groups):
             A_s = group.rebar.area  # Area per bar
-            f_yd = self.steel_model.f_y  # Yield stress
+            f_yd = self.steel_models[group_idx].get_yield_stress()  # Yield stress for this group
 
             for pos in group.positions:
                 # Compression force (positive)
@@ -424,6 +441,9 @@ class MNInteractionDiagram:
                 y_offset = pos.y - section_cy
                 M_steel += bar_force * y_offset / 1000.0  # kN⋅m
 
+            # Track maximum steel yield strain across all groups
+            max_steel_strain = max(max_steel_strain, self.steel_models[group_idx].epsilon_y)
+
         pure_compression_N = N_concrete + N_steel
         pure_compression_M = M_concrete + M_steel
 
@@ -432,7 +452,7 @@ class MNInteractionDiagram:
             M=pure_compression_M,
             neutral_axis_depth=self.section_height * 1000,  # NA very deep
             max_concrete_strain=self.concrete_model.get_ultimate_strain(),
-            max_steel_strain=self.steel_model.epsilon_y,
+            max_steel_strain=max_steel_strain,
         )
         points.append(pure_compression_point)
 
@@ -446,11 +466,11 @@ class MNInteractionDiagram:
             section_cx, section_cy = self.section.get_centroid()
             pure_tension_N = 0.0
             pure_tension_M = 0.0
+            max_steel_strain = 0.0
 
-            for group in self.section.rebar_groups:
-                n_bars = len(group.positions)
+            for group_idx, group in enumerate(self.section.rebar_groups):
                 A_s = group.rebar.area  # Area per bar
-                f_yd = self.steel_model.f_y  # Yield stress
+                f_yd = self.steel_models[group_idx].get_yield_stress()  # Yield stress for this group
 
                 # Each bar contributes to N and M
                 for pos in group.positions:
@@ -462,13 +482,16 @@ class MNInteractionDiagram:
                     y_offset = pos.y - section_cy
                     pure_tension_M += bar_force * y_offset / 1000.0  # kN⋅m
 
+                # Track maximum steel yield strain across all groups
+                max_steel_strain = max(max_steel_strain, self.steel_models[group_idx].epsilon_y)
+
             # Create pure tension point
             pure_tension_point = InteractionPoint(
                 N=pure_tension_N,
                 M=pure_tension_M,
                 neutral_axis_depth=-self.section_height * 10,  # NA far above section
                 max_concrete_strain=0.0,
-                max_steel_strain=self.steel_model.epsilon_y,
+                max_steel_strain=max_steel_strain,
             )
             points.append(pure_tension_point)
 
@@ -526,21 +549,24 @@ class MNInteractionDiagram:
             points_sorted = curve_positive_m + list(reversed(curve_negative_m))
             return points_sorted
 
-    def get_capacity(self, N_Ed: float) -> Tuple[float, float]:
+    def get_capacity_fixed_n(self, N_Ed: float) -> Tuple[float, float]:
         """
-        Get moment capacity for given axial force.
+        Get moment capacity for given axial force using fixed-N method.
 
-        Finds the maximum moment capacity on the interaction diagram
-        corresponding to the applied axial force by interpolating along
-        the boundary curve.
+        Finds the maximum moment capacity on the interaction diagram at a
+        specific axial force level by interpolating along the M-N boundary curve.
+        This is the traditional approach where axial force is known/fixed and
+        moment capacity is determined.
+
+        Method: Takes a horizontal slice through the M-N diagram at the given N value.
 
         Args:
             N_Ed: Applied axial force in kN (positive = compression)
 
         Returns:
             Tuple of (M_Rd_pos, M_Rd_neg) - moment capacity in kN·m
-            M_Rd_pos: Maximum positive moment capacity
-            M_Rd_neg: Maximum negative moment capacity (negative value)
+            M_Rd_pos: Maximum positive moment capacity at this N
+            M_Rd_neg: Maximum negative moment capacity at this N (negative value)
         """
         # Generate diagram (returns closed convex hull boundary)
         diagram = self.generate_diagram(n_points=100)
@@ -618,19 +644,26 @@ class MNInteractionDiagram:
 
         return (M_Rd_pos, M_Rd_neg)
 
-    def check_capacity(
+    def get_utilization_vector(
         self,
         N_Ed: float,
         M_Ed: float,
     ) -> Tuple[bool, float]:
         """
-        Check if applied loads are within capacity using vector projection method.
+        Check capacity using vector projection method (load ratio approach).
 
         Projects a vector from the origin through the applied load point (M_Ed, N_Ed)
         and finds where it intersects the M-N boundary curve. The utilization ratio
         is the ratio of the distance to the applied load vs. distance to the boundary.
 
-        This is the geometrically correct method for M-N interaction diagrams.
+        This is the geometrically correct method for M-N interaction checking as it
+        properly accounts for the interaction between axial force and moment.
+
+        Method: Projects a ray from origin through (M_Ed, N_Ed) to find (M_Rd, N_Rd).
+
+        WARNING: This gives different results than get_capacity_fixed_n() because they
+        use fundamentally different approaches. Do not mix methods - i.e., don't take
+        M from get_capacity_fixed_n() and expect 50% utilization when checking at 0.5*M.
 
         Args:
             N_Ed: Applied axial force in kN (positive = compression)
@@ -638,7 +671,9 @@ class MNInteractionDiagram:
 
         Returns:
             Tuple of (is_safe, utilization)
-            where utilization = ||(M_Ed, N_Ed)|| / ||(M_Rd, N_Rd)||
+            - is_safe: True if utilization <= 1.0
+            - utilization: ||(M_Ed, N_Ed)|| / ||(M_Rd, N_Rd)|| where (M_Rd, N_Rd) is
+                          the intersection point on the boundary
         """
         # Generate diagram (returns closed convex hull boundary)
         diagram = self.generate_diagram(n_points=100)
@@ -651,15 +686,8 @@ class MNInteractionDiagram:
         if abs(M_Ed) < 1e-6 and abs(N_Ed) < 1e-6:
             return (True, 0.0)
 
-        # Vector from origin to applied load point
-        demand_vector = np.array([M_Ed, N_Ed])
-        demand_magnitude = np.linalg.norm(demand_vector)
-
-        # Direction unit vector
-        direction = demand_vector / demand_magnitude
-
-        # Find intersection of ray from origin in direction of (M_Ed, N_Ed) with boundary
-        # We need to find where the line M = M_Ed * t, N = N_Ed * t intersects the boundary
+        # Find intersection of ray from origin through (M_Ed, N_Ed) with boundary
+        # Ray equation: (M, N) = alpha * (M_Ed, N_Ed) for alpha >= 0
 
         max_alpha = 0.0  # Maximum scaling factor where boundary is intersected
 
@@ -737,9 +765,6 @@ class MNInteractionDiagram:
         if max_concrete_strain is None:
             max_concrete_strain = self.concrete_model.get_ultimate_strain()
 
-        # Get steel yield strain
-        steel_yield_strain = self.steel_model.epsilon_y
-
         # Get fiber arrays to find deepest steel location
         x, y, area, material_type, material_index = self.mesh.get_fiber_arrays()
         steel_mask = material_type == 'steel'
@@ -749,7 +774,15 @@ class MNInteractionDiagram:
 
         # Find extreme tension steel (bottom of section)
         steel_y = y[steel_mask]
+        steel_indices = material_index[steel_mask]
         extreme_tension_steel_y = np.min(steel_y)  # Lowest y (bottom)
+
+        # Find which group the extreme tension steel belongs to
+        extreme_steel_idx = np.argmin(steel_y)
+        extreme_steel_group_idx = steel_indices[extreme_steel_idx]
+
+        # Get steel yield strain for the extreme tension steel group
+        steel_yield_strain = self.steel_models[extreme_steel_group_idx].epsilon_y
 
         # Distance from top of section to extreme tension steel
         y_steel_from_top = self.section_top - extreme_tension_steel_y
@@ -867,7 +900,7 @@ class MNInteractionDiagram:
                 "n_rebar_groups": len(self.section.rebar_groups),
                 "n_fibers": self.mesh.total_fibers,
                 "concrete_model": type(self.concrete_model).__name__,
-                "steel_model": type(self.steel_model).__name__,
+                "steel_models": [type(sm).__name__ for sm in self.steel_models],
             }
 
         file_path = Path(file_path)
@@ -947,7 +980,7 @@ class MNInteractionDiagram:
                 "n_rebar_groups": len(self.section.rebar_groups),
                 "n_fibers": self.mesh.total_fibers,
                 "concrete_model": type(self.concrete_model).__name__,
-                "steel_model": type(self.steel_model).__name__,
+                "steel_models": [type(sm).__name__ for sm in self.steel_models],
             }
 
         return data
@@ -989,6 +1022,6 @@ def create_interaction_diagram(
         >>> N, M = diagram.get_diagram_arrays(n_points=100)
         >>>
         >>> # Check capacity
-        >>> is_safe, util = diagram.check_capacity(N_Ed=500, M_Ed=150)
+        >>> is_safe, util = diagram.get_utilization_vector(N_Ed=500, M_Ed=150)
     """
     return MNInteractionDiagram(section=section, concrete=concrete, **kwargs)

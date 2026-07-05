@@ -4,7 +4,7 @@ Biaxial M-M-N interaction surface generator using fiber-based strain compatibili
 Implements EC2 ultimate limit state analysis for combined axial force and biaxial bending.
 """
 
-from typing import List, Tuple, Optional, Literal, Dict, Any
+from typing import List, Optional, Literal, Dict, Any
 import json
 import csv
 from pathlib import Path

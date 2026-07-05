@@ -121,10 +121,10 @@ class BendingCheck(BaseCodeCheck):
         )
 
         # Check capacity (returns is_safe and utilization)
-        is_safe, utilization = diagram.check_capacity(N_Ed=N_Ed, M_Ed=M_Ed)
+        is_safe, utilization = diagram.get_utilization_vector(N_Ed=N_Ed, M_Ed=M_Ed)
 
         # Get moment capacity at this axial force for reporting
-        M_Rd_pos, M_Rd_neg = diagram.get_capacity(N_Ed=N_Ed)
+        M_Rd_pos, M_Rd_neg = diagram.get_capacity_fixed_n(N_Ed=N_Ed)
 
         # Determine which capacity is relevant based on sign of M_Ed
         M_Rd = M_Rd_pos if M_Ed >= 0 else abs(M_Rd_neg)
@@ -181,7 +181,7 @@ class BendingCheck(BaseCodeCheck):
             n_fibers_height=self.n_fibers_height,
         )
 
-        return diagram.get_capacity(N_Ed=N_Ed)
+        return diagram.get_capacity_fixed_n(N_Ed=N_Ed)
 
     def generate_interaction_diagram(self, n_points: int = 100):
         """

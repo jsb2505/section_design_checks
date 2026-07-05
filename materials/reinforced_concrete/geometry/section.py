@@ -5,10 +5,9 @@ Provides flexible geometry definition with arbitrary polygonal outlines
 and rebar positioning.
 """
 
-from typing import List, Tuple, Optional, Sequence
+from typing import List, Tuple, Optional, Literal
 import numpy as np
-from shapely.geometry import Polygon, Point as ShapelyPoint, MultiPoint
-from shapely.affinity import translate, rotate, scale
+from shapely.geometry import Polygon, Point as ShapelyPoint
 from pydantic import BaseModel, Field, field_validator, computed_field, ConfigDict
 from materials.core.geometry import BaseGeometry, Point2D
 from materials.reinforced_concrete.materials.rebar import Rebar
@@ -33,7 +32,7 @@ class RebarGroup(BaseModel):
 
     positions: List[Point2D] = Field(
         ...,
-        description="List of (x, y) coordinates for bar centers (mm)",
+        description="List of (x, y) coordinates for bar centres (mm)",
         min_length=1,
     )
 
@@ -122,9 +121,9 @@ class RCSection(BaseGeometry):
         description="List of rebar groups in the section"
     )
 
-    concrete_cover: float = Field(
-        default=30.0,
-        description="Nominal concrete cover to rebar centerline (mm)",
+    concrete_cover_override: Optional[float] = Field(
+        default=None,
+        description="Optional override for concrete cover (mm). If None, calculate from geometry.",
         gt=0,
     )
 
@@ -186,12 +185,17 @@ class RCSection(BaseGeometry):
 
     def get_second_moment_area(self) -> Tuple[float, float, float]:
         """
-        Second moments of area about centroidal axes (gross section).
+        Second moments of area about centroidal axes (gross concrete section only).
 
         Uses parallel axis theorem with Shapely.
 
         Returns:
             (I_xx, I_yy, I_xy) in mm⁴
+
+        Note:
+            This returns the gross concrete section properties only.
+            For transformed section properties including steel, use
+            get_transformed_second_moment_area().
         """
         # Get centroid
         cx, cy = self.get_centroid()
@@ -220,6 +224,86 @@ class RCSection(BaseGeometry):
         I_xy = abs(I_xy) / 24.0
 
         return (I_xx, I_yy, I_xy)
+
+    def get_transformed_second_moment_area(
+        self,
+        E_c: float,
+        centroid: Optional[Tuple[float, float]] = None,
+    ) -> Tuple[float, float, float]:
+        """
+        Second moments of area for transformed section including reinforcement.
+
+        Uses the transformed section method where steel is converted to equivalent
+        concrete using the modular ratio α_e = E_s / E_c. Each steel bar contributes
+        (α_e - 1) · A_s to the transformed area.
+
+        Formulation:
+            I_transformed = I_concrete + Σ[(α_e - 1) · A_s · d²]
+
+        where d is the distance from the bar to the centroid axis.
+
+        Args:
+            E_c: Concrete elastic modulus in MPa (typically E_cm from ConcreteMaterial)
+            centroid: Optional centroid to use. If None, uses gross section centroid.
+
+        Returns:
+            (I_xx, I_yy, I_xy) in mm⁴
+
+        Raises:
+            ValueError: If E_c <= 0 or no rebar groups present
+
+        Note:
+            - Uses (α_e - 1) factor to account for concrete already present at bar location
+            - Assumes bars are small relative to section (point area approximation)
+            - For uncracked section analysis, use gross section centroid
+            - For cracked section, calculate neutral axis position first
+        """
+        if E_c <= 0:
+            raise ValueError(f"Concrete modulus E_c must be positive, got {E_c}")
+
+        if not self.rebar_groups:
+            raise ValueError("Cannot calculate transformed properties: no rebars in section")
+
+        # Use provided centroid or gross section centroid
+        if centroid is None:
+            cx, cy = self.get_centroid()
+        else:
+            cx, cy = centroid
+
+        # Start with gross concrete section
+        I_xx_concrete, I_yy_concrete, I_xy_concrete = self.get_second_moment_area()
+
+        # Add contribution from each rebar group
+        I_xx_steel = 0.0
+        I_yy_steel = 0.0
+        I_xy_steel = 0.0
+
+        for group in self.rebar_groups:
+            # Get modular ratio for this rebar material
+            E_s = group.rebar.E_s
+            alpha_e = E_s / E_c
+
+            # Use (α_e - 1) to account for concrete already at bar location
+            factor = alpha_e - 1.0
+
+            for pos in group.positions:
+                # Distance from bar to centroid
+                dx = pos.x - cx
+                dy = pos.y - cy
+
+                # Contribution using parallel axis theorem
+                # I = Σ[A · d²] where A is the transformed area
+                A_transformed = factor * group.rebar.area
+
+                I_xx_steel += A_transformed * dy**2
+                I_yy_steel += A_transformed * dx**2
+                I_xy_steel += A_transformed * dx * dy
+
+        return (
+            I_xx_concrete + I_xx_steel,
+            I_yy_concrete + I_yy_steel,
+            I_xy_concrete + I_xy_steel,
+        )
 
     def get_bounding_box(self) -> Tuple[float, float, float, float]:
         """
@@ -254,6 +338,27 @@ class RCSection(BaseGeometry):
         if self.get_area() == 0:
             return 0.0
         return self.total_steel_area / self.get_area()
+
+    @computed_field
+    @property
+    def concrete_cover(self) -> float:
+        """
+        Minimum concrete cover (top/bottom faces only).
+
+        Convenient property for accessing cover with default settings.
+        Equivalent to get_concrete_cover(orthogonal_only=True).
+
+        Returns:
+            Minimum concrete cover in mm
+
+        Raises:
+            ValueError: If no rebars in section and no override set
+
+        Note:
+            For custom calculations (specific face, all faces), use get_concrete_cover() method.
+            This property is not cached and recalculates on each access.
+        """
+        return self.get_concrete_cover(orthogonal_only=True)
 
     def get_rebar_positions(self) -> List[Tuple[float, float, float]]:
         """
@@ -310,6 +415,67 @@ class RCSection(BaseGeometry):
                 )
 
         self.rebar_groups.append(group)
+
+    def get_concrete_cover(
+        self,
+        orthogonal_only: bool = True,
+        face: Optional[Literal["top", "bottom", "left", "right"]] = None
+    ) -> float:
+        """
+        Calculate minimum concrete cover from section boundary to rebar outer surface.
+
+        Cover is defined as the shortest distance from section boundary to the
+        outer diameter of any rebar (not centreline)
+
+        Args:
+            orthogonal_only: If True (default), only consider top/bottom faces.
+                           This avoids edge bars corrupting the calculation.
+            face: If specified, only calculate cover for specific face.
+                 Overrides orthogonal_only.
+
+        Returns:
+            Minimum concrete cover in mm
+
+        Raises:
+            ValueError: If no rebars in section
+
+        Note:
+            If concrete_cover_override is set, returns that value instead.
+        """
+        # Use override if provided
+        if self.concrete_cover_override is not None:
+            return self.concrete_cover_override
+
+        if not self.rebar_groups:
+            raise ValueError("Cannot calculate cover: no rebars in section")
+
+        min_x, min_y, max_x, max_y = self.get_bounding_box()
+        min_cover = float('inf')
+
+        for group in self.rebar_groups:
+            bar_radius = group.rebar.diameter / 2.0
+
+            for pos in group.positions:
+                # Calculate distance from bar outer surface to each face
+                covers = {}
+
+                if face is None or face == "bottom":
+                    covers["bottom"] = pos.y - min_y - bar_radius
+                if face is None or face == "top":
+                    covers["top"] = max_y - pos.y - bar_radius
+                if not orthogonal_only or face == "left":
+                    covers["left"] = pos.x - min_x - bar_radius
+                if not orthogonal_only or face == "right":
+                    covers["right"] = max_x - pos.x - bar_radius
+
+                # Find minimum cover for this bar
+                bar_min_cover = min(covers.values())
+                min_cover = min(min_cover, bar_min_cover)
+
+        if min_cover == float('inf'):
+            raise ValueError("Could not calculate cover")
+
+        return min_cover
 
     def get_effective_depth(self, reference: Literal["top", "bottom", "left", "right"] = "top") -> float:
         """
@@ -399,7 +565,7 @@ def create_circular_section(
     Args:
         diameter: Section diameter (mm)
         n_points: Number of points to approximate circle (default: 32)
-        origin: Center coordinates (default: origin)
+        origin: Centre coordinates (default: origin)
         section_name: Optional section name
 
     Returns:
