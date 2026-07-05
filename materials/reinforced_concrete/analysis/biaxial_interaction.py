@@ -634,6 +634,469 @@ class BiaxialMNInteractionSurface:
         # Convert to Python types (numpy operations may return numpy scalars)
         return (bool(is_safe), float(utilization))
 
+    def get_capacity_vector(
+        self,
+        N_Ed: float,
+        My_Ed: float,
+        Mz_Ed: float,
+        surface_points: Optional[List] = None,
+        n_angles: int = 72,
+        n_axial_levels: int = 30,
+    ) -> Tuple[Optional[float], Optional[float], Optional[float], bool, float]:
+        """
+        Get capacity point (N_Rd, My_Rd, Mz_Rd) on the M-M-N surface using vector projection.
+
+        This method finds where the ray from origin through (N_Ed, My_Ed, Mz_Ed) intersects
+        the M-M-N interaction surface boundary, returning the capacity coordinates.
+
+        Args:
+            N_Ed: Applied axial force in kN (positive = compression)
+            My_Ed: Applied moment about y-axis (major axis) in kN·m
+            Mz_Ed: Applied moment about z-axis (minor axis) in kN·m
+            surface_points: Pre-generated surface points (optional)
+            n_angles: Number of angles for surface generation (if surface_points not provided)
+            n_axial_levels: Number of N levels for surface generation (if surface_points not provided)
+
+        Returns:
+            Tuple of (N_Rd, My_Rd, Mz_Rd, is_safe, utilization)
+            - N_Rd: Design axial capacity at intersection (kN) or None if no intersection
+            - My_Rd: Design moment capacity about y-axis (kN·m) or None if no intersection
+            - Mz_Rd: Design moment capacity about z-axis (kN·m) or None if no intersection
+            - is_safe: True if utilization <= 1.0
+            - utilization: ||(N_Ed, My_Ed, Mz_Ed)|| / ||(N_Rd, My_Rd, Mz_Rd)||
+
+        Example:
+            >>> surface = create_biaxial_interaction_surface(section, concrete)
+            >>> N_Rd, My_Rd, Mz_Rd, is_safe, util = surface.get_capacity_vector(
+            ...     N_Ed=1000, My_Ed=150, Mz_Ed=100
+            ... )
+            >>> print(f"Capacity: N_Rd={N_Rd:.1f} kN, My_Rd={My_Rd:.1f} kN·m, Mz_Rd={Mz_Rd:.1f} kN·m")
+            >>> print(f"Utilization: {util:.1%}")
+        """
+        # Special case: origin point (no load)
+        if abs(N_Ed) < 1e-6 and abs(My_Ed) < 1e-6 and abs(Mz_Ed) < 1e-6:
+            return (0.0, 0.0, 0.0, True, 0.0)
+
+        # Use provided surface or generate new one
+        if surface_points is None:
+            points = self.generate_surface(
+                n_angles=n_angles,
+                n_axial_levels=n_axial_levels,
+                include_tension=True,
+            )
+        else:
+            points = surface_points
+
+        # Extract coordinates
+        N_values = np.array([p.N for p in points])
+        My_values = np.array([p.My for p in points])
+        Mz_values = np.array([p.Mz for p in points])
+
+        # Direction vector of the applied load
+        load_direction = np.array([N_Ed, My_Ed, Mz_Ed])
+        load_magnitude = np.linalg.norm(load_direction)
+
+        if load_magnitude < 1e-10:
+            return (0.0, 0.0, 0.0, True, 0.0)
+
+        load_direction_unit = load_direction / load_magnitude
+
+        # Find the maximum scaling factor alpha
+        max_alpha = 0.0
+
+        # For each point on the surface, check if it's aligned with load direction
+        for i in range(len(points)):
+            surface_point = np.array([N_values[i], My_values[i], Mz_values[i]])
+            surface_magnitude = np.linalg.norm(surface_point)
+
+            if surface_magnitude < 1e-10:
+                continue
+
+            surface_direction_unit = surface_point / surface_magnitude
+
+            # Check if directions are aligned (dot product close to 1)
+            dot_product = np.dot(load_direction_unit, surface_direction_unit)
+
+            # If aligned (within tolerance), calculate scaling factor
+            if dot_product > 0.999:  # ~2.5 degree tolerance
+                alpha = surface_magnitude / load_magnitude
+                max_alpha = max(max_alpha, alpha)
+
+        # If we didn't find any aligned points, use projection approach
+        if max_alpha < 1e-10:
+            projections = (
+                N_values * N_Ed + My_values * My_Ed + Mz_values * Mz_Ed
+            ) / (load_magnitude ** 2)
+
+            positive_mask = projections > 0
+            if np.any(positive_mask):
+                max_alpha = np.max(projections[positive_mask])
+
+        # If still no intersection found
+        if max_alpha < 1e-10:
+            return (None, None, None, False, float('inf'))
+
+        # Calculate capacity point coordinates
+        N_Rd = max_alpha * N_Ed
+        My_Rd = max_alpha * My_Ed
+        Mz_Rd = max_alpha * Mz_Ed
+
+        # Utilization ratio
+        utilization = 1.0 / max_alpha
+        is_safe = utilization <= 1.0
+
+        # Convert to Python types
+        return (float(N_Rd), float(My_Rd), float(Mz_Rd), bool(is_safe), float(utilization))
+
+    def plot(
+        self,
+        load_points: Optional[List[Dict[str, Any]]] = None,
+        show_vectors: bool = False,
+        show_metadata: bool = True,
+        n_angles: int = 36,
+        n_axial_levels: int = 20,
+        save_path: Optional[str] = None,
+        show: bool = True,
+        title: Optional[str] = None,
+    ) -> Any:
+        """
+        Plot biaxial M-M-N interaction surface with optional load points using Plotly.
+
+        Creates an interactive 3D plot with:
+        - Translucent M-M-N interaction surface
+        - Latitude rings (constant N contours) and longitude lines (constant angle rays)
+        - Optional load points with color-coded utilization
+        - Optional vector projection rays from origin to surface
+        - Interactive hover tooltips with metadata
+
+        Args:
+            load_points: List of load case dictionaries with format:
+                {
+                    "N_Ed": float,      # Axial force (kN)
+                    "My_Ed": float,     # Moment about y-axis (kN·m)
+                    "Mz_Ed": float,     # Moment about z-axis (kN·m)
+                    "name": str,        # Load case name (optional)
+                }
+            show_vectors: If True, show vector projection rays from origin through
+                         load points to capacity surface
+            show_metadata: If True, show metadata in hover tooltips
+            n_angles: Number of angles for surface generation (longitude lines)
+            n_axial_levels: Number of N levels for surface generation (latitude rings)
+            save_path: If provided, save plot to this file path (HTML format)
+            show: If True, display plot in browser
+            title: Custom plot title (optional)
+
+        Returns:
+            Plotly Figure object
+
+        Example:
+            >>> surface = create_biaxial_interaction_surface(section, concrete)
+            >>> surface.plot(
+            ...     load_points=[
+            ...         {"N_Ed": 1000, "My_Ed": 150, "Mz_Ed": 100, "name": "LC1: DL+LL"},
+            ...         {"N_Ed": 800, "My_Ed": 200, "Mz_Ed": 80, "name": "LC2: DL+Wind"}
+            ...     ],
+            ...     show_vectors=True,
+            ...     save_path="biaxial_surface.html"
+            ... )
+        """
+        try:
+            import plotly.graph_objects as go
+        except ImportError:
+            raise ImportError(
+                "Plotly is required for plotting. Install with: pip install plotly"
+            )
+
+        # Generate surface points
+        print(f"Generating surface with {n_angles} angles and {n_axial_levels} N levels...")
+        surface_pts = self.generate_surface(
+            n_angles=n_angles,
+            n_axial_levels=n_axial_levels,
+            include_tension=True
+        )
+        print(f"[OK] Generated {len(surface_pts)} surface points")
+
+        # Extract coordinates
+        N_surf = np.array([p.N for p in surface_pts])
+        My_surf = np.array([p.My for p in surface_pts])
+        Mz_surf = np.array([p.Mz for p in surface_pts])
+        angles = np.array([p.neutral_axis_angle for p in surface_pts])
+
+        # Filter out interior points at each N level using convex hull
+        print("Filtering interior points to ensure clean surface...")
+        from scipy.spatial import ConvexHull
+
+        filtered_indices = []
+        unique_N = np.unique(N_surf.round(decimals=1))
+
+        for N_level in unique_N:
+            # Find points at this N level
+            mask = np.abs(N_surf - N_level) < 10.0
+            indices = np.where(mask)[0]
+
+            if len(indices) < 3:
+                continue
+
+            # Get My, Mz coordinates for this slice
+            My_slice = My_surf[indices]
+            Mz_slice = Mz_surf[indices]
+
+            # Create 2D points array
+            points_2d = np.column_stack([My_slice, Mz_slice])
+
+            # Compute convex hull if we have enough points
+            if len(points_2d) >= 3:
+                try:
+                    hull = ConvexHull(points_2d)
+                    # Keep only hull vertices
+                    hull_indices = indices[hull.vertices]
+                    filtered_indices.extend(hull_indices)
+                except:
+                    # If convex hull fails, keep all points
+                    filtered_indices.extend(indices)
+            else:
+                filtered_indices.extend(indices)
+
+        # Use filtered points
+        filtered_indices = np.array(filtered_indices)
+        N_surf = N_surf[filtered_indices]
+        My_surf = My_surf[filtered_indices]
+        Mz_surf = Mz_surf[filtered_indices]
+        angles = angles[filtered_indices]
+        surface_pts_filtered = [surface_pts[i] for i in filtered_indices]
+
+        print(f"[OK] Filtered to {len(filtered_indices)} boundary points")
+
+        # Find pole points (pure compression and pure tension)
+        N_max_idx = np.argmax(N_surf)
+        N_min_idx = np.argmin(N_surf)
+
+        compression_pole = (My_surf[N_max_idx], Mz_surf[N_max_idx], N_surf[N_max_idx])
+        tension_pole = (My_surf[N_min_idx], Mz_surf[N_min_idx], N_surf[N_min_idx])
+
+        # Create figure
+        fig = go.Figure()
+
+        # Add latitude rings (constant N contours) with faint black lines FIRST (so they don't block)
+        # Group points by N level
+        unique_N_filtered = np.unique(N_surf.round(decimals=1))
+
+        for N_level in unique_N_filtered:
+            # Find points at this N level (with tolerance)
+            mask = np.abs(N_surf - N_level) < 10.0  # 10 kN tolerance
+            if np.sum(mask) < 3:  # Need at least 3 points for a ring
+                continue
+
+            My_ring = My_surf[mask]
+            Mz_ring = Mz_surf[mask]
+            N_ring = N_surf[mask]
+            angles_ring = angles[mask]
+
+            # Sort by angle to create continuous ring
+            sort_idx = np.argsort(angles_ring)
+            My_ring = My_ring[sort_idx]
+            Mz_ring = Mz_ring[sort_idx]
+            N_ring = N_ring[sort_idx]
+
+            # Close the ring
+            My_ring = np.append(My_ring, My_ring[0])
+            Mz_ring = np.append(Mz_ring, Mz_ring[0])
+            N_ring = np.append(N_ring, N_ring[0])
+
+            fig.add_trace(go.Scatter3d(
+                x=My_ring,
+                y=Mz_ring,
+                z=N_ring,
+                mode='lines',
+                line=dict(color='black', width=1),
+                showlegend=False,
+                hoverinfo='skip',
+            ))
+
+        # Add longitude lines (constant angle rays from tension pole through to compression pole)
+        unique_angles_filtered = np.unique(angles.round(decimals=1))
+
+        for angle in unique_angles_filtered[::max(1, len(unique_angles_filtered) // 36)]:  # Limit number of longitude lines
+            # Find points at this angle
+            mask = np.abs(angles - angle) < 1.0  # 1 degree tolerance
+            indices_at_angle = np.where(mask)[0]
+
+            if len(indices_at_angle) < 1:
+                continue
+
+            My_line = My_surf[mask]
+            Mz_line = Mz_surf[mask]
+            N_line = N_surf[mask]
+
+            # Sort by N to create continuous line from tension to compression
+            sort_idx = np.argsort(N_line)
+            My_line = My_line[sort_idx]
+            Mz_line = Mz_line[sort_idx]
+            N_line = N_line[sort_idx]
+
+            # Add tension pole at the start
+            My_line = np.insert(My_line, 0, tension_pole[0])
+            Mz_line = np.insert(Mz_line, 0, tension_pole[1])
+            N_line = np.insert(N_line, 0, tension_pole[2])
+
+            # Add compression pole at the end
+            My_line = np.append(My_line, compression_pole[0])
+            Mz_line = np.append(Mz_line, compression_pole[1])
+            N_line = np.append(N_line, compression_pole[2])
+
+            fig.add_trace(go.Scatter3d(
+                x=My_line,
+                y=Mz_line,
+                z=N_line,
+                mode='lines',
+                line=dict(color='black', width=1),
+                showlegend=False,
+                hoverinfo='skip',
+            ))
+
+        # Add origin point (smaller size)
+        fig.add_trace(go.Scatter3d(
+            x=[0],
+            y=[0],
+            z=[0],
+            mode='markers',
+            name='Origin',
+            marker=dict(color='black', size=3, symbol='circle'),
+            hovertemplate='Origin<extra></extra>',
+        ))
+
+        # Process load points if provided
+        if load_points:
+            for idx, lp in enumerate(load_points):
+                N_Ed = lp.get("N_Ed", 0.0)
+                My_Ed = lp.get("My_Ed", 0.0)
+                Mz_Ed = lp.get("Mz_Ed", 0.0)
+                name = lp.get("name", f"Load Case {idx + 1}")
+
+                # Get capacity and utilization using FILTERED surface points
+                N_Rd, My_Rd, Mz_Rd, is_safe, utilization = self.get_capacity_vector(
+                    N_Ed=N_Ed, My_Ed=My_Ed, Mz_Ed=Mz_Ed,
+                    surface_points=surface_pts_filtered,  # Use filtered points!
+                    n_angles=n_angles,
+                    n_axial_levels=n_axial_levels
+                )
+
+                # Color coding based on utilization
+                if utilization <= 0.8:
+                    color = 'green'
+                elif utilization <= 1.0:
+                    color = 'orange'
+                else:
+                    color = 'red'
+
+                # Build hover text with metadata
+                if show_metadata:
+                    hover_text = (
+                        f"<b>{name}</b><br>"
+                        f"N_Ed: {N_Ed:.1f} kN<br>"
+                        f"My_Ed: {My_Ed:.1f} kN·m<br>"
+                        f"Mz_Ed: {Mz_Ed:.1f} kN·m<br>"
+                    )
+                    if N_Rd is not None and My_Rd is not None and Mz_Rd is not None:
+                        hover_text += (
+                            f"N_Rd: {N_Rd:.1f} kN<br>"
+                            f"My_Rd: {My_Rd:.1f} kN·m<br>"
+                            f"Mz_Rd: {Mz_Rd:.1f} kN·m<br>"
+                            f"Utilization: {utilization:.1%}<br>"
+                            f"Status: {'✓ PASS' if is_safe else '✗ FAIL'}"
+                        )
+                    else:
+                        hover_text += "Status: Outside boundary"
+                else:
+                    hover_text = name
+
+                # Plot load point (smaller markers)
+                fig.add_trace(go.Scatter3d(
+                    x=[My_Ed],
+                    y=[Mz_Ed],
+                    z=[N_Ed],
+                    mode='markers',
+                    name=name,
+                    marker=dict(
+                        color=color,
+                        size=5,  # Reduced from 8
+                        symbol='circle',
+                        line=dict(color='black', width=1)
+                    ),
+                    hovertemplate=hover_text + '<extra></extra>',
+                    showlegend=True,
+                ))
+
+                # Add vector projection rays if requested
+                if show_vectors and N_Rd is not None and My_Rd is not None and Mz_Rd is not None:
+                    # Solid line from origin to load point
+                    fig.add_trace(go.Scatter3d(
+                        x=[0, My_Ed],
+                        y=[0, Mz_Ed],
+                        z=[0, N_Ed],
+                        mode='lines',
+                        line=dict(color=color, width=3, dash='solid'),
+                        showlegend=False,
+                        hoverinfo='skip',
+                    ))
+
+                    # Dashed line from load point to capacity boundary
+                    fig.add_trace(go.Scatter3d(
+                        x=[My_Ed, My_Rd],
+                        y=[Mz_Ed, Mz_Rd],
+                        z=[N_Ed, N_Rd],
+                        mode='lines',
+                        line=dict(color=color, width=3, dash='dash'),
+                        showlegend=False,
+                        hoverinfo='skip',
+                    ))
+
+        # Add translucent surface LAST (so it doesn't block hover on load points)
+        fig.add_trace(go.Mesh3d(
+            x=My_surf,
+            y=Mz_surf,
+            z=N_surf,
+            opacity=0.3,
+            color='lightblue',
+            alphahull=0,  # Use Delaunay triangulation
+            name='M-M-N Surface',
+            showlegend=True,
+            hoverinfo='skip',
+        ))
+
+        # Update layout
+        plot_title = title if title else "Biaxial M-M-N Interaction Surface"
+        fig.update_layout(
+            title=dict(text=plot_title, font=dict(size=16, color='black')),
+            scene=dict(
+                xaxis_title="My - Major Axis Moment (kN·m)",
+                yaxis_title="Mz - Minor Axis Moment (kN·m)",
+                zaxis_title="N - Axial Force (kN)",
+                xaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray'),
+                yaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray'),
+                zaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray'),
+            ),
+            showlegend=True,
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="right",
+                x=0.99
+            ),
+            width=1000,
+            height=800,
+        )
+
+        # Save if requested
+        if save_path:
+            fig.write_html(save_path)
+            print(f"[OK] Saved plot to {save_path}")
+
+        # Show if requested
+        if show:
+            fig.show()
+
+        return fig
 
     def export_to_json(
         self,

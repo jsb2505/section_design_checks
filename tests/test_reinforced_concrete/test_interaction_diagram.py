@@ -1334,3 +1334,246 @@ class TestConfinedConcrete:
         # Should work without errors
         points = diagram.generate_diagram(n_points=30)
         assert len(points) > 0
+
+    def test_get_capacity_vector_safe_load(
+        self, rectangular_beam_with_rebars, concrete_c30
+    ):
+        """Test get_capacity_vector for a safe load case."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        # Apply a load well within capacity
+        N_Ed = 500.0  # kN
+        M_Ed = 100.0  # kN·m
+
+        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+            N_Ed=N_Ed, M_Ed=M_Ed, n_points=100
+        )
+
+        # Check results
+        assert N_Rd is not None
+        assert M_Rd is not None
+        assert is_safe is True
+        assert 0.0 < utilization < 1.0
+
+        # Capacity should be greater than applied load (linear scaling)
+        assert N_Rd >= N_Ed
+        assert M_Rd >= M_Ed
+
+        # Check that N_Rd and M_Rd are in correct ratio to N_Ed and M_Ed
+        # (should be on same ray from origin)
+        if abs(N_Ed) > 1e-6:
+            ratio_N = N_Rd / N_Ed
+            ratio_M = M_Rd / M_Ed
+            assert abs(ratio_N - ratio_M) < 0.01  # Should be same scaling
+
+    def test_get_capacity_vector_failing_load(
+        self, rectangular_beam_with_rebars, concrete_c30
+    ):
+        """Test get_capacity_vector for an overloaded case."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        # Apply a very large load (likely to fail)
+        N_Ed = 10000.0  # kN - very high
+        M_Ed = 1000.0   # kN·m - very high
+
+        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+            N_Ed=N_Ed, M_Ed=M_Ed, n_points=100
+        )
+
+        # Check results
+        assert N_Rd is not None
+        assert M_Rd is not None
+        assert is_safe is False
+        assert utilization > 1.0
+
+        # Capacity should be less than applied load
+        assert N_Rd < N_Ed
+        assert M_Rd < M_Ed
+
+    def test_get_capacity_vector_origin(
+        self, rectangular_beam_with_rebars, concrete_c30
+    ):
+        """Test get_capacity_vector at origin (no load)."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+            N_Ed=0.0, M_Ed=0.0, n_points=100
+        )
+
+        assert N_Rd == 0.0
+        assert M_Rd == 0.0
+        assert is_safe is True
+        assert utilization == 0.0
+
+    def test_get_capacity_vector_pure_axial(
+        self, rectangular_beam_with_rebars, concrete_c30
+    ):
+        """Test get_capacity_vector for pure axial load."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        N_Ed = 1000.0  # kN
+        M_Ed = 0.0     # No moment
+
+        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+            N_Ed=N_Ed, M_Ed=M_Ed, n_points=100
+        )
+
+        assert N_Rd is not None
+        assert M_Rd is not None
+        # For pure axial, moment should be very small
+        assert abs(M_Rd) < 1.0  # Should be close to zero
+
+    def test_get_capacity_vector_pure_moment(
+        self, rectangular_beam_with_rebars, concrete_c30
+    ):
+        """Test get_capacity_vector for pure moment."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        N_Ed = 0.0      # No axial
+        M_Ed = 150.0    # kN·m
+
+        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+            N_Ed=N_Ed, M_Ed=M_Ed, n_points=100
+        )
+
+        assert N_Rd is not None
+        assert M_Rd is not None
+        # For pure moment, axial should be very small
+        assert abs(N_Rd) < 10.0  # Should be close to zero
+
+    def test_plot_basic(self, rectangular_beam_with_rebars, concrete_c30):
+        """Test basic plot without load points."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        # Should not raise error and return a figure
+        fig = diagram.plot(show=False, n_points=50)
+        assert fig is not None
+
+        # Check that figure has traces (M-N curve and origin)
+        assert len(fig.data) >= 2
+
+    def test_plot_with_load_points(self, rectangular_beam_with_rebars, concrete_c30):
+        """Test plot with load points."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        load_points = [
+            {"N_Ed": 500, "M_Ed": 100, "name": "LC1: Test"},
+            {"N_Ed": 800, "M_Ed": 150, "name": "LC2: Test"},
+        ]
+
+        fig = diagram.plot(
+            load_points=load_points,
+            show_vectors=False,
+            show_metadata=True,
+            show=False,
+            n_points=50
+        )
+
+        assert fig is not None
+        # Should have M-N curve + origin + 2 load points = at least 4 traces
+        assert len(fig.data) >= 4
+
+    def test_plot_with_vectors(self, rectangular_beam_with_rebars, concrete_c30):
+        """Test plot with vector projection rays."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        load_points = [
+            {"N_Ed": 500, "M_Ed": 100, "name": "LC1: Test"},
+        ]
+
+        fig = diagram.plot(
+            load_points=load_points,
+            show_vectors=True,
+            show=False,
+            n_points=50
+        )
+
+        assert fig is not None
+        # Should have more traces due to vector lines
+        # M-N curve + origin + load point + 2 vector lines = at least 5 traces
+        assert len(fig.data) >= 5
+
+    def test_plot_save_to_file(
+        self, rectangular_beam_with_rebars, concrete_c30, tmp_path
+    ):
+        """Test saving plot to HTML file."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        save_path = tmp_path / "test_plot.html"
+
+        fig = diagram.plot(
+            show=False,
+            save_path=str(save_path),
+            n_points=50
+        )
+
+        assert fig is not None
+        assert save_path.exists()
+        assert save_path.stat().st_size > 0  # File should have content
+
+    def test_plot_custom_title(self, rectangular_beam_with_rebars, concrete_c30):
+        """Test plot with custom title."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        custom_title = "Custom Test Title"
+
+        fig = diagram.plot(
+            show=False,
+            title=custom_title,
+            n_points=50
+        )
+
+        assert fig is not None
+        assert fig.layout.title.text == custom_title
+
+    def test_plot_without_metadata(self, rectangular_beam_with_rebars, concrete_c30):
+        """Test plot with metadata disabled."""
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        load_points = [
+            {"N_Ed": 500, "M_Ed": 100, "name": "LC1: Test"},
+        ]
+
+        fig = diagram.plot(
+            load_points=load_points,
+            show_metadata=False,
+            show=False,
+            n_points=50
+        )
+
+        assert fig is not None
+        # Should still create plot, just simpler hover text
+        assert len(fig.data) >= 3

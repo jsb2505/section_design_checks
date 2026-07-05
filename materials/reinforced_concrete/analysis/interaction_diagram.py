@@ -776,6 +776,278 @@ class MNInteractionDiagram:
 
         return (is_safe, utilization)
 
+    def get_capacity_vector(
+        self,
+        N_Ed: float,
+        M_Ed: float,
+        n_points: int = 100
+    ) -> Tuple[Optional[float], Optional[float], bool, float]:
+        """
+        Get capacity point (N_Rd, M_Rd) on the M-N boundary using vector projection.
+
+        This method finds where the ray from origin through (M_Ed, N_Ed) intersects
+        the M-N interaction curve boundary, returning the capacity coordinates.
+
+        Args:
+            N_Ed: Applied axial force in kN (positive = compression)
+            M_Ed: Applied moment in kN·m
+            n_points: Number of points to form the M-N curve from
+
+        Returns:
+            Tuple of (N_Rd, M_Rd, is_safe, utilization)
+            - N_Rd: Design axial capacity at intersection (kN) or None if no intersection
+            - M_Rd: Design moment capacity at intersection (kN·m) or None if no intersection
+            - is_safe: True if utilization <= 1.0
+            - utilization: ||(M_Ed, N_Ed)|| / ||(M_Rd, N_Rd)||
+
+        Example:
+            >>> diagram = create_interaction_diagram(section, concrete)
+            >>> N_Rd, M_Rd, is_safe, util = diagram.get_capacity_vector(N_Ed=1000, M_Ed=150)
+            >>> print(f"Capacity: N_Rd={N_Rd:.1f} kN, M_Rd={M_Rd:.1f} kN·m")
+            >>> print(f"Utilization: {util:.1%}")
+        """
+        # Generate diagram (returns closed convex hull boundary)
+        diagram = self.generate_diagram(n_points=n_points)
+
+        # Extract N and M values
+        N_values = np.array([p.N for p in diagram])
+        M_values = np.array([p.M for p in diagram])
+
+        # Special case: origin point (no load)
+        if abs(M_Ed) < 1e-6 and abs(N_Ed) < 1e-6:
+            return (0.0, 0.0, True, 0.0)
+
+        # Find intersection of ray from origin through (M_Ed, N_Ed) with boundary
+        max_alpha = 0.0
+
+        # Check intersection with each edge of the boundary polygon
+        n_pts = len(M_values)
+        for i in range(n_pts):
+            M1, N1 = M_values[i], N_values[i]
+            M2, N2 = M_values[(i + 1) % n_pts], N_values[(i + 1) % n_pts]
+
+            dM = M2 - M1
+            dN = N2 - N1
+
+            det = M_Ed * (-dN) - N_Ed * (-dM)
+
+            if abs(det) < 1e-10:
+                continue
+
+            alpha = (M1 * (-dN) - N1 * (-dM)) / det
+            s = (M_Ed * N1 - N_Ed * M1) / det
+
+            if alpha > 1e-10 and 0 <= s <= 1:
+                max_alpha = max(max_alpha, alpha)
+
+        # If no intersection found
+        if max_alpha < 1e-10:
+            return (None, None, False, float('inf'))
+
+        # Calculate capacity point coordinates
+        M_Rd = max_alpha * M_Ed
+        N_Rd = max_alpha * N_Ed
+
+        # Utilization ratio
+        utilization = 1.0 / max_alpha
+        is_safe = utilization <= 1.0
+
+        # Convert to Python types
+        return (float(N_Rd), float(M_Rd), bool(is_safe), float(utilization))
+
+    def plot(
+        self,
+        load_points: Optional[List[Dict[str, Any]]] = None,
+        show_vectors: bool = False,
+        show_metadata: bool = True,
+        n_points: int = 100,
+        save_path: Optional[str] = None,
+        show: bool = True,
+        title: Optional[str] = None,
+    ) -> Any:
+        """
+        Plot M-N interaction diagram with optional load points using Plotly.
+
+        Creates an interactive plot with:
+        - M-N interaction curve boundary
+        - Optional load points with color-coded utilization
+        - Optional vector projection rays from origin to boundary
+        - Interactive hover tooltips with metadata
+
+        Args:
+            load_points: List of load case dictionaries with format:
+                {
+                    "N_Ed": float,      # Axial force (kN)
+                    "M_Ed": float,      # Moment (kN·m)
+                    "name": str,        # Load case name (optional)
+                }
+            show_vectors: If True, show vector projection rays from origin through
+                         load points to capacity boundary
+            show_metadata: If True, show metadata in hover tooltips
+            n_points: Number of points to generate M-N curve
+            save_path: If provided, save plot to this file path (HTML format)
+            show: If True, display plot in browser
+            title: Custom plot title (optional)
+
+        Returns:
+            Plotly Figure object
+
+        Example:
+            >>> diagram = create_interaction_diagram(section, concrete)
+            >>> diagram.plot(
+            ...     load_points=[
+            ...         {"N_Ed": 1000, "M_Ed": 150, "name": "LC1: DL+LL"},
+            ...         {"N_Ed": 800, "M_Ed": 200, "name": "LC2: DL+Wind"}
+            ...     ],
+            ...     show_vectors=True,
+            ...     save_path="mn_diagram.html"
+            ... )
+        """
+        try:
+            import plotly.graph_objects as go
+        except ImportError:
+            raise ImportError(
+                "Plotly is required for plotting. Install with: pip install plotly"
+            )
+
+        # Generate M-N diagram
+        diagram_points = self.generate_diagram(n_points=n_points)
+        M_curve = [p.M for p in diagram_points]
+        N_curve = [p.N for p in diagram_points]
+
+        # Create figure
+        fig = go.Figure()
+
+        # Plot M-N curve boundary
+        fig.add_trace(go.Scatter(
+            x=M_curve,
+            y=N_curve,
+            mode='lines',
+            name='M-N Capacity',
+            line=dict(color='black', width=2),
+            hovertemplate='M: %{x:.1f} kN·m<br>N: %{y:.1f} kN<extra></extra>',
+        ))
+
+        # Add origin point (smaller size)
+        fig.add_trace(go.Scatter(
+            x=[0],
+            y=[0],
+            mode='markers',
+            name='Origin',
+            marker=dict(color='black', size=3, symbol='circle'),
+            hovertemplate='Origin<extra></extra>',
+        ))
+
+        # Process load points if provided
+        if load_points:
+            for idx, lp in enumerate(load_points):
+                N_Ed = lp.get("N_Ed", 0.0)
+                M_Ed = lp.get("M_Ed", 0.0)
+                name = lp.get("name", f"Load Case {idx + 1}")
+
+                # Get capacity and utilization
+                N_Rd, M_Rd, is_safe, utilization = self.get_capacity_vector(
+                    N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points
+                )
+
+                # Color coding based on utilization
+                if utilization <= 0.8:
+                    color = 'green'
+                elif utilization <= 1.0:
+                    color = 'orange'
+                else:
+                    color = 'red'
+
+                # Build hover text with metadata
+                if show_metadata:
+                    hover_text = (
+                        f"<b>{name}</b><br>"
+                        f"N_Ed: {N_Ed:.1f} kN<br>"
+                        f"M_Ed: {M_Ed:.1f} kN·m<br>"
+                    )
+                    if N_Rd is not None and M_Rd is not None:
+                        hover_text += (
+                            f"N_Rd: {N_Rd:.1f} kN<br>"
+                            f"M_Rd: {M_Rd:.1f} kN·m<br>"
+                            f"Utilization: {utilization:.1%}<br>"
+                            f"Status: {'✓ PASS' if is_safe else '✗ FAIL'}"
+                        )
+                    else:
+                        hover_text += "Status: Outside boundary"
+                else:
+                    hover_text = name
+
+                # Plot load point (smaller markers)
+                fig.add_trace(go.Scatter(
+                    x=[M_Ed],
+                    y=[N_Ed],
+                    mode='markers',
+                    name=name,
+                    marker=dict(
+                        color=color,
+                        size=6,  # Reduced from 12
+                        symbol='circle',
+                        line=dict(color='black', width=1)
+                    ),
+                    hovertemplate=hover_text + '<extra></extra>',
+                    showlegend=True,
+                ))
+
+                # Add vector projection rays if requested
+                if show_vectors and N_Rd is not None and M_Rd is not None:
+                    # Solid line from origin to load point
+                    fig.add_trace(go.Scatter(
+                        x=[0, M_Ed],
+                        y=[0, N_Ed],
+                        mode='lines',
+                        line=dict(color=color, width=1.5, dash='solid'),
+                        showlegend=False,
+                        hoverinfo='skip',
+                    ))
+
+                    # Dashed line from load point to capacity boundary
+                    fig.add_trace(go.Scatter(
+                        x=[M_Ed, M_Rd],
+                        y=[N_Ed, N_Rd],
+                        mode='lines',
+                        line=dict(color=color, width=1.5, dash='dash'),
+                        showlegend=False,
+                        hoverinfo='skip',
+                    ))
+
+        # Update layout
+        plot_title = title if title else "M-N Interaction Diagram"
+        fig.update_layout(
+            title=dict(text=plot_title, font=dict(size=16, color='black')),
+            xaxis_title="Moment M (kN·m)",
+            yaxis_title="Axial Force N (kN)",
+            hovermode='closest',
+            template='plotly_white',
+            showlegend=True,
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="right",
+                x=0.99
+            ),
+            width=900,
+            height=700,
+        )
+
+        # Add grid
+        fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
+        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
+
+        # Save if requested
+        if save_path:
+            fig.write_html(save_path)
+
+        # Show if requested
+        if show:
+            fig.show()
+
+        return fig
+
     def find_balanced_point(
         self,
         max_concrete_strain: Optional[float] = None,
