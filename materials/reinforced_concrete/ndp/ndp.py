@@ -260,6 +260,14 @@ _NDP_METADATA = {
         "description": "Maximum allowable transverse spacing between shear reinforcement legs",
         "ref": "9.2.2(8)",
     },
+    "as_min_flexural_ratio": {
+        "description": "Minimum flexural longitudinal reinforcement ratio for ULS/SLS detailing",
+        "ref": "9.2.1.1(1) (9.1N)",
+    },
+    "as_max_flexural_ratio": {
+        "description": "Maximum flexural longitudinal reinforcement ratio",
+        "ref": "9.2.1.1(3)",
+    },
 }
 
 
@@ -313,6 +321,8 @@ EN1992_1_1_2004 = {
         "rho_w_min": lambda f_ck, f_yk, f_ctm: 0.08 * sqrt(f_ck) / f_yk,
         "max_link_spacing": _max_link_spacing_ec2,
         "max_leg_spacing": _max_leg_spacing_ec2,
+        "as_min_flexural_ratio": lambda f_ctm, f_yk: max(0.0013, 0.26 * (f_ctm / f_yk)),
+        "as_max_flexural_ratio": 0.04,
     },
 
     # -------------------------------------------------------------------------
@@ -369,6 +379,7 @@ EN1992_1_1_2004 = {
         "rho_w_min": lambda f_ck, f_yk, f_ctm: 0.16 * f_ctm / f_yk,  # (9.5aDE)
         "max_link_spacing": _max_link_spacing_eu_de,
         "max_leg_spacing": _max_leg_spacing_eu_de,
+        "as_min_flexural_ratio": lambda f_ctm, f_yk: 0.0,
     },
 }
 
@@ -422,6 +433,8 @@ EN1992_2_2005 = {
         "s_r_max_lim": None,  # No additional limit in base EC2
         "max_link_spacing": _max_link_spacing_ec2,
         "max_leg_spacing": _max_leg_spacing_ec2,
+        "as_min_flexural_ratio": lambda f_ctm, f_yk: max(0.0013, 0.26 * (f_ctm / f_yk)),
+        "as_max_flexural_ratio": 0.04,
     },
 
     # -------------------------------------------------------------------------
@@ -477,5 +490,6 @@ EN1992_2_2005 = {
         "s_r_max_lim": lambda sigma_s, diameter, f_ct_eff: (sigma_s * diameter) / (3.6 * f_ct_eff),
         "max_link_spacing": _max_link_spacing_eu_de,
         "max_leg_spacing": _max_leg_spacing_eu_de,
+        "as_min_flexural_ratio": lambda f_ctm, f_yk: 0.0,
     },
 }

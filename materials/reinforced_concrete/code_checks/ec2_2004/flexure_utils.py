@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
 import warnings
 
 from materials.reinforced_concrete.constitutive import SteelModelType
+from materials.reinforced_concrete.ndp import get_ndp_callable
 
 if TYPE_CHECKING:
     from materials.reinforced_concrete.geometry import RCSection
@@ -418,9 +419,18 @@ def find_area_of_steel_minimum(b: float, d: float, f_ctm: float, f_yk: float) ->
     Returns:
         A_s,min: The minimum amount of longitudinal reinforcement allowed
     '''
-    # TODO this is a NDP. German NA doesn't give a limit -> 0
-    A_s_min = max(0.0013, 0.26 * (f_ctm / f_yk))
-    return A_s_min * b * d
+    if b <= 0:
+        raise ValueError(f"b must be > 0, got {b}")
+    if d <= 0:
+        raise ValueError(f"d must be > 0, got {d}")
+    if f_ctm < 0:
+        raise ValueError(f"f_ctm must be >= 0, got {f_ctm}")
+    if f_yk <= 0:
+        raise ValueError(f"f_yk must be > 0, got {f_yk}")
+
+    ratio_fn = get_ndp_callable("as_min_flexural_ratio")
+    ratio = float(ratio_fn(f_ctm=float(f_ctm), f_yk=float(f_yk)))
+    return ratio * float(b) * float(d)
 
 
 def find_area_of_steel_maximum(section_area: float) -> float:
@@ -434,8 +444,9 @@ def find_area_of_steel_maximum(section_area: float) -> float:
     Returns:
         A_s,max: The maximum amount of longitudinal reinforcement allowed
     '''
-    # TODO this is a NDP. German NA gives 0.08 however this is for lapped areas
-    # The normal limit is for unlapped area which implicitly doubled to 0.08 at laps.
-    # So they are the same value.
-    return 0.04 * section_area
+    if section_area < 0:
+        raise ValueError(f"section_area must be >= 0, got {section_area}")
 
+    ratio_fn = get_ndp_callable("as_max_flexural_ratio")
+    ratio = float(ratio_fn(section_area=float(section_area)))
+    return ratio * float(section_area)

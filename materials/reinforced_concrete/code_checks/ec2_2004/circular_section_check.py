@@ -604,6 +604,7 @@ class CircularSectionCheck(BaseModel):
         cot_theta_override: Optional[float] = None,
         use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float = 0.95,
+        suppress_warnings: bool = False,
         ignore_compression_steel: bool = False,
         iterate_z: bool = True,
     ) -> CheckResult:
@@ -627,6 +628,7 @@ class CircularSectionCheck(BaseModel):
                 EC2 Eq. 6.13 (V_Rd,s = V_Ed). If False (default), determine cot(θ)
                 from rearranged EC2 Eq. 6.14 / V_Rd,max.
             warning_threshold: Utilization threshold for warnings
+            suppress_warnings: If True, suppress warnings emitted during this check.
             ignore_compression_steel: If True, ignore compression reinforcement
             iterate_z: If True, iteratively recalculate z (default True for circular)
 
@@ -665,6 +667,7 @@ class CircularSectionCheck(BaseModel):
             cot_theta_override=effective_cot_theta,
             use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
             warning_threshold=warning_threshold,
+            suppress_warnings=suppress_warnings,
             ignore_compression_steel=ignore_compression_steel,
             iterate_z=iterate_z,
         )

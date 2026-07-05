@@ -6,6 +6,7 @@ The tension shift rule is now automatically applied when M_cap is provided.
 
 import pytest
 import numpy as np
+import warnings
 from materials.reinforced_concrete.geometry import (
     create_rectangular_section,
     create_linear_rebar_layer,
@@ -13,6 +14,7 @@ from materials.reinforced_concrete.geometry import (
 from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar, ShearRebar
 from materials.reinforced_concrete.code_checks.ec2_2004.bending_check import BendingCheck
 from materials.reinforced_concrete.code_checks.base_check import CheckStatus
+from materials.reinforced_concrete.ndp import CountryCode, get_ndp_context, set_ndp_context
 
 
 @pytest.fixture
@@ -320,6 +322,121 @@ class TestWarningThreshold:
             assert result_high.status == CheckStatus.PASS
 
 
+class TestLongitudinalReinforcementLimits:
+    """Tests for A_s,min and A_s,max checking and warning behaviour."""
+
+    @staticmethod
+    def _create_under_reinforced_beam() -> object:
+        section = create_rectangular_section(width=300, height=500, section_name="Under Reinforced")
+        rebar = Rebar(grade="B500B", diameter=8)
+
+        bottom = create_linear_rebar_layer(
+            rebar=rebar,
+            n_bars=2,
+            start_point=(90, 50),
+            end_point=(210, 50),
+            layer_name="bottom",
+        )
+        top = create_linear_rebar_layer(
+            rebar=rebar,
+            n_bars=2,
+            start_point=(90, 450),
+            end_point=(210, 450),
+            layer_name="top",
+        )
+        section.add_rebar_group(bottom)
+        section.add_rebar_group(top)
+        return section
+
+    @staticmethod
+    def _create_over_reinforced_beam() -> object:
+        section = create_rectangular_section(width=300, height=500, section_name="Over Reinforced")
+        rebar = Rebar(grade="B500B", diameter=40)
+
+        bottom = create_linear_rebar_layer(
+            rebar=rebar,
+            n_bars=6,
+            start_point=(30, 50),
+            end_point=(270, 50),
+            layer_name="bottom",
+        )
+        top = create_linear_rebar_layer(
+            rebar=rebar,
+            n_bars=6,
+            start_point=(30, 450),
+            end_point=(270, 450),
+            layer_name="top",
+        )
+        section.add_rebar_group(bottom)
+        section.add_rebar_group(top)
+        return section
+
+    def test_minimum_longitudinal_reinforcement_warns_when_not_satisfied(self):
+        section = self._create_under_reinforced_beam()
+        concrete = ConcreteMaterial(grade="C30/37")
+        check = BendingCheck(section=section, concrete=concrete)
+
+        with pytest.warns(UserWarning, match="Minimum tension reinforcement not satisfied"):
+            result = check.perform_check(M_Ed=120.0, N_Ed=200.0)
+
+        assert result.details["A_s_min_check_applicable"] is True
+        assert result.details["A_s_min_satisfied"] is False
+        assert result.details["A_s_min_required"] is not None
+        assert result.details["A_s_min_provided_tension"] is not None
+        assert result.details["A_s_min_provided_tension"] < result.details["A_s_min_required"]
+
+    def test_minimum_longitudinal_reinforcement_warning_can_be_suppressed(self):
+        section = self._create_under_reinforced_beam()
+        concrete = ConcreteMaterial(grade="C30/37")
+        check = BendingCheck(section=section, concrete=concrete)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = check.perform_check(M_Ed=120.0, N_Ed=200.0, suppress_warnings=True)
+
+        assert len(caught) == 0
+        assert result.details["A_s_min_satisfied"] is False
+
+    def test_maximum_longitudinal_reinforcement_warns_when_not_satisfied(self):
+        section = self._create_over_reinforced_beam()
+        concrete = ConcreteMaterial(grade="C30/37")
+        check = BendingCheck(section=section, concrete=concrete)
+
+        with pytest.warns(UserWarning, match="Maximum longitudinal reinforcement exceeded"):
+            result = check.perform_check(M_Ed=100.0, N_Ed=200.0)
+
+        assert result.details["A_s_max_satisfied"] is False
+        assert result.details["A_s_total_provided"] > result.details["A_s_max_allowed"]
+
+    def test_maximum_longitudinal_reinforcement_warning_can_be_suppressed(self):
+        section = self._create_over_reinforced_beam()
+        concrete = ConcreteMaterial(grade="C30/37")
+        check = BendingCheck(section=section, concrete=concrete)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = check.perform_check(M_Ed=100.0, N_Ed=200.0, suppress_warnings=True)
+
+        assert len(caught) == 0
+        assert result.details["A_s_max_satisfied"] is False
+
+    def test_eu_de_sets_as_min_to_zero(self):
+        section = self._create_under_reinforced_beam()
+        concrete = ConcreteMaterial(grade="C30/37")
+        check = BendingCheck(section=section, concrete=concrete)
+
+        old_code, old_country = get_ndp_context()
+        try:
+            set_ndp_context(country=CountryCode.EU_DE)
+            result = check.perform_check(M_Ed=120.0, N_Ed=200.0, suppress_warnings=True)
+        finally:
+            set_ndp_context(code=old_code, country=old_country)
+
+        assert result.details["A_s_min_check_applicable"] is True
+        assert result.details["A_s_min_required"] == pytest.approx(0.0, abs=1e-12)
+        assert result.details["A_s_min_satisfied"] is True
+
+
 class TestGetMomentCapacity:
     """Tests for get_moment_capacity() method."""
 
@@ -533,6 +650,17 @@ class TestCheckResultDetails:
             "section_name",
             "concrete_grade",
             "reinforcement_ratio",
+            "A_s_total_provided",
+            "A_s_max_allowed",
+            "A_s_max_satisfied",
+            "A_s_min_check_applicable",
+            "A_s_min_required",
+            "A_s_min_provided_tension",
+            "A_s_min_satisfied",
+            "A_s_min_breadth_b",
+            "A_s_min_effective_depth_d",
+            "A_s_min_f_ctm",
+            "A_s_min_f_yk",
         ]
 
         for key in expected_keys:
