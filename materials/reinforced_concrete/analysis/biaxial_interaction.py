@@ -282,7 +282,9 @@ class BiaxialMNInteractionSurface:
         # Multi-tier cache for generated surfaces
         self._dense_surface_points: tuple[BiaxialInteractionPoint, ...] | None = None
         self._dense_params: tuple[int, int] | None = None
+        self._dense_grid_indices: list[tuple[int, int]] = []
         self._surface_cache: dict[tuple[int, int], tuple[BiaxialInteractionPoint, ...]] = {}
+        self._surface_indices_cache: dict[tuple[int, int], list[tuple[int, int]]] = {}
         self._hull_cache: dict[tuple[int, int], ConvexHull] = {}
         self._grid_indices: list[tuple[int, int]] = []
         self._grid_shape: tuple[int, int] = (0, 0)
@@ -876,8 +878,13 @@ class BiaxialMNInteractionSurface:
 
         self._dense_surface_points = pts
         self._dense_params = params
+        # _generate_surface_raw stored its (i_axial, j_angle) metadata in
+        # _grid_indices; keep a dense-grid copy so later downsampling calls
+        # can map sparse points even after _grid_indices is rewritten.
+        self._dense_grid_indices = list(self._grid_indices)
         # Invalidate downstream caches
         self._surface_cache.clear()
+        self._surface_indices_cache.clear()
         self._hull_cache.clear()
         return pts
 
@@ -978,21 +985,25 @@ class BiaxialMNInteractionSurface:
         n_dense_axial: int,
         n_out_angles: int,
         n_out_axial: int,
-    ) -> tuple[BiaxialInteractionPoint, ...]:
+        dense_grid_indices: list[tuple[int, int]] | None = None,
+    ) -> tuple[tuple[BiaxialInteractionPoint, ...], list[tuple[int, int]]]:
         """
         Downsample dense surface grid to requested resolution by taking evenly spaced indices.
 
         Uses integer step sizes (floor division) to ensure uniform spacing and preserve
         any symmetry present in the dense grid.
+
+        Returns the downsampled points together with their (i_axial, j_angle)
+        positions in the OUTPUT grid, so sparse grids (where some dense points
+        failed to converge) can still be reshaped correctly downstream.
+        ``dense_grid_indices`` are the (i_axial, j_angle) positions of
+        ``dense_points`` in the DENSE grid; required to select from a sparse grid.
         """
         if n_out_angles >= n_dense_angles and n_out_axial >= n_dense_axial:
-            return dense_points
-
-        # Points are in order: for N_level in levels: for angle in angles
-        total_dense = n_dense_axial * n_dense_angles
-        if len(dense_points) < total_dense:
-            # Some points failed; can't reliably index, return as-is
-            return dense_points
+            if dense_grid_indices is not None and len(dense_grid_indices) == len(dense_points):
+                return dense_points, list(dense_grid_indices)
+            # Full grid assumed: points are in order (for N_level: for angle)
+            return dense_points, [divmod(k, n_dense_angles) for k in range(len(dense_points))]
 
         # Use exact step-based indexing (dense sizes are exact multiples of output)
         axial_step = max(1, n_dense_axial // n_out_axial)
@@ -1001,13 +1012,31 @@ class BiaxialMNInteractionSurface:
         angle_indices = list(range(0, n_dense_angles, angle_step))[:n_out_angles]
 
         result: list[BiaxialInteractionPoint] = []
-        for ai in axial_indices:
-            for aj in angle_indices:
-                idx = ai * n_dense_angles + aj
-                if idx < len(dense_points):
-                    result.append(dense_points[idx])
+        out_indices: list[tuple[int, int]] = []
 
-        return tuple(result)
+        # Points are in order: for N_level in levels: for angle in angles
+        total_dense = n_dense_axial * n_dense_angles
+        if len(dense_points) >= total_dense:
+            # Full grid — positional indexing is reliable
+            for oi, ai in enumerate(axial_indices):
+                for oj, aj in enumerate(angle_indices):
+                    result.append(dense_points[ai * n_dense_angles + aj])
+                    out_indices.append((oi, oj))
+            return tuple(result), out_indices
+
+        # Sparse grid (some points failed to converge)
+        if dense_grid_indices is None or len(dense_grid_indices) != len(dense_points):
+            # No reliable position metadata; return as-is (best effort)
+            return dense_points, [divmod(k, n_dense_angles) for k in range(len(dense_points))]
+
+        by_cell = dict(zip(dense_grid_indices, dense_points))
+        for oi, ai in enumerate(axial_indices):
+            for oj, aj in enumerate(angle_indices):
+                pt = by_cell.get((ai, aj))
+                if pt is not None:
+                    result.append(pt)
+                    out_indices.append((oi, oj))
+        return tuple(result), out_indices
 
     def generate_surface_pivot(
         self,
@@ -1034,6 +1063,10 @@ class BiaxialMNInteractionSurface:
         key = (n_angles, n_axial_levels)
         cached = self._surface_cache.get(key)
         if cached is not None:
+            cached_indices = getattr(self, "_surface_indices_cache", {}).get(key)
+            if cached_indices is not None:
+                self._grid_indices = list(cached_indices)
+                self._grid_shape = (n_axial_levels, n_angles)
             return cached
 
         # Default dense resolution: at least 4x oversample, exact multiple of output
@@ -1049,15 +1082,20 @@ class BiaxialMNInteractionSurface:
             n_dense_axial=n_dense_axial,
         )
 
-        result = self._downsample_surface(
+        result, out_indices = self._downsample_surface(
             dense_points=dense_pts,
             n_dense_angles=n_dense_angles,
             n_dense_axial=n_dense_axial,
             n_out_angles=n_angles,
             n_out_axial=n_axial_levels,
+            dense_grid_indices=getattr(self, "_dense_grid_indices", None),
         )
 
+        self._grid_indices = list(out_indices)
+        self._grid_shape = (n_axial_levels, n_angles)
         self._surface_cache[key] = result
+        if hasattr(self, "_surface_indices_cache"):
+            self._surface_indices_cache[key] = list(out_indices)
         return result
 
     def _prepare_surface_matrices(
@@ -1088,9 +1126,12 @@ class BiaxialMNInteractionSurface:
             Mz_raw = np.full((n_axial_levels, n_angles), np.nan)
             if hasattr(self, '_grid_indices') and len(self._grid_indices) == len(surface_pts):
                 for pt, (i, j) in zip(surface_pts, self._grid_indices):
-                    N_raw[i, j] = pt.N
-                    My_raw[i, j] = pt.My
-                    Mz_raw[i, j] = pt.Mz
+                    # Guard against stale indices from a different grid
+                    # resolution — out-of-bounds points become NaN holes.
+                    if i < n_axial_levels and j < n_angles:
+                        N_raw[i, j] = pt.N
+                        My_raw[i, j] = pt.My
+                        Mz_raw[i, j] = pt.Mz
             else:
                 # Fallback: pack sequentially (best effort)
                 for k, pt in enumerate(surface_pts):
