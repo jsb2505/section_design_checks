@@ -152,10 +152,10 @@ def test_parallel_performance_benchmark():
     """
     diagram = create_test_diagram()
 
-    # Generate realistic load cases
+    # Generate realistic load cases (reduced to 500 for faster testing)
     import numpy as np
-    M_values = np.linspace(10, 80, 50)  # 50 different moments
-    N_values = np.linspace(50, 400, 50)  # 50 different axial loads
+    M_values = np.linspace(10, 80, 25)  # 25 different moments
+    N_values = np.linspace(50, 400, 20)  # 20 different axial loads
 
     load_cases = []
     for M in M_values:

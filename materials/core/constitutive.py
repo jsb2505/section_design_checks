@@ -105,6 +105,40 @@ class BaseConstitutiveModel(BaseModel, ABC):
         """
         pass
 
+    def get_tangent_modulus(self, strain: float) -> float:
+        """
+        Calculate tangent modulus E_t = dσ/dε at given strain.
+
+        Default implementation uses numerical differentiation.
+        Override for analytical tangent modulus for better performance.
+
+        Args:
+            strain: Strain value (dimensionless)
+
+        Returns:
+            Tangent modulus in MPa (dσ/dε)
+        """
+        # Numerical differentiation (2-point central difference)
+        h = 1e-8
+        stress_plus = self.get_stress(strain + h)
+        stress_minus = self.get_stress(strain - h)
+        return (stress_plus - stress_minus) / (2 * h)
+
+    def get_tangent_modulus_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """
+        Calculate tangent modulus for an array of strains.
+
+        Default implementation vectorizes get_tangent_modulus().
+        Override for analytical vectorization for better performance.
+
+        Args:
+            strains: Array of strain values
+
+        Returns:
+            Array of tangent moduli in MPa
+        """
+        return np.vectorize(self.get_tangent_modulus)(strains)
+
     def __repr__(self) -> str:
         """String representation."""
         return f"{self.__class__.__name__}(name='{self.name}')"

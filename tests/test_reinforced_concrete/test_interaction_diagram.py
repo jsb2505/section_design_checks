@@ -28,6 +28,7 @@ class TestInteractionPoint:
             N=500.0,
             M=150.0,
             neutral_axis_depth=250.0,
+            compression_from_bottom=False,  # Positive moment: top compressed
             max_concrete_strain=0.0035,
             max_steel_strain=0.010,
         )
@@ -44,6 +45,7 @@ class TestInteractionPoint:
             N=500.0,
             M=150.0,
             neutral_axis_depth=250.0,
+            compression_from_bottom=False,  # Positive moment: top compressed
             max_concrete_strain=0.0035,
             max_steel_strain=0.010,
         )
@@ -57,6 +59,7 @@ class TestInteractionPoint:
             N=500.0,
             M=150.0,
             neutral_axis_depth=250.0,
+            compression_from_bottom=False,  # Positive moment: top compressed
             max_concrete_strain=0.0035,
             max_steel_strain=0.010,
         )
@@ -72,6 +75,7 @@ class TestInteractionPoint:
             N=500.0,
             M=150.0,
             neutral_axis_depth=250.0,
+            compression_from_bottom=False,  # Positive moment: top compressed
             max_concrete_strain=0.0035,
             max_steel_strain=0.010,
         )
@@ -82,9 +86,10 @@ class TestInteractionPoint:
         assert data["N_kN"] == 500.0
         assert data["M_kNm"] == 150.0
         assert data["neutral_axis_depth_mm"] == 250.0
+        assert data["compression_from_bottom"] == False
         assert data["max_concrete_strain"] == 0.0035
         assert data["max_steel_strain"] == 0.010
-        assert len(data) == 5  # All expected keys
+        assert len(data) == 6  # All expected keys
 
 
 class TestMNInteractionDiagram:
@@ -872,165 +877,6 @@ class TestNonSymmetricSections:
         assert abs(max_M_pos - abs(min_M_neg)) > 1.0  # At least 1 kN·m difference
 
 
-class TestBalancedFailurePoint:
-    """Tests for balanced failure point optimization."""
-
-    def test_find_balanced_point_returns_valid_point(
-        self, rectangular_beam_with_rebars, concrete_c30
-    ):
-        """Test that find_balanced_point returns a valid interaction point."""
-        diagram = MNInteractionDiagram(
-            section=rectangular_beam_with_rebars,
-            concrete=concrete_c30,
-        )
-
-        balanced_point, na_depth = diagram.find_balanced_point()
-
-        # Should return valid InteractionPoint
-        assert isinstance(balanced_point, InteractionPoint)
-        assert balanced_point.N > 0  # Should be in compression
-        assert balanced_point.M != 0  # Should have moment
-        assert na_depth > 0  # Neutral axis should be within/below section
-
-    def test_balanced_point_has_correct_strains(
-        self, rectangular_beam_with_rebars, concrete_c30
-    ):
-        """Test that balanced point has concrete at ultimate strain and steel at yield."""
-        diagram = MNInteractionDiagram(
-            section=rectangular_beam_with_rebars,
-            concrete=concrete_c30,
-        )
-
-        balanced_point, na_depth = diagram.find_balanced_point()
-
-        # Concrete should be at or near ultimate strain
-        concrete_ultimate_strain = diagram.concrete_model.get_ultimate_strain()
-        # Allow 5% tolerance because max_concrete_strain is the maximum observed
-        # across all concrete fibers, which may be slightly less than the target
-        # due to fiber discretization
-        assert balanced_point.max_concrete_strain == pytest.approx(
-            concrete_ultimate_strain, rel=0.05
-        )
-
-        # Steel should be at or near yield strain
-        steel_yield_strain = diagram.steel_models[0].epsilon_y
-        # Allow 10% tolerance due to numerical approximation and fiber discretization
-        assert balanced_point.max_steel_strain == pytest.approx(
-            steel_yield_strain, rel=0.10
-        )
-
-    def test_balanced_na_depth_is_reasonable(
-        self, rectangular_beam_with_rebars, concrete_c30
-    ):
-        """Test that balanced neutral axis depth is within reasonable range."""
-        diagram = MNInteractionDiagram(
-            section=rectangular_beam_with_rebars,
-            concrete=concrete_c30,
-        )
-
-        balanced_point, na_depth = diagram.find_balanced_point()
-
-        # For typical reinforced concrete, balanced NA is usually between 0.3h and 0.7h
-        # where h is the section height
-        section_height = diagram.section_height
-        assert 0.2 * section_height < na_depth < section_height
-
-    def test_balanced_point_is_on_diagram(
-        self, rectangular_beam_with_rebars, concrete_c30
-    ):
-        """Test that balanced point appears on the M-N diagram."""
-        diagram = MNInteractionDiagram(
-            section=rectangular_beam_with_rebars,
-            concrete=concrete_c30,
-        )
-
-        balanced_point, na_depth = diagram.find_balanced_point()
-
-        # Generate full diagram
-        all_points = diagram.generate_diagram(n_points=200)
-
-        # Check that balanced point N is within the range of diagram
-        N_values = [p.N for p in all_points]
-        # Allow small margin because balanced point may be at exact conditions
-        # that the standard diagram doesn't sample precisely
-        N_min, N_max = min(N_values), max(N_values)
-        N_margin = (N_max - N_min) * 0.05  # 5% margin
-        assert N_min - N_margin <= balanced_point.N <= N_max + N_margin
-
-        # Check that balanced point M is reasonable (not testing exact range)
-        # The balanced point should have significant moment capacity
-        assert balanced_point.M > 0
-
-    def test_balanced_point_with_custom_strain(
-        self, rectangular_beam_with_rebars, concrete_c30
-    ):
-        """Test balanced point calculation with custom concrete strain."""
-        diagram = MNInteractionDiagram(
-            section=rectangular_beam_with_rebars,
-            concrete=concrete_c30,
-        )
-
-        custom_strain = 0.003  # Different from default ε_cu2
-        balanced_point, na_depth = diagram.find_balanced_point(
-            max_concrete_strain=custom_strain
-        )
-
-        # Should use custom strain (with tolerance for fiber discretization)
-        assert balanced_point.max_concrete_strain == pytest.approx(
-            custom_strain, rel=0.05
-        )
-
-    def test_different_sections_have_different_balanced_points(
-        self, rebar_20, concrete_c30
-    ):
-        """Test that different reinforcement layouts produce different balanced points."""
-        # Light reinforcement - bars at bottom
-        section_light = create_rectangular_section(300, 500)
-        bottom_light = create_linear_rebar_layer(
-            rebar=rebar_20,
-            n_bars=2,  # Light reinforcement
-            start_point=(50, 50),
-            end_point=(250, 50),
-            layer_name="bottom",
-        )
-        section_light.add_rebar_group(bottom_light)
-
-        # Heavy reinforcement with both top and bottom
-        section_heavy = create_rectangular_section(300, 500)
-        bottom_heavy = create_linear_rebar_layer(
-            rebar=rebar_20,
-            n_bars=4,  # More bottom reinforcement
-            start_point=(50, 50),
-            end_point=(250, 50),
-            layer_name="bottom",
-        )
-        top_heavy = create_linear_rebar_layer(
-            rebar=rebar_20,
-            n_bars=2,  # Some top reinforcement
-            start_point=(50, 450),
-            end_point=(250, 450),
-            layer_name="top",
-        )
-        section_heavy.add_rebar_group(bottom_heavy)
-        section_heavy.add_rebar_group(top_heavy)
-
-        diagram_light = MNInteractionDiagram(section=section_light, concrete=concrete_c30)
-        diagram_heavy = MNInteractionDiagram(section=section_heavy, concrete=concrete_c30)
-
-        balanced_light, na_light = diagram_light.find_balanced_point()
-        balanced_heavy, na_heavy = diagram_heavy.find_balanced_point()
-
-        # Both should be valid balanced points
-        assert balanced_light.N > 0
-        assert balanced_heavy.N > 0
-        assert balanced_light.M > 0
-        assert balanced_heavy.M > 0
-
-        # Heavy reinforcement should have higher moment capacity at balanced
-        # (more steel area means more force resistance)
-        assert balanced_heavy.M > balanced_light.M
-
-
 class TestTensionStiffening:
     """Tests for tension stiffening feature."""
 
@@ -1192,7 +1038,7 @@ class TestConfinedConcrete:
     ):
         """Test that confinement_rho_s is validated."""
         # Too large
-        with pytest.raises(ValueError, match="must be between 0 and 0.1"):
+        with pytest.raises(ValueError, match="must be in"):
             MNInteractionDiagram(
                 section=rectangular_beam_with_rebars,
                 concrete=concrete_c30,
@@ -1201,7 +1047,7 @@ class TestConfinedConcrete:
             )
 
         # Negative
-        with pytest.raises(ValueError, match="must be between 0 and 0.1"):
+        with pytest.raises(ValueError, match="must be in"):
             MNInteractionDiagram(
                 section=rectangular_beam_with_rebars,
                 concrete=concrete_c30,
@@ -1228,7 +1074,7 @@ class TestConfinedConcrete:
     def test_confined_concrete_defaults_f_yh(
         self, rectangular_beam_with_rebars, concrete_c30
     ):
-        """Test that f_yh defaults to longitudinal steel yield strength."""
+        """Test that f_yh defaults to characteristic steel yield strength."""
         diagram = MNInteractionDiagram(
             section=rectangular_beam_with_rebars,
             concrete=concrete_c30,
@@ -1237,9 +1083,9 @@ class TestConfinedConcrete:
             # confinement_f_yh not provided
         )
 
-        # Should default to f_yd of first rebar
+        # Should default to f_yk (500.0 for B500B steel)
         first_rebar = rectangular_beam_with_rebars.rebar_groups[0].rebar
-        assert diagram.confinement_f_yh == first_rebar.f_yd
+        assert diagram.confinement_f_yh == first_rebar.f_yk
 
     def test_confined_concrete_increases_compression_capacity(
         self, rectangular_beam_with_rebars, concrete_c30

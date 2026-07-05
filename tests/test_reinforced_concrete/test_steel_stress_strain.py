@@ -103,9 +103,10 @@ class TestSteelStressStrainEC2:
         assert stress == pytest.approx(steel_b500b.f_t, rel=1e-3)
 
     def test_beyond_ultimate(self, model_inclined, steel_b500b):
-        """Test stress beyond ultimate strain."""
+        """Test stress beyond ultimate strain - maintains ultimate stress."""
         stress = model_inclined.get_stress(steel_b500b.epsilon_ud + 0.01)
-        assert stress == 0.0
+        # New behavior: maintains ultimate stress f_t beyond ultimate strain
+        assert stress == pytest.approx(steel_b500b.f_t, rel=1e-3)
 
     def test_compression_elastic(self, model_inclined, steel_b500b):
         """Test elastic compression."""

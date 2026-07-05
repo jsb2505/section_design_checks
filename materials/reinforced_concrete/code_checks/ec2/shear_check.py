@@ -73,7 +73,6 @@ class ShearCheck(BaseCodeCheck):
         use_rigorous: Use solver-based approach for NA and lever arm (default: True)
         concrete_model_type: Concrete stress-strain model (for rigorous mode)
         steel_branch_type: Steel stress-strain branch (for rigorous mode)
-        z_override: Optional lever arm override in mm (ignores computed value)
 
     Example (new API):
         >>> from materials.reinforced_concrete.geometry import create_rectangular_section
@@ -160,15 +159,6 @@ class ShearCheck(BaseCodeCheck):
     steel_branch_type: SteelBranchType = Field(
         default="inclined",
         description="Steel stress-strain branch type (used if use_rigorous=True)",
-    )
-
-    # ===========================
-    # Optional overrides
-    # ===========================
-
-    z_override: Optional[float] = Field(
-        default=None,
-        description="Lever arm override in mm (ignores computed value if provided)",
     )
 
     # ===========================
@@ -338,9 +328,8 @@ class ShearCheck(BaseCodeCheck):
         """
         Lever arm for this load case.
 
-        If z_override provided: uses override value
-        If rigorous: computes from force resultant centroids
-        If approximate: uses 0.9d
+        If use_rigorous=True: computes from force resultant centroids
+        If use_rigorous=False: uses 0.9d approximation
 
         Args:
             M_Ed: Design moment in kN·m
@@ -352,9 +341,6 @@ class ShearCheck(BaseCodeCheck):
         Returns:
             Lever arm in mm
         """
-        if self.z_override is not None:
-            return self.z_override
-
         if not self.use_rigorous or self._diagram is None:
             return 0.9 * d  # EC2 approximation
 
@@ -412,9 +398,9 @@ class ShearCheck(BaseCodeCheck):
             eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
         return self._compute_rho_l_from_strains(eps_top, eps_bottom, d)
 
-    # ===========================
+    # =================================
     # Helper methods for rigorous mode
-    # ===========================
+    # =================================
 
     def _compute_rho_l_from_strains(
         self,
@@ -587,11 +573,11 @@ class ShearCheck(BaseCodeCheck):
         f_ck = self.concrete.f_ck
         return 0.6 * (1 - f_ck / 250)
 
-    def _find_V_Rd_c(self, d: float, rho_l: float, sigma_cp: float) -> float:
+    def find_V_Rd_c(self, d: float, rho_l: float, sigma_cp: float) -> float:
         """
         Design shear resistance without shear reinforcement (§6.2.2, Eq. 6.2).
 
-        Internal method - takes computed parameters.
+        Public method - takes computed parameters.
 
         Args:
             d: Effective depth in mm
@@ -616,11 +602,11 @@ class ShearCheck(BaseCodeCheck):
 
         return max(V_Rd_c, V_Rd_c_min) / 1000  # Convert to kN
 
-    def _find_V_Rd_s(self, cot_theta: float, z: float) -> float:
+    def find_V_Rd_s(self, cot_theta: float, z: float) -> float:
         """
         Shear resistance of shear reinforcement (§6.2.3(3), Eq. 6.8).
 
-        Internal method - takes computed parameters.
+        Public method - takes computed parameters.
 
         Args:
             cot_theta: Cotangent of strut angle (pre-clamped)
@@ -638,11 +624,11 @@ class ShearCheck(BaseCodeCheck):
         V_Rd_s = A_sw_over_s * z * f_ywd * cot_theta
         return V_Rd_s / 1000
 
-    def _find_V_Rd_max(self, cot_theta: float, z: float, sigma_cp: float) -> float:
+    def find_V_Rd_max(self, cot_theta: float, z: float, sigma_cp: float) -> float:
         """
         Maximum shear resistance limited by crushing of compression struts (§6.2.3, Eq. 6.9).
 
-        Internal method - takes computed parameters.
+        Public method - takes computed parameters.
 
         Args:
             cot_theta: Cotangent of strut angle (pre-clamped)
@@ -752,9 +738,9 @@ class ShearCheck(BaseCodeCheck):
         rho_l = self.find_rho_l(M_Ed, N_Ed, d, eps_top, eps_bottom)
 
         # Compute capacities
-        V_Rd_c = self._find_V_Rd_c(d, rho_l, sigma_cp)
-        V_Rd_s = self._find_V_Rd_s(cot_theta_used, z)
-        V_Rd_max = self._find_V_Rd_max(cot_theta_used, z, sigma_cp)
+        V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
+        V_Rd_s = self.find_V_Rd_s(cot_theta_used, z)
+        V_Rd_max = self.find_V_Rd_max(cot_theta_used, z, sigma_cp)
 
         # Determine governing capacity
         if self.shear_reinforcement is None:
@@ -858,7 +844,7 @@ class ShearCheck(BaseCodeCheck):
         sigma_cp = self.find_sigma_cp(N_Ed)
         rho_l = self.find_rho_l(M_Ed, N_Ed, d)
 
-        V_Rd_c = self._find_V_Rd_c(d, rho_l, sigma_cp)
+        V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
 
         if V_Ed <= V_Rd_c:
             return 0.0

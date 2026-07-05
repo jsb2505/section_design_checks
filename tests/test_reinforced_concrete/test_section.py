@@ -58,7 +58,7 @@ class TestRebarGroup:
     def test_positions_too_close(self, rebar_20):
         """Test that bars too close together are rejected."""
         positions = [Point2D(x=50, y=50), Point2D(x=50.5, y=50)]  # < 1mm apart
-        with pytest.raises(ValidationError, match="too close"):
+        with pytest.raises(ValidationError, match="Rebars overlap"):
             RebarGroup(rebar=rebar_20, positions=positions)
 
     def test_single_bar_group(self, rebar_20):
@@ -128,7 +128,7 @@ class TestRCSection:
         positions = [Point2D(x=400, y=50)]  # x > 300
         group = RebarGroup(rebar=rebar_20, positions=positions)
 
-        with pytest.raises(ValueError, match="outside section"):
+        with pytest.raises(ValueError, match="not fully within the section outline"):
             rectangular_beam.add_rebar_group(group)
 
     def test_total_steel_area_empty(self, rectangular_beam):
@@ -193,9 +193,13 @@ class TestRCSection:
         assert d == pytest.approx(450.0)
 
     def test_get_effective_depth_bottom(self, rectangular_beam_with_rebars):
-        """Test effective depth from bottom."""
-        d = rectangular_beam_with_rebars.get_effective_depth("bottom")
-        # Steel at y = 50
+        """Test effective depth from bottom.
+
+        When compression is from bottom, we need to explicitly specify tension_zone
+        since rebars are only at bottom (would be compression zone by default).
+        """
+        d = rectangular_beam_with_rebars.get_effective_depth("bottom", tension_zone="bottom")
+        # Steel at y = 50, measured from bottom (y=0)
         assert d == pytest.approx(50.0)
 
     def test_repr(self, rectangular_beam):
@@ -244,7 +248,8 @@ class TestCreateCircularSection:
 
     def test_create_with_origin(self):
         """Test creating with custom origin."""
-        section = create_circular_section(400, origin=(100, 100))
+        # With hook_ref=0 (centered), origin is the center
+        section = create_circular_section(400, origin=(100, 100), hook_ref=0)
 
         cx, cy = section.get_centroid()
         assert cx == pytest.approx(100.0, abs=1.0)

@@ -47,12 +47,12 @@ class TestRebar:
 
     def test_diameter_validation_too_small(self):
         """Test that non-standard diameters are rejected."""
-        with pytest.raises(ValidationError, match="not a standard size"):
+        with pytest.raises(ValidationError, match="Input should be"):
             Rebar(diameter=4, grade="B500B")
 
     def test_diameter_validation_too_large(self):
         """Test that non-standard diameters are rejected."""
-        with pytest.raises(ValidationError, match="not a standard size"):
+        with pytest.raises(ValidationError, match="Input should be"):
             Rebar(diameter=60, grade="B500B")
 
     def test_diameter_validation_negative(self):
@@ -104,14 +104,14 @@ class TestShearRebar:
         assert shear_links.area_per_unit_length == pytest.approx(expected, rel=1e-6)
 
     def test_rho_w_vertical_links(self, shear_links):
-        """Test rho_w for vertical links."""
+        """Test a_sw_over_s_sin_alpha for vertical links."""
         # For α = 90°, sin(α) = 1
         total_area = 2 * math.pi * 10**2 / 4
         expected = total_area / 200  # A_sw / (s · sin(α))
-        assert shear_links.rho_w == pytest.approx(expected, rel=1e-6)
+        assert shear_links.a_sw_over_s_sin_alpha == pytest.approx(expected, rel=1e-6)
 
     def test_rho_w_inclined_links(self):
-        """Test rho_w for inclined links."""
+        """Test a_sw_over_s_sin_alpha for inclined links."""
         links = ShearRebar(
             diameter=10,
             grade="B500B",
@@ -121,7 +121,7 @@ class TestShearRebar:
         )
         total_area = 2 * math.pi * 10**2 / 4
         expected = total_area / (200 * math.sin(math.radians(45)))
-        assert links.rho_w == pytest.approx(expected, rel=1e-6)
+        assert links.a_sw_over_s_sin_alpha == pytest.approx(expected, rel=1e-6)
 
     def test_spacing_validation(self):
         """Test that spacing must be positive."""

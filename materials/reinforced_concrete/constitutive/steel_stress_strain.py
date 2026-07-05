@@ -199,6 +199,85 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         """Return yield strength used by the model."""
         return float(self.f_y)
 
+    def get_tangent_modulus(self, strain: float) -> float:
+        """
+        Compute tangent modulus E_t = dσ/dε at given strain.
+
+        For bilinear steel model:
+        - Elastic region (|ε| ≤ ε_y):
+            σ = E_s * ε
+            E_t = E_s (constant, ~200,000 MPa)
+
+        - Plastic region - horizontal branch (|ε| > ε_y):
+            σ = ±f_y (constant)
+            E_t = 0 (perfectly plastic)
+
+        - Plastic region - inclined branch (ε_y < |ε| ≤ ε_ud):
+            σ = f_y + (f_t - f_y) * (|ε| - ε_y) / (ε_ud - ε_y)
+            E_t = (f_t - f_y) / (ε_ud - ε_y) (constant hardening slope)
+
+        Args:
+            strain: Strain (positive for tension, negative for compression)
+
+        Returns:
+            Tangent modulus in MPa (always positive magnitude)
+        """
+        abs_strain = abs(strain)
+
+        # Elastic region
+        if abs_strain <= self.epsilon_y:
+            return self.steel.E_s  # ~200,000 MPa
+
+        # Plastic region
+        if self.branch_type == "horizontal":
+            return 0.0  # Perfectly plastic: zero hardening
+
+        # Inclined branch: strain hardening
+        if abs_strain >= self.steel.epsilon_ud:
+            return 0.0  # Post-ultimate: clipped at eps_ud (flat)
+
+        # Hardening slope: (f_t - f_y) / (eps_ud - eps_y)
+        E_hardening = (self.steel.f_t - self.f_y) / (self.steel.epsilon_ud - self.epsilon_y)
+        return float(E_hardening)  # Typically ~1000-2000 MPa
+
+    def get_tangent_modulus_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """
+        Vectorized tangent modulus calculation.
+
+        Args:
+            strains: Array of strains (positive tension, negative compression)
+
+        Returns:
+            Array of tangent moduli in MPa
+        """
+        strains = np.asarray(strains)
+        E_t = np.zeros_like(strains, dtype=float)
+
+        abs_strains = np.abs(strains)
+
+        # Elastic region
+        elastic = abs_strains <= self.epsilon_y
+        E_t[elastic] = self.steel.E_s
+
+        # Plastic region
+        plastic = ~elastic
+        if not np.any(plastic):
+            return E_t
+
+        if self.branch_type == "horizontal":
+            # Perfectly plastic: E_t = 0
+            E_t[plastic] = 0.0
+        else:
+            # Inclined branch: strain hardening
+            # Only apply hardening slope where |ε| < ε_ud
+            hardening = plastic & (abs_strains < self.steel.epsilon_ud)
+            if np.any(hardening):
+                E_hardening = (self.steel.f_t - self.f_y) / (self.steel.epsilon_ud - self.epsilon_y)
+                E_t[hardening] = E_hardening
+            # Beyond ε_ud: E_t = 0 (clipped, already initialized to 0)
+
+        return E_t
+
     def get_stress_tension_only(self, strain: float) -> float:
         """
         Calculate stress for tension only (ignores compression).

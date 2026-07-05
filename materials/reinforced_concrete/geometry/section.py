@@ -651,24 +651,65 @@ def create_rectangular_section(
     width: float,
     height: float,
     origin: Tuple[float, float] = (0.0, 0.0),
+    hook_ref: int = 1,
     section_name: Optional[str] = None,
 ) -> RCSection:
     """
     Create a rectangular RC section.
 
-    Convention:
-        origin is the CENTRE of the rectangle.
+    Hook Reference Convention:
+        hook_ref=0: Center (origin at center of rectangle)
+        hook_ref=1: Bottom-left corner (section in +X, +Y quadrant) - DEFAULT
+        hook_ref=2: Bottom-right corner (section in -X, +Y quadrant)
+        hook_ref=3: Top-right corner (section in -X, -Y quadrant)
+        hook_ref=4: Top-left corner (section in +X, -Y quadrant)
 
     Args:
         width: Section width (mm)
         height: Section height (mm)
-        origin: Centre coordinates (default: (0, 0))
+        origin: Hook point coordinates (default: (0, 0))
+        hook_ref: Hook reference point (0=center, 1=bottom-left, 2=bottom-right,
+                  3=top-right, 4=top-left). Default: 1 (bottom-left)
         section_name: Optional section name
 
     Returns:
         RCSection with rectangular outline
+
+    Examples:
+        >>> # Section with bottom-left at (0, 0), extends to (300, 500)
+        >>> section = create_rectangular_section(300, 500)
+
+        >>> # Section centered at (0, 0)
+        >>> section = create_rectangular_section(300, 500, hook_ref=0)
+
+        >>> # Section with bottom-left at (100, 50)
+        >>> section = create_rectangular_section(300, 500, origin=(100, 50))
     """
-    cx, cy = origin
+    ox, oy = origin
+
+    # Calculate center point based on hook_ref
+    if hook_ref == 0:
+        # Center
+        cx, cy = ox, oy
+    elif hook_ref == 1:
+        # Bottom-left corner (section in +X, +Y)
+        cx = ox + width / 2.0
+        cy = oy + height / 2.0
+    elif hook_ref == 2:
+        # Bottom-right corner (section in -X, +Y)
+        cx = ox - width / 2.0
+        cy = oy + height / 2.0
+    elif hook_ref == 3:
+        # Top-right corner (section in -X, -Y)
+        cx = ox - width / 2.0
+        cy = oy - height / 2.0
+    elif hook_ref == 4:
+        # Top-left corner (section in +X, -Y)
+        cx = ox + width / 2.0
+        cy = oy - height / 2.0
+    else:
+        raise ValueError(f"hook_ref must be 0, 1, 2, 3, or 4, got {hook_ref}")
+
     hw = width / 2.0
     hh = height / 2.0
 
@@ -690,25 +731,61 @@ def create_circular_section(
     diameter: float,
     n_points: int = 32,
     origin: Tuple[float, float] = (0.0, 0.0),
+    hook_ref: int = 1,
     section_name: Optional[str] = None,
 ) -> RCSection:
     """
     Create a circular RC section.
 
-    Convention:
-        origin is the CENTRE of the circle.
+    Hook Reference Convention:
+        hook_ref=0: Center (origin at center of circle)
+        hook_ref=1: Bottom-left of bounding box (section in +X, +Y quadrant) - DEFAULT
+        hook_ref=2: Bottom-right of bounding box (section in -X, +Y quadrant)
+        hook_ref=3: Top-right of bounding box (section in -X, -Y quadrant)
+        hook_ref=4: Top-left of bounding box (section in +X, -Y quadrant)
 
     Args:
         diameter: Section diameter (mm)
         n_points: Number of points to approximate circle (default: 32)
-        origin: Centre coordinates (default: (0, 0))
+        origin: Hook point coordinates (default: (0, 0))
+        hook_ref: Hook reference point (0=center, 1=bottom-left, etc.). Default: 1
         section_name: Optional section name
 
     Returns:
         RCSection with circular outline
+
+    Examples:
+        >>> # Circle with bounding box bottom-left at (0, 0)
+        >>> section = create_circular_section(400)
+
+        >>> # Circle centered at (0, 0)
+        >>> section = create_circular_section(400, hook_ref=0)
     """
-    cx, cy = origin
+    ox, oy = origin
     radius = diameter / 2.0
+
+    # Calculate center point based on hook_ref
+    if hook_ref == 0:
+        # Center
+        cx, cy = ox, oy
+    elif hook_ref == 1:
+        # Bottom-left corner of bounding box
+        cx = ox + radius
+        cy = oy + radius
+    elif hook_ref == 2:
+        # Bottom-right corner of bounding box
+        cx = ox - radius
+        cy = oy + radius
+    elif hook_ref == 3:
+        # Top-right corner of bounding box
+        cx = ox - radius
+        cy = oy - radius
+    elif hook_ref == 4:
+        # Top-left corner of bounding box
+        cx = ox + radius
+        cy = oy - radius
+    else:
+        raise ValueError(f"hook_ref must be 0, 1, 2, 3, or 4, got {hook_ref}")
 
     angles = np.linspace(0.0, 2.0 * np.pi, n_points, endpoint=False, dtype=float)
     coords = [(cx + radius * np.cos(a), cy + radius * np.sin(a)) for a in angles]

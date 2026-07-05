@@ -4,15 +4,30 @@ Parallel batch solver for M-N interaction diagram inverse problems.
 Provides helper functions for processing thousands of load cases efficiently
 using thread-based parallelism (ThreadPoolExecutor).
 
-**Note on Multiprocessing**: Process-based parallelism (multiprocessing.Pool)
-cannot be used because MNInteractionDiagram contains Shapely prepared geometries
-that are not picklable. ThreadPool works well since the solver spends most time
-in numpy/scipy (releases GIL).
+**IMPORTANT PERFORMANCE NOTE**:
+With analytical Jacobian, each M-N solve is VERY FAST (~2-20ms per case).
+Python's GIL (Global Interpreter Lock) prevents true thread parallelism for
+CPU-bound tasks. ThreadPoolExecutor overhead (thread coordination, task queue,
+context switching) can EXCEED any benefit for such fast tasks.
 
-Performance:
-    - Serial (2-point Jacobian): ~10-50ms per case
-    - Parallel (8 threads): ~4-6x speedup (limited by GIL but still significant)
-    - Example: 10,000 cases in 20-100 seconds (vs 100-500s serial)
+**Current Performance Reality**:
+    - Serial (analytical Jacobian): ~17ms per case
+    - Parallel (ThreadPool, 4 workers): ~26ms per case (52% SLOWER!)
+    - ThreadPool overhead: ~10ms per task (more than task duration)
+
+**When ThreadPool Helps**:
+    - ONLY if each task takes >100ms (e.g., with complex section geometry)
+    - NEVER with analytical Jacobian + simple sections
+
+**Recommendation**:
+    Use serial processing (solve_batch_serial) for best performance.
+    The analytical Jacobian already provides 3-10x speedup vs 2-point.
+
+**Alternative for True Parallelism**:
+    ProcessPoolExecutor could provide real speedup, but requires:
+    - Serializing section geometry (Shapely geometries not picklable)
+    - Recreating MNInteractionDiagram in each process (high overhead)
+    - Only worthwhile for >10,000 cases
 
 Example:
     >>> from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
@@ -161,7 +176,8 @@ def solve_batch_parallel(
         print(f"Solving {len(load_cases)} cases using {n_workers} threads...")
 
     # Use ThreadPoolExecutor for parallel execution
-    results = [None] * len(load_cases)  # Pre-allocate to maintain order
+    # Pre-allocate with proper type hint to avoid Pylance warnings
+    results: List[SolverResult] = [None] * len(load_cases)  # type: ignore[list-item]
 
     with ThreadPoolExecutor(max_workers=n_workers) as executor:
         # Submit all tasks

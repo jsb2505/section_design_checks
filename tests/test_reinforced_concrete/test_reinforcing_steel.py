@@ -123,12 +123,16 @@ class TestReinforcingSteel:
         assert steel.density == 7800.0
 
     def test_density_validation(self):
-        """Test density validation."""
+        """Test density validation - must be non-negative."""
+        # Negative density should fail
         with pytest.raises(ValidationError):
-            ReinforcingSteel(grade="B500B", density=5000.0)  # Too low
+            ReinforcingSteel(grade="B500B", density=-100.0)
 
-        with pytest.raises(ValidationError):
-            ReinforcingSteel(grade="B500B", density=9000.0)  # Too high
+        # Positive values are now accepted (no upper bound)
+        steel1 = ReinforcingSteel(grade="B500B", density=5000.0)
+        assert steel1.density == 5000.0
+        steel2 = ReinforcingSteel(grade="B500B", density=9000.0)
+        assert steel2.density == 9000.0
 
     def test_str_representation(self):
         """Test __str__ method."""
@@ -143,7 +147,8 @@ class TestReinforcingSteel:
         json_data = steel_b500b.model_dump()
         assert json_data["grade"] == "B500B"
         assert json_data["gamma_s"] == 1.15
-        assert json_data["f_yk"] == 500.0
+        # f_yk is now a property, not included in model_dump()
+        assert steel_b500b.f_yk == 500.0
 
     def test_validate_assignment(self, steel_b500b):
         """Test that changes trigger validation."""

@@ -29,13 +29,15 @@ class TestConcreteMaterial:
 
     def test_design_strength(self, concrete_c30):
         """Test design strength calculation."""
-        # f_cd = alpha_cc * f_ck / gamma_c = 1.0 * 30 / 1.5 = 20
-        assert concrete_c30.f_cd == pytest.approx(20.0)
+        # f_cd = alpha_cc * f_ck / gamma_c = 0.85 * 30 / 1.5 = 17.0
+        # Default alpha_cc is now 0.85 (EC2 §3.1.6(1)P for long-term effects)
+        assert concrete_c30.f_cd == pytest.approx(17.0)
 
     def test_custom_gamma_c(self):
         """Test custom partial factor."""
         concrete = ConcreteMaterial(grade="C30/37", gamma_c=1.2)
-        assert concrete.f_cd == pytest.approx(25.0)  # 1.0 * 30 / 1.2
+        # f_cd = 0.85 * 30 / 1.2 = 21.25 (default alpha_cc=0.85)
+        assert concrete.f_cd == pytest.approx(21.25)
 
     def test_custom_alpha_cc(self):
         """Test custom alpha_cc."""
@@ -137,19 +139,23 @@ class TestConcreteMaterial:
         assert concrete.density == 2500.0
 
     def test_density_validation(self):
-        """Test density validation."""
+        """Test density validation - must be non-negative."""
+        # Negative density should fail
         with pytest.raises(ValidationError):
-            ConcreteMaterial(grade="C30/37", density=1000.0)  # Too low
+            ConcreteMaterial(grade="C30/37", density=-100.0)
 
-        with pytest.raises(ValidationError):
-            ConcreteMaterial(grade="C30/37", density=3000.0)  # Too high
+        # Positive values are now accepted (no upper bound)
+        concrete1 = ConcreteMaterial(grade="C30/37", density=1000.0)
+        assert concrete1.density == 1000.0
+        concrete2 = ConcreteMaterial(grade="C30/37", density=3000.0)
+        assert concrete2.density == 3000.0
 
     def test_str_representation(self, concrete_c30):
         """Test __str__ method."""
         s = str(concrete_c30)
         assert "C30/37" in s
         assert "30.0" in s  # f_ck
-        assert "20.0" in s  # f_cd
+        assert "17.0" in s  # f_cd (with default alpha_cc=0.85)
 
     def test_computed_fields_cannot_be_set(self, concrete_c30):
         """Test that computed fields are read-only."""
@@ -171,7 +177,8 @@ class TestConcreteMaterial:
         json_data = concrete_c30.model_dump()
         assert json_data["grade"] == "C30/37"
         assert json_data["gamma_c"] == 1.5
-        assert json_data["f_ck"] == 30.0
+        # f_ck is a property derived from grade, not included in model_dump()
+        assert concrete_c30.f_ck == 30.0
 
     def test_json_deserialization(self):
         """Test creating from JSON."""

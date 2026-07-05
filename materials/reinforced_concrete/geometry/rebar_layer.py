@@ -74,11 +74,19 @@ def create_rectangular_perimeter_rebars(
     n_bars_width: int,
     n_bars_height: int,
     origin: Tuple[float, float] = (0.0, 0.0),
+    hook_ref: int = 1,
 ) -> List[RebarGroup]:
     """
     Create perimeter reinforcement for a rectangular section.
 
     Corner bars are included in top/bottom layers only, not duplicated in side layers.
+
+    Hook Reference Convention (must match section creation):
+        hook_ref=0: Center (origin at center of rectangle)
+        hook_ref=1: Bottom-left corner (section in +X, +Y quadrant) - DEFAULT
+        hook_ref=2: Bottom-right corner (section in -X, +Y quadrant)
+        hook_ref=3: Top-right corner (section in -X, -Y quadrant)
+        hook_ref=4: Top-left corner (section in +X, -Y quadrant)
 
     Args:
         rebar: Rebar specification
@@ -87,13 +95,15 @@ def create_rectangular_perimeter_rebars(
         cover: Cover to rebar outer surface (mm)
         n_bars_width: Number of bars along width (top and bottom layers)
         n_bars_height: Number of bars along height (left and right sides, excluding corners)
-        origin: Centre of section (default: (0, 0))
+        origin: Hook point coordinates (default: (0, 0))
+        hook_ref: Hook reference point (0=center, 1=bottom-left, etc.). Default: 1
 
     Returns:
         List of RebarGroups (bottom, top, left, right)
 
     Example:
         >>> bar = Rebar(diameter=12)
+        >>> # Section with bottom-left at (0, 0)
         >>> groups = create_rectangular_perimeter_rebars(
         ...     bar, 300, 500, 30, n_bars_width=3, n_bars_height=2
         ... )
@@ -111,7 +121,30 @@ def create_rectangular_perimeter_rebars(
     if n_bars_width < 0 or n_bars_height < 0:
         raise ValueError("n_bars_width and n_bars_height must be >= 0")
 
-    cx, cy = origin
+    ox, oy = origin
+
+    # Calculate center point based on hook_ref (same logic as section creation)
+    if hook_ref == 0:
+        # Center
+        cx, cy = ox, oy
+    elif hook_ref == 1:
+        # Bottom-left corner (section in +X, +Y)
+        cx = ox + width / 2.0
+        cy = oy + height / 2.0
+    elif hook_ref == 2:
+        # Bottom-right corner (section in -X, +Y)
+        cx = ox - width / 2.0
+        cy = oy + height / 2.0
+    elif hook_ref == 3:
+        # Top-right corner (section in -X, -Y)
+        cx = ox - width / 2.0
+        cy = oy - height / 2.0
+    elif hook_ref == 4:
+        # Top-left corner (section in +X, -Y)
+        cx = ox + width / 2.0
+        cy = oy - height / 2.0
+    else:
+        raise ValueError(f"hook_ref must be 0, 1, 2, 3, or 4, got {hook_ref}")
 
     half_width = width / 2.0
     half_height = height / 2.0

@@ -336,6 +336,73 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         """Return design/characteristic strength."""
         return float(self.f_c)
 
+    def get_tangent_modulus(self, strain: float) -> float:
+        """
+        Compute tangent modulus E_t = dσ/dε at given strain.
+
+        For parabola-rectangle model:
+        - Parabolic region (0 < ε ≤ ε_c2):
+            σ = f_c * [1 - (1 - ε/ε_c2)^n]
+            E_t = f_c * n * (1/ε_c2) * (1 - ε/ε_c2)^(n-1)
+
+        - Rectangular region (ε_c2 < ε ≤ ε_cu2):
+            σ = f_c (constant)
+            E_t = 0 (zero gradient)
+
+        - Outside limits (ε ≤ 0 or ε > ε_cu2):
+            E_t = 0 (no tension stiffness, post-crushing)
+
+        Args:
+            strain: Compressive strain (positive for compression)
+
+        Returns:
+            Tangent modulus in MPa (compression positive)
+        """
+        if strain <= 0.0:
+            return 0.0  # No tensile stiffness
+
+        eps_c2 = float(self.concrete.epsilon_c2)
+        eps_cu = float(self.concrete.epsilon_cu2)
+
+        if strain > eps_cu:
+            return 0.0  # Post-crushing: no stiffness
+
+        # Rectangular region: constant stress → zero gradient
+        if strain >= eps_c2:
+            return 0.0
+
+        # Parabolic region: dσ/dε = f_c * n * (1/ε_c2) * (1 - ε/ε_c2)^(n-1)
+        n = float(self.concrete.n)
+        ratio = 1.0 - strain / eps_c2
+        E_t = self.f_c * n * (1.0 / eps_c2) * (ratio ** (n - 1))
+        return float(E_t)
+
+    def get_tangent_modulus_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """
+        Vectorized tangent modulus calculation.
+
+        Args:
+            strains: Array of compressive strains
+
+        Returns:
+            Array of tangent moduli in MPa
+        """
+        strains = np.asarray(strains)
+        E_t = np.zeros_like(strains, dtype=float)
+
+        eps_c2 = float(self.concrete.epsilon_c2)
+        eps_cu = float(self.concrete.epsilon_cu2)
+        n = float(self.concrete.n)
+
+        # Only parabolic region has non-zero gradient
+        # (rectangular and outside limits have E_t=0)
+        parabolic = (strains > 0.0) & (strains < eps_c2)
+        if np.any(parabolic):
+            ratio = 1.0 - strains[parabolic] / eps_c2
+            E_t[parabolic] = self.f_c * n * (1.0 / eps_c2) * (ratio ** (n - 1))
+
+        return E_t
+
 
 class ConcreteStressStrainBilinear(BaseConstitutiveModel):
     """
