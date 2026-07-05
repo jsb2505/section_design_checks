@@ -92,12 +92,12 @@ class TestShearCheckAccidental:
         # Compute required parameters for typical load case
         M_Ed, N_Ed = 50.0, 100.0  # Typical sagging moment with compression
         d_design = check_design.find_effective_depth(M_Ed, N_Ed)
-        rho_l_design = check_design.find_rho_l(M_Ed, N_Ed, d_design)
-        sigma_cp_design = check_design.find_sigma_cp(N_Ed)
+        rho_l_design = check_design._find_rho_l(M_Ed, N_Ed, d_design)
+        sigma_cp_design = check_design._find_sigma_cp(N_Ed)
 
         d_acc = check_accidental.find_effective_depth(M_Ed, N_Ed)
-        rho_l_acc = check_accidental.find_rho_l(M_Ed, N_Ed, d_acc)
-        sigma_cp_acc = check_accidental.find_sigma_cp(N_Ed)
+        rho_l_acc = check_accidental._find_rho_l(M_Ed, N_Ed, d_acc)
+        sigma_cp_acc = check_accidental._find_sigma_cp(N_Ed)
 
         V_Rd_c_design = check_design.find_V_Rd_c(d_design, rho_l_design, sigma_cp_design)
         V_Rd_c_accidental = check_accidental.find_V_Rd_c(d_acc, rho_l_acc, sigma_cp_acc)
@@ -135,10 +135,10 @@ class TestShearCheckAccidental:
         # Compute lever arm for typical load case
         M_Ed, N_Ed = 50.0, 100.0
         d_design = check_design.find_effective_depth(M_Ed, N_Ed)
-        z_design = check_design.find_lever_arm(M_Ed, N_Ed, d_design)
+        z_design, _ = check_design.find_lever_arm(M_Ed, N_Ed, d_design)
 
         d_acc = check_accidental.find_effective_depth(M_Ed, N_Ed)
-        z_acc = check_accidental.find_lever_arm(M_Ed, N_Ed, d_acc)
+        z_acc, _ = check_accidental.find_lever_arm(M_Ed, N_Ed, d_acc)
 
         V_Rd_s_design = check_design.find_V_Rd_s(cot_theta, z_design)
         V_Rd_s_accidental = check_accidental.find_V_Rd_s(cot_theta, z_acc)
@@ -169,12 +169,12 @@ class TestShearCheckAccidental:
         # Compute required parameters
         M_Ed, N_Ed = 50.0, 100.0
         d_design = check_design.find_effective_depth(M_Ed, N_Ed)
-        z_design = check_design.find_lever_arm(M_Ed, N_Ed, d_design)
-        sigma_cp_design = check_design.find_sigma_cp(N_Ed)
+        z_design, _ = check_design.find_lever_arm(M_Ed, N_Ed, d_design)
+        sigma_cp_design = check_design._find_sigma_cp(N_Ed)
 
         d_acc = check_accidental.find_effective_depth(M_Ed, N_Ed)
-        z_acc = check_accidental.find_lever_arm(M_Ed, N_Ed, d_acc)
-        sigma_cp_acc = check_accidental.find_sigma_cp(N_Ed)
+        z_acc, _ = check_accidental.find_lever_arm(M_Ed, N_Ed, d_acc)
+        sigma_cp_acc = check_accidental._find_sigma_cp(N_Ed)
 
         V_Rd_max_design = check_design.find_V_Rd_max(cot_theta, z_design, sigma_cp_design)
         V_Rd_max_accidental = check_accidental.find_V_Rd_max(cot_theta, z_acc, sigma_cp_acc)
@@ -203,8 +203,8 @@ class TestShearCheckAccidental:
         )
 
         # Both should hit the 0.2*f_cd limit, but accidental has higher f_cd
-        sigma_cp_design = check_design.find_sigma_cp(N_Ed)
-        sigma_cp_accidental = check_accidental.find_sigma_cp(N_Ed)
+        sigma_cp_design = check_design._find_sigma_cp(N_Ed)
+        sigma_cp_accidental = check_accidental._find_sigma_cp(N_Ed)
 
         assert sigma_cp_accidental > sigma_cp_design
 

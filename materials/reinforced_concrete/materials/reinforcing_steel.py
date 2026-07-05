@@ -4,7 +4,7 @@ Reinforcing steel material properties according to Eurocode 2.
 Implements characteristic and design strengths for reinforcing bar grades.
 """
 
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, ClassVar
 from pydantic import Field
 from materials.core.base_material import BaseMaterial
 
@@ -14,15 +14,16 @@ ReinforcingSteelGrade = Literal["B500A", "B500B", "B500C"]
 
 
 class SteelGradeData(TypedDict):
+    f_yk: float
     ft_ratio_min: float
     epsilon_uk_min: float
     ductility_class: Literal["A", "B", "C"]
 
 
 STEEL_GRADE_DATA: dict[ReinforcingSteelGrade, SteelGradeData] = {
-    "B500A": {"ft_ratio_min": 1.05, "epsilon_uk_min": 0.025, "ductility_class": "A"},
-    "B500B": {"ft_ratio_min": 1.08, "epsilon_uk_min": 0.050, "ductility_class": "B"},
-    "B500C": {"ft_ratio_min": 1.15, "epsilon_uk_min": 0.075, "ductility_class": "C"},
+    "B500A": {"f_yk": 500.0, "ft_ratio_min": 1.05, "epsilon_uk_min": 0.025, "ductility_class": "A"},
+    "B500B": {"f_yk": 500.0, "ft_ratio_min": 1.08, "epsilon_uk_min": 0.050, "ductility_class": "B"},
+    "B500C": {"f_yk": 500.0, "ft_ratio_min": 1.15, "epsilon_uk_min": 0.075, "ductility_class": "C"},
 }
 
 
@@ -37,12 +38,19 @@ class ReinforcingSteel(BaseMaterial):
         - Modulus: MPa (GPa × 1000)
         - Strain: dimensionless
     """
+    DEFAULT_GRADE: ClassVar[ReinforcingSteelGrade] = "B500B"
 
     name: str = Field(default="Reinforcing Steel", description="Material name")
 
     grade: ReinforcingSteelGrade = Field(
-        default="B500B",
+        default=DEFAULT_GRADE,
         description="Steel grade per EC2 Annex C (defaults to B500B)",
+    )
+
+    E_s: float = Field(
+        default=200_000.0,
+        description="Elastic modulus (§3.2.7): default 200 GPa = 200,000 MPa",
+        gt=0,
     )
 
     gamma_s: float = Field(
@@ -70,7 +78,7 @@ class ReinforcingSteel(BaseMaterial):
     @property
     def f_yk(self) -> float:
         """Characteristic yield strength (§C.1). All B500 grades: 500 MPa."""
-        return 500.0
+        return  float(STEEL_GRADE_DATA[self.grade]["f_yk"])
 
     @property
     def f_yd(self) -> float:
@@ -81,11 +89,6 @@ class ReinforcingSteel(BaseMaterial):
     def f_yd_accidental(self) -> float:
         """Accidental design yield strength: f_yd = f_yk / γ_s,accidental."""
         return self.f_yk / self.gamma_s_accidental
-
-    @property
-    def E_s(self) -> float:
-        """Elastic modulus (§3.2.7): E_s = 200 GPa = 200,000 MPa."""
-        return 200_000.0
 
     def get_elastic_modulus(self) -> float:
         """
@@ -140,6 +143,32 @@ class ReinforcingSteel(BaseMaterial):
     def ductility_class(self) -> Literal["A", "B", "C"]:
         """Ductility class based on grade."""
         return STEEL_GRADE_DATA[self.grade]["ductility_class"]  # type: ignore[return-value]
+
+    @classmethod
+    def f_yk_for(cls, grade: ReinforcingSteelGrade | None = None) -> float:
+        """Characteristic yield strength (MPa) for a given grade (defaults to B500B)."""
+        g = grade or cls.DEFAULT_GRADE
+        return float(STEEL_GRADE_DATA[g]["f_yk"])
+
+    @classmethod
+    def f_yd_for(
+        cls,
+        *,
+        grade: ReinforcingSteelGrade | None = None,
+        gamma_s: float = 1.15,
+    ) -> float:
+        """Design yield strength (MPa): f_yd = f_yk / gamma_s."""
+        return cls.f_yk_for(grade) / gamma_s
+
+    @classmethod
+    def f_yd_accidental_for(
+        cls,
+        *,
+        grade: ReinforcingSteelGrade | None = None,
+        gamma_s_accidental: float = 1.0,
+    ) -> float:
+        """Accidental design yield strength (MPa): f_yd,acc = f_yk / gamma_s_accidental."""
+        return cls.f_yk_for(grade) / gamma_s_accidental
 
     def __str__(self) -> str:
         return (

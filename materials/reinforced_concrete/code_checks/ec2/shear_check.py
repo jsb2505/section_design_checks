@@ -4,23 +4,31 @@ Shear check using codified EC2 stress approach.
 This is a CODIFIED check with business logic - uses EC2 formulas directly
 rather than first principles. Implements §6.2 Variable Strut Inclination Method.
 
-**BREAKING CHANGE (v2.0):** N_Ed, M_Ed, and V_Ed are now parameters to perform_check(),
-not fields. This enables checking multiple load cases against the same section efficiently.
+N_Ed, M_Ed, and V_Ed are now parameters to perform_check(),not fields.
+This enables checking multiple load cases against the same section efficiently.
 """
 
 from typing import Optional, ClassVar
-from math import sqrt, atan, degrees
+from math import atan, degrees, radians, sin
 import warnings
-import numpy as np
-import numpy.typing as npt
 from pydantic import BaseModel, Field, PrivateAttr, computed_field
 
+from materials.utils.helpers import cot
 from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
     CheckResult,
 )
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
+from materials.reinforced_concrete.code_checks.ec2.shear_utils import (
+    find_cot_theta_for_V_Ed,
+    find_alpha_cw,
+    find_nu_factor,
+    find_k_factor,
+    find_v_min,
+    sigma_cp_from_N_and_area,
+    cap_sigma_cp_upper,
+)
 from materials.reinforced_concrete.analysis.interaction_diagram import (
     MNInteractionDiagram,
     ConcreteModelType,
@@ -34,13 +42,13 @@ class ShearLoadCase(BaseModel):
 
     Attributes:
         V_Ed: Design shear force in kN
-        M_Ed: Design moment in kN·m (optional, defaults to 0.0)
+        M_Ed: Design moment in kN·m (defaults to 0.0)
               - In rigorous mode: used for accurate NA and lever arm via M-N solver
               - In approximate mode: if non-zero, used to determine compression face (still uses z=0.9d)
-        N_Ed: Design axial force in kN (compression positive, default 0)
+        N_Ed: Design axial force in kN (compression positive, default 0.0)
     """
     V_Ed: float = Field(..., description="Design shear force in kN")
-    M_Ed: float = Field(default=0.0, description="Design moment in kN·m (optional for simple checks)")
+    M_Ed: float = Field(default=0.0, description="Design moment in kN·m")
     N_Ed: float = Field(default=0.0, description="Design axial force in kN (compression positive)")
 
 
@@ -48,7 +56,7 @@ class ShearCheck(BaseCodeCheck):
     """
     EC2 shear check using Variable Strut Inclination Method (§6.2).
 
-    **NEW API (v2.0):** Supports two modes:
+    Supports two modes:
     - **Rigorous mode** (use_rigorous=True, default): Uses M-N interaction solver for
       accurate neutral axis, compression face detection, and lever arm computation from
       force resultant centroids. Most accurate. Initialization: ~100ms.
@@ -56,7 +64,7 @@ class ShearCheck(BaseCodeCheck):
       face detection (when M_Ed or N_Ed provided), but always uses z=0.9d for lever arm.
       Faster check time but less accurate lever arm for eccentric loading.
 
-    **BREAKING CHANGE:** N_Ed, M_Ed, V_Ed are now parameters to perform_check(), not fields.
+    N_Ed, M_Ed, V_Ed are  parameters to perform_check(), not fields.
     This allows efficiently checking many load cases against the same section.
 
     This is a CODIFIED approach with business logic:
@@ -76,7 +84,7 @@ class ShearCheck(BaseCodeCheck):
         concrete_model_type: Concrete stress-strain model (for rigorous mode)
         steel_branch_type: Steel stress-strain branch (for rigorous mode)
 
-    Example (new API):
+    Example:
         >>> from materials.reinforced_concrete.geometry import create_rectangular_section
         >>> from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
         >>> from materials.reinforced_concrete.code_checks.ec2.shear_check import ShearCheck, ShearLoadCase
@@ -131,6 +139,7 @@ class ShearCheck(BaseCodeCheck):
         description="Shear links/stirrups (None if unreinforced)",
     )
 
+
     # ===========================
     # Limit state and rigour mode
     # ===========================
@@ -159,6 +168,7 @@ class ShearCheck(BaseCodeCheck):
         ),
     )
 
+
     # ==================================
     # Material models for rigorous mode
     # ==================================
@@ -173,9 +183,10 @@ class ShearCheck(BaseCodeCheck):
         description="Steel stress-strain branch type (used if use_rigorous=True)",
     )
 
-    # ===========================
+
+    # =========================
     # Internal state (private)
-    # ===========================
+    # =========================
 
     _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
 
@@ -206,9 +217,9 @@ class ShearCheck(BaseCodeCheck):
             use_accidental=self.use_accidental,  # Match limit state
         )
 
-    # ===========================
+    # ===============================================
     # Properties (immutable - don't depend on loads)
-    # ===========================
+    # ===============================================
 
     @computed_field
     @property
@@ -239,6 +250,7 @@ class ShearCheck(BaseCodeCheck):
             else self.shear_reinforcement.f_yd
         )
 
+
     # ===========================
     # Load-dependent methods
     # ===========================
@@ -249,91 +261,63 @@ class ShearCheck(BaseCodeCheck):
         N_Ed: float,
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
+        *,
+        m_tol: float = 1e-6,
+        strain_tol: float = 1e-15,
+        warn_on_fallback: bool = True,
     ) -> float:
         """
-        Effective depth from compression face.
+        Effective depth d (mm) measured from the governing compression face.
 
-        Both modes use M-N strain solver to determine compression face when M_Ed is non-zero.
-        This accounts for M-N interaction (e.g., large N_Ed can affect strain distribution).
+        If strains are provided, compression face is taken as the face with the larger
+        (more positive) strain (compression is positive in this codebase).
 
-        Special cases:
-        - If M_Ed ≈ 0 (pure shear/axial): Returns min(d_top, d_bot) for conservatism
-          (smaller d = lower shear capacity, safer for cases with no clear compression face)
-        - If solver unavailable: Assumes top compression (legacy fallback)
+        If strains are not provided:
+        - If a diagram/solver is available and |M_Ed| is significant, strains are solved.
+        - Otherwise, fallback returns min(d_top, d_bottom) for conservatism (useful for shear).
 
-        Args:
-            M_Ed: Design moment in kN·m
-            N_Ed: Design axial force in kN
-            eps_top: Pre-computed top strain (optional, avoids re-solving)
-            eps_bottom: Pre-computed bottom strain (optional, avoids re-solving)
-
-        Returns:
-            Effective depth in mm
+        Notes:
+        - If both faces are in tension (eps_top<=0 and eps_bottom<=0), compression face is
+            physically undefined; fallback is used.
         """
-        # If solver unavailable, fall back to default assumption
-        if self._diagram is None:
-            return self.section.get_effective_depth(compression_face="top")
+        d_top = float(self.section.get_effective_depth(compression_face="top"))
+        d_bot = float(self.section.get_effective_depth(compression_face="bottom"))
 
-        # If M_Ed is negligible (pure shear or pure axial), use conservative approach
-        # For shear checks, smaller d is more conservative (lower capacity)
-        if abs(M_Ed) < 1e-6:
-            # Use the smaller effective depth (more conservative for shear)
-            d_top = self.section.get_effective_depth(compression_face="top")
-            d_bot = self.section.get_effective_depth(compression_face="bottom")
+        # Pure shear / pure axial / no clear bending => conservative depth
+        if abs(M_Ed) <= m_tol:
             return min(d_top, d_bot)
 
-        # Use M-N solver to determine compression face (both modes)
-        # Only needed when M_Ed is non-zero (accounts for M-N interaction)
+        # If strains missing, try to solve if you can (robust helper)
+        if (eps_top is None or eps_bottom is None) and getattr(self, "_diagram", None) is not None:
+            try:
+                eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
+            except Exception:
+                eps_top, eps_bottom = None, None
+
+        # Still missing -> fallback conservative
         if eps_top is None or eps_bottom is None:
-            eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
+            if warn_on_fallback:
+                warnings.warn(
+                    "Effective depth fallback used (strain state unavailable). "
+                    "Returning conservative min(d_top, d_bottom).",
+                    stacklevel=2,
+                )
+            return min(d_top, d_bot)
 
-        # Compression strain is POSITIVE in interaction diagram sign convention
-        # Larger positive strain = more compressed
-        # Use >= to handle pure axial case (eps_top == eps_bottom) deterministically
+        # If there is no compression anywhere, compression face is undefined -> fallback
+        if eps_top <= strain_tol and eps_bottom <= strain_tol:
+            if warn_on_fallback:
+                warnings.warn(
+                    "Effective depth fallback used (both faces in tension; compression face undefined). "
+                    "Returning conservative min(d_top, d_bottom).",
+                    stacklevel=2,
+                )
+            return min(d_top, d_bot)
+
+        # Otherwise: choose the more compressive face (bigger + strain)
         compression_face = "top" if eps_top >= eps_bottom else "bottom"
+        return d_top if compression_face == "top" else d_bot
 
-        return self.section.get_effective_depth(compression_face=compression_face)
-
-    def find_sigma_cp(self, N_Ed: float) -> float:
-        """
-        Compressive stress in concrete due to axial force (§6.2.2(1)).
-
-        σ_cp = N_Ed / A_c,transformed, limited to 0.2·f_cd
-
-        Uses transformed area (concrete + n·steel) for more accurate stress calculation.
-
-        Args:
-            N_Ed: Design axial force in kN (compression positive)
-
-        Returns:
-            Stress in MPa
-        """
-        if N_Ed <= 0:
-            return 0.0
-
-        # Transformed area: A_c,tr = A_concrete + n·A_steel
-        A_concrete = self.section.get_area()  # mm² (gross concrete area)
-
-        # Calculate weighted average E_s for all steel
-        total_steel_stiffness = 0.0
-        total_steel_area = 0.0
-
-        for group in self.section.rebar_groups:
-            group_area = len(group.positions) * group.rebar.area
-            group_E_s = group.rebar.E_s
-            total_steel_stiffness += group_area * group_E_s
-            total_steel_area += group_area
-
-        if total_steel_area > 0:
-            E_s_avg = total_steel_stiffness / total_steel_area
-            E_c = self.concrete.E_cm
-            n = E_s_avg / E_c
-            A_c_transformed = A_concrete + n * total_steel_area
-        else:
-            A_c_transformed = A_concrete
-
-        sigma_cp_uncapped = (N_Ed * 1000) / A_c_transformed
-        return min(sigma_cp_uncapped, 0.2 * self.f_cd_design)
 
     def find_lever_arm(
         self,
@@ -346,49 +330,34 @@ class ShearCheck(BaseCodeCheck):
         """
         Lever arm for this load case.
 
-        If use_rigorous=True: computes from force resultant centroids
-        If use_rigorous=False: uses 0.9d approximation
-
-        Args:
-            M_Ed: Design moment in kN·m
-            N_Ed: Design axial force in kN
-            d: Effective depth in mm
-            eps_top: Pre-computed top strain (optional, avoids re-solving)
-            eps_bottom: Pre-computed bottom strain (optional, avoids re-solving)
+        Behaviour:
+            If use_rigorous=True: computes from force resultant centroids (with sensible fallback)
+            If use_rigorous=False: uses 0.9d approximation
 
         Returns:
-            Tuple of (z_ec2, z_mech):
-                z_ec2: Lever arm for EC2 check (mm) - used in capacity calculations,
-                       capped to 0.9d if cap_lever_arm=True
-                z_mech: Mechanical lever arm (mm) - None if approximate mode, otherwise uncapped value
+            (z_ec2, z_mech)
         """
-        if not self.use_rigorous or self._diagram is None:
-            return (0.9 * d, None)  # EC2 approximation - no mechanical value
+        # No diagram available (or user opted out) => always use EC2 approx
+        if (self._diagram is None) or (not self.use_rigorous):
+            return (0.9 * d, None)
 
-        # Rigorous: compute from strain state
-        if eps_top is None or eps_bottom is None:
-            eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
+        # Delegate to MNInteractionDiagram; it should:
+        # - compute z_mech if possible else None
+        # - fallback to 0.9d when z_mech is None / suspicious
+        # - optionally cap to 0.9d
+        # - emit warnings when fallback/cap occurs
+        return self._diagram.get_lever_arm(
+            M_Ed=M_Ed,
+            N_Ed=N_Ed,
+            d=d,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
+            prefer_rigorous=True,
+            cap_to_09d=self.cap_lever_arm,
+        )
 
-        # Get mechanical lever arm (uncapped)
-        z_mech = self._compute_lever_arm_from_strains(eps_top, eps_bottom, d)
 
-        # Apply EC2 cap if enabled (codified truss model simplification)
-        if self.cap_lever_arm:
-            limit_09d = 0.9 * d
-            if z_mech > limit_09d:
-                warnings.warn(
-                    f"Lever arm capped: z_mech={z_mech:.1f}mm > 0.9d={limit_09d:.1f}mm. "
-                    f"Using z={limit_09d:.1f}mm per EC2 §6.2.3 truss model. "
-                    f"Set cap_lever_arm=False to use uncapped value.",
-                    stacklevel=2
-                )
-            z_ec2 = min(z_mech, limit_09d)
-        else:
-            z_ec2 = z_mech
-
-        return (z_ec2, z_mech)
-
-    def find_rho_l(
+    def _find_rho_l(
         self,
         M_Ed: float,
         N_Ed: float,
@@ -443,6 +412,47 @@ class ShearCheck(BaseCodeCheck):
             eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
         return self._compute_rho_l_from_strains(eps_top, eps_bottom, d)
 
+
+    def _find_sigma_cp(
+            self,
+            N_Ed: float,
+            allow_negative: bool = True,
+            use_transformed_area: bool = True
+        ) -> float:
+        """
+        Compressive stress in concrete due to axial force (§6.2.2(1)).
+
+        σ_cp = N_Ed / A_c,transformed, limited to 0.2·f_cd
+
+        Uses transformed area (concrete + n·steel) for more accurate stress calculation.
+
+        Args:
+            N_Ed: Design axial force in kN (compression positive)
+            allow_negative:
+                (bool: default True)
+                If True, allows for negative values of N_Ed which returns negative sigma_cp.
+                This has the affect of reducing shear capacity in presence of tension.
+            use_transformed_area:
+                (bool: default True)
+                If True computes the cross-sectional area using transformed properties of rebar.
+                This has the affect of increasing area, which reduces sigma_cp and is 
+                conservative for positive N_Ed.
+
+        Returns:
+            Stress in MPa
+        """
+        if N_Ed <= 0 and not allow_negative:
+            return 0.0
+        
+        if use_transformed_area:
+            A_eff = self.section.get_transformed_area(self.concrete.E_cm)  # mm²
+        else:
+            A_eff = self.section.get_area()  # mm² (gross concrete area)
+
+        sigma_cp_uncapped = sigma_cp_from_N_and_area(N_Ed, A_eff)
+        return cap_sigma_cp_upper(sigma_cp_uncapped, self.f_cd_design)
+
+
     # =================================
     # Helper methods for rigorous mode
     # =================================
@@ -484,110 +494,10 @@ class ShearCheck(BaseCodeCheck):
         rho_l = A_sl / (b_w * d)
         return min(rho_l, 0.02)
 
-    def _compute_lever_arm_from_strains(
-        self,
-        eps_top: float,
-        eps_bottom: float,
-        d: float
-    ) -> float:
-        """
-        Compute mechanical lever arm from force resultant centroids.
-
-        z = |y_T - y_C| where y_T, y_C are centroids of tension/compression forces
-
-        Args:
-            eps_top: Strain at top fiber
-            eps_bottom: Strain at bottom fiber
-            d: Effective depth in mm (for fallback if lever arm is too small)
-
-        Returns:
-            Mechanical lever arm in mm (uncapped)
-        """
-        # This method should only be called when diagram exists (rigorous mode)
-        if self._diagram is None:
-            raise RuntimeError("_compute_lever_arm_from_strains called without diagram")
-
-        # Use public interface to get fiber-level forces
-        # This avoids tight coupling to MNInteractionDiagram private internals
-        forces, y_coords, _ = self._diagram.get_fiber_forces_from_end_strains(eps_top, eps_bottom)
-
-        # Get section bounds for fallback centroids
-        y_bot = float(self.section.outline.bounds[1])
-        y_top = float(self.section.outline.bounds[3])
-
-        # Separate tension and compression
-        tension_mask = forces < 0
-        compression_mask = forces > 0
-
-        # Compute centroids
-        if np.any(tension_mask):
-            T_total = np.sum(-forces[tension_mask])  # Make positive
-            y_T = np.sum(-forces[tension_mask] * y_coords[tension_mask]) / T_total
-        else:
-            y_T = y_bot
-
-        if np.any(compression_mask):
-            C_total = np.sum(forces[compression_mask])
-            y_C = np.sum(forces[compression_mask] * y_coords[compression_mask]) / C_total
-        else:
-            y_C = y_top
-
-        z_mech = abs(y_T - y_C)
-
-        # Fallback: if lever arm is too small (numerical issue or pure axial),
-        # use 0.9d approximation
-        if z_mech < 1.0:  # Less than 1mm is suspicious
-            z_mech = 0.9 * d
-
-        return z_mech
 
     # ===========================
     # EC2 calculation methods
     # ===========================
-
-    def find_k_factor(self, d: float) -> float:
-        """
-        Size effect factor (§6.2.2(1)).
-
-        k = 1 + √(200/d) ≤ 2.0
-
-        Args:
-            d: Effective depth in mm
-
-        Returns:
-            k factor (dimensionless)
-        """
-        if d <= 0:
-            raise ValueError(f"Effective depth must be > 0, got {d} mm")
-        return min(2.0, 1.0 + sqrt(200 / d))
-
-    def find_v_min(self, d: float) -> float:
-        """
-        Minimum shear strength coefficient (§6.2.2(1), Eq. 6.3N).
-
-        v_min = 0.035·k^(3/2)·√f_ck
-
-        Args:
-            d: Effective depth in mm
-
-        Returns:
-            v_min in MPa
-        """
-        k = self.find_k_factor(d)
-        f_ck = self.concrete.f_ck
-        return 0.035 * (k ** 1.5) * sqrt(f_ck)
-
-    def find_nu_factor(self) -> float:
-        """
-        Strength reduction factor for concrete cracked in shear (§6.2.2(6), Eq. 6.6N).
-
-        ν = 0.6·(1 - f_ck/250)
-
-        Returns:
-            ν factor (dimensionless)
-        """
-        f_ck = self.concrete.f_ck
-        return 0.6 * (1 - f_ck / 250)
 
     def find_V_Rd_c(self, d: float, rho_l: float, sigma_cp: float) -> float:
         """
@@ -604,7 +514,7 @@ class ShearCheck(BaseCodeCheck):
             V_Rd,c in kN
         """
         C_Rd_c = 0.18 / self.gamma_c_design
-        k = self.find_k_factor(d)
+        k = find_k_factor(d)
         f_ck = self.concrete.f_ck
         k_1 = 0.15
         b_w = self.breadth
@@ -613,10 +523,13 @@ class ShearCheck(BaseCodeCheck):
         V_Rd_c = (C_Rd_c * k * ((100 * rho_l * f_ck) ** (1/3)) + k_1 * sigma_cp) * b_w * d
 
         # Minimum value (Eq. 6.2b)
-        v_min = self.find_v_min(d)
+        v_min = find_v_min(f_ck, k)
         V_Rd_c_min = (v_min + k_1 * sigma_cp) * b_w * d
 
-        return max(V_Rd_c, V_Rd_c_min) / 1000  # Convert to kN
+        V_Rd_c_kN = max(V_Rd_c, V_Rd_c_min) / 1000  # Convert to kN
+
+        return max(V_Rd_c_kN, 0)  # Prevents negative values if sigma_cp is large negative
+
 
     def find_V_Rd_s(self, cot_theta: float, z: float) -> float:
         """
@@ -632,13 +545,15 @@ class ShearCheck(BaseCodeCheck):
             V_Rd,s in kN
         """
         if self.shear_reinforcement is None:
-            return 0.0
+            raise ValueError("V_Rd_s cannot be found without providing shear reinforcement.")
 
         A_sw_over_s = self.shear_reinforcement.area_per_unit_length
         f_ywd = self.f_ywd_design
+        link_angle_rads = radians(self.shear_reinforcement.angle)
 
-        V_Rd_s = A_sw_over_s * z * f_ywd * cot_theta
+        V_Rd_s = A_sw_over_s * z * f_ywd * (cot_theta + cot(link_angle_rads)) * sin(link_angle_rads)
         return V_Rd_s / 1000
+
 
     def find_V_Rd_max(self, cot_theta: float, z: float, sigma_cp: float) -> float:
         """
@@ -654,24 +569,19 @@ class ShearCheck(BaseCodeCheck):
         Returns:
             V_Rd,max in kN
         """
+        if self.shear_reinforcement is None:
+            raise ValueError("V_Rd_max cannot be found without providing shear reinforcement.")
+        
         f_cd = self.f_cd_design
-
-        # Coefficient α_cw (§6.2.3(3))
-        if sigma_cp == 0:
-            alpha_cw = 1.0
-        elif sigma_cp <= 0.25 * f_cd:
-            alpha_cw = 1.0 + sigma_cp / f_cd
-        elif sigma_cp <= 0.5 * f_cd:
-            alpha_cw = 1.25
-        else:
-            alpha_cw = 2.5 * (1 - sigma_cp / f_cd)
+        alpha_cw = find_alpha_cw(f_cd, sigma_cp)
 
         b_w = self.breadth
-        nu = self.find_nu_factor()
-        tan_theta = 1 / cot_theta
+        nu = find_nu_factor(self.concrete.f_ck)
 
-        V_Rd_max = (alpha_cw * b_w * z * nu * f_cd) / (cot_theta + tan_theta)
+        link_angle_rads = radians(self.shear_reinforcement.angle)
+        V_Rd_max = (alpha_cw * b_w * z * nu * f_cd) * (cot_theta + cot(link_angle_rads)) / (1 + cot_theta**2)
         return V_Rd_max / 1000
+
 
     # ===========================
     # Main check method
@@ -681,15 +591,16 @@ class ShearCheck(BaseCodeCheck):
         self,
         *,
         load_case: ShearLoadCase,
-        cot_theta: float = 2.5,
+        allow_negative_sigma_cp: bool = True,
+        cot_theta_override: Optional[float] = None,
         warning_threshold: float = 0.95,
         **kwargs,
     ) -> CheckResult:
         """
         Perform shear check per EC2 §6.2 for a single load case.
 
-        **NEW API:** Forces (V_Ed, M_Ed, N_Ed) are now parameters via ShearLoadCase,
-        not fields. This enables efficient checking of multiple load cases against
+        Forces (V_Ed, M_Ed, N_Ed) are parameters via ShearLoadCase, not fields.
+        This enables efficient checking of multiple load cases against
         the same section.
 
         Checks:
@@ -699,8 +610,9 @@ class ShearCheck(BaseCodeCheck):
 
         Args:
             load_case: Single load case to check
-            cot_theta: Cotangent of strut angle (1.0 to 2.5, default 2.5)
+            allow_negative_sigma_cp: If True, reduces shear capacity for tension
             warning_threshold: Utilization threshold for warning
+            cot_theta_override: User provided cot theta value to use
 
         Returns:
             CheckResult with status, utilization, and details
@@ -721,27 +633,25 @@ class ShearCheck(BaseCodeCheck):
             V_Ed=load_case.V_Ed,
             M_Ed=load_case.M_Ed,
             N_Ed=load_case.N_Ed,
-            cot_theta=cot_theta,
+            allow_negative_sigma_cp=allow_negative_sigma_cp,
+            cot_theta_override=cot_theta_override,
             warning_threshold=warning_threshold,
         )
+
 
     def _check_single_case(
         self,
         V_Ed: float,
         M_Ed: float,
         N_Ed: float,
-        cot_theta: float,
+        allow_negative_sigma_cp: bool,
+        cot_theta_override: Optional[float],
         warning_threshold: float,
     ) -> CheckResult:
         """Perform check for single load case (internal)."""
         # Treat shear as magnitude (absolute value)
         # Negative shear from FEA sign conventions should not give negative utilization
         V_Ed = abs(V_Ed)
-
-        # Validate and clamp cot_theta
-        if cot_theta <= 0:
-            raise ValueError(f"cot_theta must be > 0, got {cot_theta}")
-        cot_theta_used = max(self.MIN_COT_THETA, min(self.MAX_COT_THETA, cot_theta))
 
         # Solve for strains once (both modes need for compression face detection)
         # This avoids redundant solves and ensures consistency
@@ -753,21 +663,58 @@ class ShearCheck(BaseCodeCheck):
 
         # Compute load-dependent geometric parameters (pass strains to avoid re-solving)
         d = self.find_effective_depth(M_Ed, N_Ed, eps_top, eps_bottom)
-        z_ec2, z_mech = self.find_lever_arm(M_Ed, N_Ed, d, eps_top, eps_bottom)
-        sigma_cp = self.find_sigma_cp(N_Ed)
-        rho_l = self.find_rho_l(M_Ed, N_Ed, d, eps_top, eps_bottom)
+        sigma_cp = self._find_sigma_cp(N_Ed, allow_negative_sigma_cp)
+        rho_l = self._find_rho_l(M_Ed, N_Ed, d, eps_top, eps_bottom)
 
         # Compute capacities (use z_ec2 for design checks per EC2)
         V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
-        V_Rd_s = self.find_V_Rd_s(cot_theta_used, z_ec2)
-        V_Rd_max = self.find_V_Rd_max(cot_theta_used, z_ec2, sigma_cp)
+
+        if self.shear_reinforcement is not None:
+
+            z_ec2, z_mech = self.find_lever_arm(M_Ed, N_Ed, d, eps_top, eps_bottom)
+
+            if cot_theta_override is not None:
+                cot_theta = cot_theta_override
+
+                if cot_theta_override > self.MAX_COT_THETA:
+                    warnings.warn(
+                        f"Cot theta value provided, cot(θ) = {cot_theta_override}, is greater than stored max value: {self.MAX_COT_THETA}.",
+                        stacklevel=2,
+                    )
+                elif cot_theta_override < self.MIN_COT_THETA:
+                    warnings.warn(
+                        f"Cot theta value provided, cot(θ) = {cot_theta_override}, is smaller than stored min value: {self.MIN_COT_THETA}.",
+                        stacklevel=2,
+                    )
+            else:
+                # Calculate cot_theta based on V_Ed = V_Rd,max
+                f_cd = self.f_cd_design
+                alpha_cw = find_alpha_cw(f_cd, sigma_cp)
+                b_w = self.breadth
+                nu = find_nu_factor(self.concrete.f_ck)
+
+                K = alpha_cw * b_w * z_ec2 * nu * f_cd
+
+                # already clamped by function
+                cot_theta = find_cot_theta_for_V_Ed(
+                    V_Ed=V_Ed,
+                    K=K,
+                    link_angle_degrees=self.shear_reinforcement.angle,
+                    cot_min=self.MIN_COT_THETA,
+                    cot_max=self.MAX_COT_THETA,
+                )
+
+            V_Rd_s = self.find_V_Rd_s(cot_theta, z_ec2)
+
+            # the maximum capacity of the concrete strut is found using the largest theta (smallest cot_theta)
+            V_Rd_max = self.find_V_Rd_max(self.MIN_COT_THETA, z_ec2, sigma_cp)
 
         # Determine governing capacity
         if self.shear_reinforcement is None:
             V_Rd = V_Rd_c
             governing_mode = "concrete (no shear reinforcement)"
             code_ref = "EC2 §6.2.2"
-        else:
+        else:  # TODO fix unbound values
             if V_Ed > V_Rd_c:
                 # Shear reinforcement is engaged
                 V_Rd = min(V_Rd_s, V_Rd_max)
@@ -813,16 +760,16 @@ class ShearCheck(BaseCodeCheck):
             "V_Rd_s": V_Rd_s if self.shear_reinforcement else None,
             "V_Rd_max": V_Rd_max if self.shear_reinforcement else None,
             "governing_mode": governing_mode,
-            "cot_theta": cot_theta_used,
-            "theta_deg": degrees(atan(1 / cot_theta_used)),
+            "cot_theta": cot_theta if self.shear_reinforcement else None,
+            "theta_deg": degrees(atan(1 / cot_theta)) if self.shear_reinforcement else None,
             "section_name": self.section.section_name or "unnamed",
             "d": d,
-            "z": z_ec2,  # Lever arm used in EC2 check (capped if cap_lever_arm=True)
-            "z_mech": z_mech,  # Mechanical lever arm from force centroids (uncapped)
+            "z": z_ec2 if self.shear_reinforcement else None,  # Lever arm used in EC2 check (capped if cap_lever_arm=True)
+            "z_mech": z_mech if self.shear_reinforcement else None,  # Mechanical lever arm from force centroids (uncapped)
             "b_w": self.breadth,
             "rho_l": rho_l,
             "sigma_cp": sigma_cp,
-            "mode": "rigorous" if self.use_rigorous else "approximate",
+            "z_mode": "rigorous" if self.use_rigorous else "approximate",
             "cap_lever_arm": self.cap_lever_arm,  # Document if capping was applied
         }
 
@@ -836,6 +783,7 @@ class ShearCheck(BaseCodeCheck):
             message=message,
             details=details,
         )
+
 
     # ===========================
     # Utility methods
@@ -867,8 +815,8 @@ class ShearCheck(BaseCodeCheck):
         V_Ed = abs(V_Ed)
 
         d = self.find_effective_depth(M_Ed, N_Ed)
-        sigma_cp = self.find_sigma_cp(N_Ed)
-        rho_l = self.find_rho_l(M_Ed, N_Ed, d)
+        sigma_cp = self._find_sigma_cp(N_Ed)
+        rho_l = self._find_rho_l(M_Ed, N_Ed, d)
 
         V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
 
@@ -881,9 +829,9 @@ class ShearCheck(BaseCodeCheck):
             f_ywd = self.f_ywd_design
         elif f_ywd is None:
             if self.use_accidental:
-                f_ywd = 500.0
+                f_ywd = ShearRebar.f_yd_accidental_for()
             else:
-                f_ywd = 434.8
+                f_ywd = ShearRebar.f_yd_for()
 
         cot_theta_limited = max(self.MIN_COT_THETA, min(self.MAX_COT_THETA, cot_theta))
 

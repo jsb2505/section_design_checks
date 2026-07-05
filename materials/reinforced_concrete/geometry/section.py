@@ -177,10 +177,12 @@ class RebarGroup(BaseModel):
                     )
         return self
 
+
     @property
     def n_bars(self) -> int:
         """Number of bars in this group."""
         return len(self.positions)
+
 
     @property
     def total_area(self) -> float:
@@ -191,6 +193,7 @@ class RebarGroup(BaseModel):
             Total area in mm²
         """
         return self.n_bars * self.rebar.area
+
 
     def get_centroid(self) -> Point2D:
         """
@@ -273,6 +276,7 @@ class RCSection(BaseGeometry):
                     )
         return self
 
+
     def get_area(self) -> float:
         """
         Gross concrete area (excluding rebar).
@@ -284,6 +288,46 @@ class RCSection(BaseGeometry):
             Shapely's area correctly accounts for holes/voids.
         """
         return float(self.outline.area)
+
+
+    def get_transformed_area(self, E_cm: float) -> float:
+        """
+        Calculate transformed area of the section using transformed section method.
+
+        Assumes self.get_area() returns GROSS concrete polygon area (i.e. it includes
+        the area occupied by rebars, since rebars are not modelled as holes).
+
+        Therefore steel contributes (α_e - 1) * A_s, not α_e * A_s.
+
+        Args:
+            E_cm: The elastic modulus of concrete in MPa
+            
+        Returns:
+            Transformed area in mm²
+        """
+        if E_cm <= 0:
+            raise ValueError(f"Concrete modulus E_cm must be positive, got {E_cm}")
+    
+        A_eff = self.get_area()  # mm², includes bar regions as concrete
+
+        # Transformed area: A_c,tr = A_concrete + n·A_steel
+        # Calculate weighted average E_s for all steel
+        total_steel_stiffness = 0.0
+        total_steel_area = 0.0
+
+        for group in self.rebar_groups:
+            group_area = len(group.positions) * group.rebar.area
+            group_E_s = group.rebar.E_s
+            total_steel_stiffness += group_area * group_E_s
+            total_steel_area += group_area
+
+        if total_steel_area > 0:
+            E_s_avg = total_steel_stiffness / total_steel_area
+            alpha_e = E_s_avg / E_cm
+            A_eff += (alpha_e - 1.0) * total_steel_area
+        
+        return A_eff
+
 
     def get_centroid(self) -> Tuple[float, float]:
         """
@@ -297,6 +341,50 @@ class RCSection(BaseGeometry):
         """
         c = self.outline.centroid
         return (float(c.x), float(c.y))
+
+
+    def get_transformed_centroid(self, E_cm: float) -> Tuple[float, float, float]:
+        """
+        Centroid of transformed section (gross concrete + (n-1) steel areas).
+
+        Assumes self.get_area() / self.get_centroid() are for the gross concrete
+        polygon (i.e. rebar is not modelled as holes), so steel contributes only
+        (n-1) * A_s (the extra over the concrete already counted).
+
+        Args:
+            E_cm: The elastic modulus of concrete in MPa
+        
+        Returns:
+            (A_tr, cx_tr, cy_tr)
+        """
+        if E_cm <= 0:
+            raise ValueError(f"Concrete modulus E_c must be positive, got {E_cm}")
+
+        A_gross = self.get_area()
+        cx_g, cy_g = self.get_centroid()
+
+        # Start with gross concrete polygon contribution
+        A_tr = A_gross
+        Sx = A_gross * cx_g
+        Sy = A_gross * cy_g
+
+        # Add "extra" transformed steel areas at bar locations
+        for group in self.rebar_groups:
+            factor = group.rebar.E_s / E_cm - 1.0
+            if factor == 0.0:
+                continue
+
+            # add first moments of the "extra" transformed area at bar positions
+            A_extra_bar = factor * group.rebar.area
+            for pos in group.positions:
+                A_tr += A_extra_bar
+                Sx += A_extra_bar * pos.x
+                Sy += A_extra_bar * pos.y
+
+        cx_tr = Sx / A_tr
+        cy_tr = Sy / A_tr
+        return A_tr, cx_tr, cy_tr
+
 
     def get_second_moment_area(self) -> Tuple[float, float, float]:
         """
@@ -319,11 +407,12 @@ class RCSection(BaseGeometry):
         Ixy_c = Ixy0 - A * (Cx * Cy)
 
         # Return positive magnitudes (engineering convention)
-        return (abs(Ixx_c), abs(Iyy_c), abs(Ixy_c))
+        return (abs(Ixx_c), abs(Iyy_c), Ixy_c)
+
 
     def get_transformed_second_moment_area(
         self,
-        E_c: float,
+        E_cm: float,
         centroid: Optional[Tuple[float, float]] = None,
     ) -> Tuple[float, float, float]:
         """
@@ -331,34 +420,50 @@ class RCSection(BaseGeometry):
 
         Uses transformed section method with modular ratio α_e = E_s / E_c.
         Each steel bar contributes (α_e - 1) · A_s via parallel axis terms.
+
+        Args:
+            E_cm: The elastic modulus of concrete in MPa
+
+        Returns:
+            (I_xx, I_yy, I_xy) in mm⁴
         """
-        if E_c <= 0:
-            raise ValueError(f"Concrete modulus E_c must be positive, got {E_c}")
+        if E_cm <= 0:
+            raise ValueError(f"Concrete modulus E_c must be positive, got {E_cm}")
         if not self.rebar_groups:
             raise ValueError("Cannot calculate transformed properties: no rebars in section")
 
-        cx, cy = self.get_centroid() if centroid is None else centroid
+        # Gross concrete centroid and second moments (assumed about gross centroid axes)
+        cx_g, cy_g = self.get_centroid()
+        I_xx_g, I_yy_g, I_xy_g = self.get_second_moment_area()
+        A_gross = self.get_area()
 
-        I_xx_conc, I_yy_conc, I_xy_conc = self.get_second_moment_area()
+        # Use provided centroid if user passes one, else compute transformed centroid
+        if centroid is None:
+            _, cx_t, cy_t = self.get_transformed_centroid(E_cm)
+        else:
+            cx_t, cy_t = centroid
 
-        I_xx_steel = 0.0
-        I_yy_steel = 0.0
-        I_xy_steel = 0.0
+        # Shift concrete I from gross centroid to transformed centroid
+        dx_c = cx_g - cx_t
+        dy_c = cy_g - cy_t
+        I_xx = I_xx_g + A_gross * dy_c**2
+        I_yy = I_yy_g + A_gross * dx_c**2
+        I_xy = I_xy_g + A_gross * dx_c * dy_c
 
+        # Add steel "extra stiffness" terms about transformed centroid
         for group in self.rebar_groups:
-            alpha_e = group.rebar.E_s / E_c
-            factor = alpha_e - 1.0
+            factor = group.rebar.E_s / E_cm - 1.0
 
+            A_extra = factor * group.rebar.area
             for pos in group.positions:
-                dx = pos.x - cx
-                dy = pos.y - cy
-                A_transformed = factor * group.rebar.area
+                dx = pos.x - cx_t
+                dy = pos.y - cy_t
+                I_xx += A_extra * dy**2
+                I_yy += A_extra * dx**2
+                I_xy += A_extra * dx * dy
 
-                I_xx_steel += A_transformed * dy ** 2
-                I_yy_steel += A_transformed * dx ** 2
-                I_xy_steel += A_transformed * dx * dy
+        return I_xx, I_yy, I_xy
 
-        return (I_xx_conc + I_xx_steel, I_yy_conc + I_yy_steel, I_xy_conc + I_xy_steel)
 
     def get_bounding_box(self) -> Tuple[float, float, float, float]:
         """
@@ -370,16 +475,19 @@ class RCSection(BaseGeometry):
         min_x, min_y, max_x, max_y = self.outline.bounds
         return (float(min_x), float(min_y), float(max_x), float(max_y))
 
+
     @property
     def total_steel_area(self) -> float:
         """Total area of all reinforcement in mm²."""
         return sum(group.total_area for group in self.rebar_groups)
+
 
     @property
     def reinforcement_ratio(self) -> float:
         """Reinforcement ratio (ρ = A_s / A_c)."""
         a_c = self.get_area()
         return 0.0 if a_c == 0.0 else (self.total_steel_area / a_c)
+
 
     def get_rebar_positions(self) -> List[Tuple[float, float, float]]:
         """
@@ -393,6 +501,7 @@ class RCSection(BaseGeometry):
             for pos in group.positions:
                 out.append((pos.x, pos.y, group.rebar.area))
         return out
+
 
     def get_steel_centroid(self) -> Tuple[float, float]:
         """
@@ -417,6 +526,7 @@ class RCSection(BaseGeometry):
 
         return (mx / total_area, my / total_area)
 
+
     def add_rebar_group(self, group: RebarGroup) -> None:
         """
         Add a rebar group to the section.
@@ -433,6 +543,7 @@ class RCSection(BaseGeometry):
                     "is not fully within the section outline (may cross boundary or enter a void)."
                 )
         self.rebar_groups.append(group)
+
 
     def get_concrete_cover(
         self,
@@ -541,6 +652,7 @@ class RCSection(BaseGeometry):
 
         return min_cover
 
+
     def get_effective_depth(
         self,
         compression_face: Literal["top", "bottom"] = "top",
@@ -634,6 +746,7 @@ class RCSection(BaseGeometry):
 
         return d
 
+
     def __repr__(self) -> str:
         name_str = f"'{self.section_name}'" if self.section_name else "unnamed"
         return (
@@ -642,6 +755,7 @@ class RCSection(BaseGeometry):
             f"A_s={self.total_steel_area:.0f} mm², "
             f"{len(self.rebar_groups)} groups)"
         )
+
 
     def __str__(self) -> str:
         return self.__repr__()

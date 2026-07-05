@@ -453,14 +453,11 @@ class MNInteractionDiagram:
         eps_top: strain at y = section_top
         eps_bottom: strain at y = section_bottom
         """
-        # Use cached fiber y-coordinates
+        # Use cached fiber y-coordinates and section geometry
         y = self._fiber_y
 
-        y_top = float(self.section_top)
         y_bot = float(self.section_bottom)
-        h = y_top - y_bot
-        if h <= 0.0:
-            raise ValueError("Invalid section height")
+        h = float(self.section_height)  # Use cached value
 
         # linear interpolation in y
         t = (y - y_bot) / h
@@ -995,7 +992,6 @@ class MNInteractionDiagram:
         material_type = self._fiber_mat  # Already converted to U8 in __init__
         material_index = self._fiber_mi
 
-        y_top = float(self.section_top)
         y_bot = float(self.section_bottom)
         h = float(self.section_height)
 
@@ -1121,6 +1117,177 @@ class MNInteractionDiagram:
                 return (-eps_y * 2.0, +eps_cu * 0.8)
             else:  # M ≈ 0 and N ≈ 0: Zero force
                 return (0.0, 0.0)
+
+
+    # ----------------------------
+    # Geometric calculations for code checks
+    # ----------------------------
+
+    def get_effective_depth(
+        self,
+        M_Ed: float,
+        N_Ed: float,
+        eps_top: Optional[float] = None,
+        eps_bottom: Optional[float] = None,
+    ) -> float:
+        """
+        Get effective depth from compression face for a given load case.
+
+        Uses strain solver to determine compression face when M_Ed is non-zero.
+        This accounts for M-N interaction (e.g., large N_Ed affects strain distribution).
+
+        Special cases:
+        - If M_Ed ≈ 0 (pure shear/axial): Returns min(d_top, d_bot) for conservatism
+          (smaller d = lower shear capacity, safer for cases with no clear compression face)
+
+        Args:
+            M_Ed: Design moment in kN·m
+            N_Ed: Design axial force in kN (compression positive)
+            eps_top: Pre-computed top strain (optional, avoids re-solving)
+            eps_bottom: Pre-computed bottom strain (optional, avoids re-solving)
+
+        Returns:
+            Effective depth in mm
+        """
+        # If M_Ed is negligible (pure shear or pure axial), use conservative approach
+        # For shear checks, smaller d is more conservative (lower capacity)
+        if abs(M_Ed) < 1e-6:
+            # Use the smaller effective depth (more conservative for shear)
+            d_top = self.section.get_effective_depth(compression_face="top")
+            d_bot = self.section.get_effective_depth(compression_face="bottom")
+            return min(d_top, d_bot)
+
+        # Use strain solver to determine compression face
+        if eps_top is None or eps_bottom is None:
+            eps_top, eps_bottom = self.find_strains_for_MN(M_Ed, N_Ed)
+
+        # Compression strain is POSITIVE in interaction diagram sign convention
+        # Larger positive strain = more compressed
+        # Use >= to handle pure axial case (eps_top == eps_bottom) deterministically
+        compression_face = "top" if eps_top >= eps_bottom else "bottom"
+
+        return self.section.get_effective_depth(compression_face=compression_face)
+
+    def get_lever_arm(
+        self,
+        M_Ed: float,
+        N_Ed: float,
+        d: Optional[float] = None,
+        eps_top: Optional[float] = None,
+        eps_bottom: Optional[float] = None,
+        *,
+        prefer_rigorous: bool = True,
+        cap_to_09d: bool = True,
+        min_z_ratio: float = 0.10,
+        warn_on_fallback: bool = True,
+    ) -> tuple[float, Optional[float]]:
+        """
+        Returns (z_ec2, z_mech).
+
+        z_ec2 is ALWAYS usable for design (finite, positive, conservative):
+        - defaults to 0.9d if rigorous calc is not requested or not meaningful
+        - optionally capped to 0.9d
+
+        z_mech is the uncapped centroid-based lever arm if computed, else None.
+        """
+        import warnings
+        # Effective depth
+        if d is None:
+            d = self.get_effective_depth(M_Ed, N_Ed, eps_top, eps_bottom)
+
+        d = float(d)
+        if d <= 0:
+            raise ValueError(f"Effective depth d must be > 0, got {d}")
+
+        limit_09d = 0.9 * d
+
+        # Cheap codified lever arm
+        if not prefer_rigorous:
+            return (limit_09d, None)
+
+        # Near-zero moment: centroid lever arm is ill-posed / numerically unstable
+        if abs(M_Ed) < 1e-6:
+            if warn_on_fallback:
+                warnings.warn(
+                    "Lever arm fallback to 0.9d: |M_Ed| is ~0 so centroid-based lever arm "
+                    "is ill-posed (pure axial/shear state).",
+                    stacklevel=2,
+                )
+            return (limit_09d, None)
+
+        # Need strains to compute centroid lever arm
+        if eps_top is None or eps_bottom is None:
+            eps_top, eps_bottom = self.find_strains_for_MN(M_target=M_Ed, N_target=N_Ed)
+
+        # Try rigorous centroid-based lever arm
+        z_mech = self._compute_lever_arm_from_centroids(eps_top, eps_bottom)
+
+        # If not meaningful / suspicious, fall back
+        if z_mech is None or (not np.isfinite(z_mech)):
+            if warn_on_fallback:
+                warnings.warn(
+                    "Lever arm fallback to 0.9d: unable to compute a meaningful tension/compression "
+                    "centroid lever arm for this strain state.",
+                    stacklevel=2,
+                )
+            return (limit_09d, None)
+
+        z_mech = float(z_mech)
+
+        # sanity: too small relative to d is almost always numerical / axial-dominated
+        if z_mech < min_z_ratio * d:
+            if warn_on_fallback:
+                warnings.warn(
+                    f"Lever arm fallback to 0.9d: computed z_mech={z_mech:.1f} mm is < "
+                    f"{min_z_ratio:.2f}d={min_z_ratio*d:.1f} mm (likely axial-dominated / numerical).",
+                    stacklevel=2,
+                )
+            return (limit_09d, z_mech)
+
+        # Apply EC2 cap
+        if cap_to_09d and z_mech > limit_09d:
+            warnings.warn(
+                f"Lever arm capped: z_mech={z_mech:.1f}mm > 0.9d={limit_09d:.1f}mm. "
+                "Using z=0.9d for EC2 truss model.",
+                stacklevel=2,
+            )
+            return (limit_09d, z_mech)
+
+        return (z_mech, z_mech)
+
+    def _compute_lever_arm_from_centroids(
+        self,
+        eps_top: float,
+        eps_bottom: float,
+    ) -> Optional[float]:
+        """
+        Mechanical lever arm from force resultant centroids.
+        Returns None if either tension or compression resultant is absent.
+        """
+        forces, y_coords, _ = self.get_fiber_forces_from_end_strains(eps_top, eps_bottom)
+
+        tension_mask = forces < 0
+        compression_mask = forces > 0
+
+        # If you don't have both resultants, "lever arm between T and C" is not defined
+        if (not np.any(tension_mask)) or (not np.any(compression_mask)):
+            return None
+
+        T_total = np.sum(-forces[tension_mask])
+        C_total = np.sum(forces[compression_mask])
+
+        # Guard against pathological near-zero totals
+        if T_total <= 0 or C_total <= 0:
+            return None
+
+        y_T = np.sum((-forces[tension_mask]) * y_coords[tension_mask]) / T_total
+        y_C = np.sum((forces[compression_mask]) * y_coords[compression_mask]) / C_total
+
+        z_mech = abs(float(y_T) - float(y_C))
+        if not np.isfinite(z_mech):
+            return None
+        
+        return float(z_mech)
 
 
     # ----------------------------
@@ -1308,8 +1475,7 @@ class MNInteractionDiagram:
             eps_top, eps_bottom = self.find_strains_for_MN(M_Rd, N_Rd)
 
             # Compute NA depth and compression direction
-            bbox = self.section.get_bounding_box()
-            h = bbox[3] - bbox[1]  # y_max - y_min
+            h = float(self.section_height)  # Use cached value
             if abs(eps_top - eps_bottom) < 1e-12:
                 # Uniform strain (pure axial) - NA is undefined
                 na_depth = None

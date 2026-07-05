@@ -85,7 +85,10 @@ class ConcreteMaterial(BaseMaterial):
     @property
     def f_ck(self) -> float:
         """Characteristic cylinder compressive strength at 28 days (§3.1.2), MPa."""
-        return float(self.grade.split("/")[0].replace("C", ""))
+        f_ck_int = int(self.grade.split("/")[0].replace("C", ""))
+        if f_ck_int > 90:
+            raise ValueError("Concrete cylinder strengths above 90 are not supported as per (§3.1.2(2)P)")
+        return float(f_ck_int)
 
     @property
     def f_ck_cube(self) -> float:
