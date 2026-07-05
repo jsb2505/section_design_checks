@@ -29,16 +29,26 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     cap_sigma_cp_upper,
 )
 from materials.reinforced_concrete.analysis.shear_viewer import (
+    _axis_centers_from_edges,
+    _build_axial_moment_plot_domain,
+    _build_axis_edges,
+    _build_horizontal_clip_masks,
+    _build_outside_clip_masks,
     _as_load_case,
     _build_slider_animation_controls,
     _build_nice_force_slider_values,
     _build_slider_values,
     _format_slider_numeric_label,
+    _get_closed_mn_polyline,
+    _get_force_band_fixed_m,
+    _normalize_mn_loadcases,
     _show_or_save,
+    _subdivide_axis,
     _utilization_colorscale,
 )
 
 if TYPE_CHECKING:
+    from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
     from materials.reinforced_concrete.code_checks.ec2_2004.circular_section_check import (
         CircularSectionCheck,
     )
@@ -94,12 +104,21 @@ class CircularShearViewer:
         if self.check.shear_reinforcement is None:
             raise ValueError("Shear reinforcement is required for shear study plots.")
 
+    def _resolve_plot_diagram(
+        self,
+    ) -> "MNInteractionDiagram":
+        """Return the default cached interaction diagram for plotting."""
+        shear_check = self.check._shear_check
+        assert shear_check is not None
+        return shear_check._get_diagram(ignore_compression_steel=False)
+
     def _build_context(
         self,
         *,
         load_case: ShearLoadCase,
         use_uncracked_V_Rd_c: bool = False,
         ignore_compression_steel: bool = False,
+        diagram: Optional["MNInteractionDiagram"] = None,
     ) -> _CircularStudyContext:
         """Compute shared parameters for a load case once."""
         V_Ed = abs(float(load_case.V_Ed))
@@ -114,9 +133,10 @@ class CircularShearViewer:
         eps_top: Optional[float]
         eps_bottom: Optional[float]
         if abs(M_Ed) > 1e-6:
-            eps_top, eps_bottom = shear_check._get_diagram(
-                ignore_compression_steel
-            ).find_strains_for_MN(M_Ed, N_Ed)
+            interaction_diagram = diagram
+            if interaction_diagram is None:
+                interaction_diagram = shear_check._get_diagram(ignore_compression_steel)
+            eps_top, eps_bottom = interaction_diagram.find_strains_for_MN(M_Ed, N_Ed)
         else:
             eps_top, eps_bottom = None, None
 
@@ -674,10 +694,6 @@ class CircularShearViewer:
         self,
         *,
         load_case: Union[ShearLoadCase, Dict[str, Any]],
-        N_min: float,
-        N_max: float,
-        M_min: Optional[float] = None,
-        M_max: Optional[float] = None,
         n_axial: int = 31,
         n_moment: int = 31,
         moment_on_y_axis: bool = False,
@@ -696,23 +712,19 @@ class CircularShearViewer:
         Plot a cot(theta)-vs-force heatmap with a slider for the other force.
 
         Depending on ``moment_on_y_axis``, the y-axis is either ``M_Ed`` or
-        ``N_Ed``. The slider controls the other quantity.
+        ``N_Ed``. The slider controls the other quantity. Only in-envelope
+        M-N states are computed and plotted.
 
         Args:
             load_case: Base shear load case (``V_Ed`` is kept fixed). Can be
                 ``ShearLoadCase`` or a ``dict`` with keys ``V_Ed`` and optional
                 ``M_Ed``/``N_Ed``.
-            N_min: Minimum axial force in kN.
-            N_max: Maximum axial force in kN.
-            M_min: Minimum moment in kN*m for the moment axis/slider. If ``None``,
-                uses ``load_case.M_Ed``.
-            M_max: Maximum moment in kN*m for the moment axis/slider. If ``None``,
-                uses ``load_case.M_Ed``.
             n_axial: Number of axial-force samples used on the heatmap force axis.
             n_moment: Number of moment samples used on the heatmap force axis.
             moment_on_y_axis: If ``True``, the y-axis is moment and the slider
                 controls axial force. If ``False``, the y-axis is axial force and
-                the slider controls moment. Slider values are auto-generated
+                the slider controls moment. Ranges are derived from the current
+                M-N interaction diagram, and slider values are auto-generated
                 with nice round increments targeting about 50 steps.
             cot_theta_min: Optional lower bound for cot(theta).
             cot_theta_max: Optional upper bound for cot(theta).
@@ -737,20 +749,15 @@ class CircularShearViewer:
             raise ImportError("Plotly is required for plotting. Install with: pip install plotly") from e
 
         case = _as_load_case(load_case)
-        base_context = self._build_context(load_case=case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
-
-        cot_min = base_context.cot_min if cot_theta_min is None else float(cot_theta_min)
-        cot_max = base_context.cot_max if cot_theta_max is None else float(cot_theta_max)
-        if cot_min > cot_max:
-            cot_min, cot_max = cot_max, cot_min
-
-        cot_vals = np.linspace(cot_min, cot_max, max(2, int(n_cot)))
-        n_vals = np.linspace(float(N_min), float(N_max), max(2, int(n_axial)))
-        m_min_val = case.M_Ed if M_min is None else float(M_min)
-        m_max_val = case.M_Ed if M_max is None else float(M_max)
-        m_vals = np.linspace(m_min_val, m_max_val, max(2, int(n_moment)))
-        n_slider_vals = _build_nice_force_slider_values(value_min=float(N_min), value_max=float(N_max))
-        m_slider_vals = _build_nice_force_slider_values(value_min=m_min_val, value_max=m_max_val)
+        plot_diagram = self._resolve_plot_diagram()
+        diagram_n_points = 160
+        diagram_polyline = _get_closed_mn_polyline(plot_diagram, n_points=diagram_n_points)
+        m_curve = np.asarray([point[0] for point in diagram_polyline], dtype=float)
+        n_curve = np.asarray([point[1] for point in diagram_polyline], dtype=float)
+        m_global_min = float(np.min(m_curve))
+        m_global_max = float(np.max(m_curve))
+        n_global_min = float(np.min(n_curve))
+        n_global_max = float(np.max(n_curve))
 
         metric_key = metric.strip().lower()
         valid_metrics = {"utilization", "capacity", "v_rd_s", "v_rd_max"}
@@ -758,36 +765,112 @@ class CircularShearViewer:
             raise ValueError(f"metric must be one of {sorted(valid_metrics)}.")
 
         if moment_on_y_axis:
-            y_vals = m_vals
-            slider_vals = n_slider_vals
+            y_vals = np.linspace(m_global_min, m_global_max, max(2, int(n_moment)))
+            slider_vals = _build_nice_force_slider_values(
+                value_min=n_global_min,
+                value_max=n_global_max,
+            )
             y_label = "Moment M_Ed (kN*m)"
             y_hover_name = "M_Ed"
             y_hover_format = ".2f"
             y_hover_unit = "kN*m"
             slider_prefix = "N_Ed (kN): "
         else:
-            y_vals = n_vals
-            slider_vals = m_slider_vals
+            y_vals = np.linspace(n_global_min, n_global_max, max(2, int(n_axial)))
+            slider_vals = _build_nice_force_slider_values(
+                value_min=m_global_min,
+                value_max=m_global_max,
+            )
             y_label = "Axial force N_Ed (kN)"
             y_hover_name = "N_Ed"
             y_hover_format = ".1f"
             y_hover_unit = "kN"
             slider_prefix = "M_Ed (kN*m): "
 
-        z_volume = np.zeros((len(slider_vals), len(y_vals), len(cot_vals)))
+        y_edges = _build_axis_edges(y_vals)
+        display_oversample = 3
+        display_y_edges = _subdivide_axis(y_edges, display_oversample)
+        display_y_vals = _axis_centers_from_edges(display_y_edges)
+
+        context_grid: list[list[Optional[_CircularStudyContext]]] = [
+            [None for _ in range(len(y_vals))]
+            for _ in range(len(slider_vals))
+        ]
+        band_lower_vals = np.full(len(slider_vals), np.nan, dtype=float)
+        band_upper_vals = np.full(len(slider_vals), np.nan, dtype=float)
+        cot_min_candidates: list[float] = []
+        cot_max_candidates: list[float] = []
 
         for i_slider, slider_val in enumerate(slider_vals):
+            if moment_on_y_axis:
+                n_cap, m_pos, m_neg = plot_diagram.get_capacity_fixed_n(
+                    N_Ed=float(slider_val),
+                    n_points=diagram_n_points,
+                )
+                if n_cap is None or m_pos is None or m_neg is None:
+                    continue
+                fixed_force = float(n_cap)
+                y_lower = min(float(m_neg), float(m_pos))
+                y_upper = max(float(m_neg), float(m_pos))
+            else:
+                m_cap, n_upper, n_lower = _get_force_band_fixed_m(diagram_polyline, float(slider_val))
+                if m_cap is None or n_upper is None or n_lower is None:
+                    continue
+                fixed_force = float(m_cap)
+                y_lower = float(n_lower)
+                y_upper = float(n_upper)
+
+            band_lower_vals[i_slider] = y_lower
+            band_upper_vals[i_slider] = y_upper
+            tol = 1e-9 * max(1.0, abs(y_lower), abs(y_upper))
+
             for i_y, y_val in enumerate(y_vals):
+                cell_lower = float(y_edges[i_y])
+                cell_upper = float(y_edges[i_y + 1])
+                if cell_upper < y_lower - tol or cell_lower > y_upper + tol:
+                    continue
+
+                y_eval = float(np.clip(float(y_val), y_lower, y_upper))
                 if moment_on_y_axis:
-                    m_ed = float(y_val)
-                    n_ed = float(slider_val)
+                    sweep_case = ShearLoadCase(V_Ed=case.V_Ed, M_Ed=y_eval, N_Ed=fixed_force)
                 else:
-                    m_ed = float(slider_val)
-                    n_ed = float(y_val)
+                    sweep_case = ShearLoadCase(V_Ed=case.V_Ed, M_Ed=fixed_force, N_Ed=y_eval)
 
-                sweep_case = ShearLoadCase(V_Ed=case.V_Ed, M_Ed=m_ed, N_Ed=n_ed)
-                context = self._build_context(load_case=sweep_case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
+                context = self._build_context(
+                    load_case=sweep_case,
+                    use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
+                    diagram=plot_diagram,
+                )
+                context_grid[i_slider][i_y] = context
+                cot_min_candidates.append(float(context.cot_min))
+                cot_max_candidates.append(float(context.cot_max))
 
+        if cot_min_candidates and cot_max_candidates:
+            cot_min = min(cot_min_candidates) if cot_theta_min is None else float(cot_theta_min)
+            cot_max = max(cot_max_candidates) if cot_theta_max is None else float(cot_theta_max)
+        else:
+            fallback_context = self._build_context(
+                load_case=case,
+                use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
+                diagram=plot_diagram,
+            )
+            cot_min = float(fallback_context.cot_min) if cot_theta_min is None else float(cot_theta_min)
+            cot_max = float(fallback_context.cot_max) if cot_theta_max is None else float(cot_theta_max)
+        if cot_min > cot_max:
+            cot_min, cot_max = cot_max, cot_min
+
+        cot_vals = _build_slider_values(
+            value_min=cot_min,
+            value_max=cot_max,
+            n_points=n_cot,
+            step=None,
+        )
+        z_volume = np.full((len(slider_vals), len(y_vals), len(cot_vals)), np.nan, dtype=float)
+
+        for i_slider, row in enumerate(context_grid):
+            for i_y, context in enumerate(row):
+                if context is None:
+                    continue
                 for i_cot, cot_theta in enumerate(cot_vals):
                     cot_f = float(cot_theta)
                     V_Rd_s = self._find_V_Rd_s(cot_f, context)
@@ -810,7 +893,8 @@ class CircularShearViewer:
             zmin = 0.0
             finite_vals = z_volume[np.isfinite(z_volume)]
             zmax = max(1.5, float(np.nanmax(finite_vals))) if finite_vals.size else 1.5
-            z_plot_volume = np.where(np.isfinite(z_volume), z_volume, zmax)
+            z_plot_volume = np.array(z_volume, copy=True)
+            z_plot_volume[np.isinf(z_plot_volume)] = zmax
             colorscale = _utilization_colorscale(zmin=zmin, zmax=zmax)
         else:
             colorbar_title = "kN"
@@ -819,7 +903,29 @@ class CircularShearViewer:
             zmax = None
             z_plot_volume = z_volume
 
-        first_slice = z_plot_volume[0, :, :]
+        display_z_volume = np.repeat(z_plot_volume, display_oversample, axis=1)
+        x_min = float(cot_vals[0])
+        x_max = float(cot_vals[-1])
+        y_min = float(y_vals[0])
+        y_max = float(y_vals[-1])
+
+        def _frame_band(index: int) -> tuple[float, float]:
+            lower = float(band_lower_vals[index])
+            upper = float(band_upper_vals[index])
+            if not np.isfinite(lower) or not np.isfinite(upper):
+                return y_min, y_min
+            return (min(lower, upper), max(lower, upper))
+
+        first_lower, first_upper = _frame_band(0)
+        first_top_mask, first_bottom_mask = _build_horizontal_clip_masks(
+            x_min=x_min,
+            x_max=x_max,
+            y_min=y_min,
+            y_max=y_max,
+            y_lower=first_lower,
+            y_upper=first_upper,
+        )
+        first_slice = display_z_volume[0, :, :]
         hovertemplate = (
             "cot(theta): %{x:.3f}<br>"
             f"{y_hover_name}: %{{y:{y_hover_format}}} {y_hover_unit}<br>"
@@ -831,7 +937,7 @@ class CircularShearViewer:
         fig.add_trace(
             go.Heatmap(
                 x=cot_vals,
-                y=y_vals,
+                y=display_y_vals,
                 z=first_slice,
                 colorscale=colorscale,
                 zmin=zmin,
@@ -845,7 +951,7 @@ class CircularShearViewer:
             fig.add_trace(
                 go.Contour(
                     x=cot_vals,
-                    y=y_vals,
+                    y=display_y_vals,
                     z=first_slice,
                     contours=dict(start=1.0, end=1.0, size=1.0, coloring="none"),
                     line=dict(color="black", width=2),
@@ -854,15 +960,70 @@ class CircularShearViewer:
                     hoverinfo="skip",
                 ),
             )
+        fig.add_trace(
+            go.Scatter(
+                x=cot_vals,
+                y=[first_upper] * len(cot_vals),
+                mode="lines",
+                name="Upper M-N limit",
+                line=dict(color="black", width=2),
+                hoverinfo="skip",
+            ),
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=cot_vals,
+                y=[first_lower] * len(cot_vals),
+                mode="lines",
+                name="Lower M-N limit",
+                line=dict(color="black", width=2),
+                hoverinfo="skip",
+            ),
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=first_top_mask[0],
+                y=first_top_mask[1],
+                mode="lines",
+                fill="toself",
+                fillcolor="white",
+                line=dict(color="white", width=0),
+                showlegend=False,
+                hoverinfo="skip",
+                name="_top_mask",
+            ),
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=first_bottom_mask[0],
+                y=first_bottom_mask[1],
+                mode="lines",
+                fill="toself",
+                fillcolor="white",
+                line=dict(color="white", width=0),
+                showlegend=False,
+                hoverinfo="skip",
+                name="_bottom_mask",
+            ),
+        )
 
         frames = []
         for i_slider, slider_val in enumerate(slider_vals):
-            z_slice = z_plot_volume[i_slider, :, :]
+            lower_bound, upper_bound = _frame_band(i_slider)
+            top_mask, bottom_mask = _build_horizontal_clip_masks(
+                x_min=x_min,
+                x_max=x_max,
+                y_min=y_min,
+                y_max=y_max,
+                y_lower=lower_bound,
+                y_upper=upper_bound,
+            )
+            z_slice = display_z_volume[i_slider, :, :]
             slider_label = _format_slider_numeric_label(float(slider_val))
             frame_data: list[Any] = [
                 go.Heatmap(
                     x=cot_vals,
-                    y=y_vals,
+                    y=display_y_vals,
                     z=z_slice,
                     colorscale=colorscale,
                     zmin=zmin,
@@ -876,7 +1037,7 @@ class CircularShearViewer:
                 frame_data.append(
                     go.Contour(
                         x=cot_vals,
-                        y=y_vals,
+                        y=display_y_vals,
                         z=z_slice,
                         contours=dict(start=1.0, end=1.0, size=1.0, coloring="none"),
                         line=dict(color="black", width=2),
@@ -885,6 +1046,48 @@ class CircularShearViewer:
                         hoverinfo="skip",
                     ),
                 )
+            frame_data.extend(
+                [
+                    go.Scatter(
+                        x=cot_vals,
+                        y=[upper_bound] * len(cot_vals),
+                        mode="lines",
+                        name="Upper M-N limit",
+                        line=dict(color="black", width=2),
+                        hoverinfo="skip",
+                    ),
+                    go.Scatter(
+                        x=cot_vals,
+                        y=[lower_bound] * len(cot_vals),
+                        mode="lines",
+                        name="Lower M-N limit",
+                        line=dict(color="black", width=2),
+                        hoverinfo="skip",
+                    ),
+                    go.Scatter(
+                        x=top_mask[0],
+                        y=top_mask[1],
+                        mode="lines",
+                        fill="toself",
+                        fillcolor="white",
+                        line=dict(color="white", width=0),
+                        showlegend=False,
+                        hoverinfo="skip",
+                        name="_top_mask",
+                    ),
+                    go.Scatter(
+                        x=bottom_mask[0],
+                        y=bottom_mask[1],
+                        mode="lines",
+                        fill="toself",
+                        fillcolor="white",
+                        line=dict(color="white", width=0),
+                        showlegend=False,
+                        hoverinfo="skip",
+                        name="_bottom_mask",
+                    ),
+                ],
+            )
             frames.append({"name": slider_label, "data": frame_data})
         fig.frames = frames
 
@@ -893,6 +1096,7 @@ class CircularShearViewer:
             title=title or f"Circular Force vs cot(theta): {metric_key} ({mode_title})",
             xaxis_title="cot(theta)",
             yaxis_title=y_label,
+            yaxis=dict(range=[y_min, y_max], autorange=False),
             template="plotly_white",
             width=width,
             height=height,
@@ -927,11 +1131,9 @@ class CircularShearViewer:
     def plot_axial_moment_contour(
         self,
         *,
-        load_case: Union[ShearLoadCase, Dict[str, Any]],
-        M_min: float,
-        M_max: float,
-        N_min: float,
-        N_max: float,
+        V_Ed: float,
+        loadcases: Optional[Sequence[Union[Dict[str, Any], Sequence[float]]]] = None,
+        n_diagram_points: int = 120,
         n_moment: int = 41,
         n_axial: int = 31,
         cot_theta_min: Optional[float] = None,
@@ -946,13 +1148,15 @@ class CircularShearViewer:
         height: int = 760,
     ) -> Any:
         """
-        Plot an M-N utilization heatmap with cot(theta) slider (circular).
+        Plot an M-N utilization heatmap clipped to the interaction diagram (circular).
 
         The x-axis is ``M_Ed``, y-axis is ``N_Ed`` and heatmap color is shear
-        utilization. A contour line for ``utilization = 1.0`` is included for
-        each cot(theta) frame. Slider values use 0.05 cot(theta) increments by
-        default; set ``cot_theta_step`` to ``None`` or non-positive to use
-        ``n_cot`` linear spacing.
+        utilization. The plotted heatmap is masked outside the M-N envelope,
+        and the capacity boundary is overlaid as a line trace. A contour line
+        for ``utilization = 1.0`` is included for each cot(theta) frame.
+        Slider values use 0.05 cot(theta) increments by default; set
+        ``cot_theta_step`` to ``None`` or non-positive to use ``n_cot``
+        linear spacing.
         """
         self._require_shear_reinforcement()
 
@@ -961,11 +1165,65 @@ class CircularShearViewer:
         except ImportError as e:
             raise ImportError("Plotly is required for plotting. Install with: pip install plotly") from e
 
-        case = _as_load_case(load_case)
-        base_context = self._build_context(load_case=case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
+        plot_diagram = self._resolve_plot_diagram()
+        plot_domain = _build_axial_moment_plot_domain(
+            plot_diagram,
+            n_diagram_points=n_diagram_points,
+            n_moment=n_moment,
+            n_axial=n_axial,
+        )
+        display_oversample = 3
+        display_m_edges = _subdivide_axis(plot_domain.m_edges, display_oversample)
+        display_n_edges = _subdivide_axis(plot_domain.n_edges, display_oversample)
+        display_m_vals = _axis_centers_from_edges(display_m_edges)
+        display_n_vals = _axis_centers_from_edges(display_n_edges)
+        left_mask, right_mask = _build_outside_clip_masks(
+            plot_diagram,
+            y_edges=display_n_edges,
+            x_min=float(display_m_edges[0]),
+            x_max=float(display_m_edges[-1]),
+            n_diagram_points=n_diagram_points,
+        )
+        plotted_loadcases = _normalize_mn_loadcases(loadcases)
 
-        cot_min = base_context.cot_min if cot_theta_min is None else float(cot_theta_min)
-        cot_max = base_context.cot_max if cot_theta_max is None else float(cot_theta_max)
+        context_grid: list[list[Optional[_CircularStudyContext]]] = [
+            [None for _ in range(len(plot_domain.m_vals))]
+            for _ in range(len(plot_domain.n_vals))
+        ]
+        cot_min_candidates: list[float] = []
+        cot_max_candidates: list[float] = []
+
+        for i_n, n_ed in enumerate(plot_domain.n_vals):
+            for i_m, m_ed in enumerate(plot_domain.m_vals):
+                if not plot_domain.valid_mask[i_n, i_m]:
+                    continue
+                left_bound = float(plot_domain.center_left[i_n])
+                right_bound = float(plot_domain.center_right[i_n])
+                m_eval = float(np.clip(float(m_ed), left_bound, right_bound))
+                case = ShearLoadCase(V_Ed=V_Ed, M_Ed=m_eval, N_Ed=float(n_ed))
+                context = self._build_context(
+                    load_case=case,
+                    use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
+                    diagram=plot_diagram,
+                )
+                context_grid[i_n][i_m] = context
+                cot_min_candidates.append(float(context.cot_min))
+                cot_max_candidates.append(float(context.cot_max))
+
+        if cot_min_candidates and cot_max_candidates:
+            cot_default_min = min(cot_min_candidates)
+            cot_default_max = max(cot_max_candidates)
+        else:
+            fallback_context = self._build_context(
+                load_case=ShearLoadCase(V_Ed=V_Ed, M_Ed=0.0, N_Ed=0.0),
+                use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
+                diagram=plot_diagram,
+            )
+            cot_default_min = float(fallback_context.cot_min)
+            cot_default_max = float(fallback_context.cot_max)
+
+        cot_min = cot_default_min if cot_theta_min is None else float(cot_theta_min)
+        cot_max = cot_default_max if cot_theta_max is None else float(cot_theta_max)
         if cot_min > cot_max:
             cot_min, cot_max = cot_max, cot_min
 
@@ -976,15 +1234,16 @@ class CircularShearViewer:
             step=cot_theta_step,
         )
         cot_labels = [f"{float(cot_theta):.2f}" for cot_theta in cot_vals]
-        n_vals = np.linspace(float(N_min), float(N_max), max(2, int(n_axial)))
-        m_vals = np.linspace(float(M_min), float(M_max), max(2, int(n_moment)))
-        util_volume = np.zeros((len(cot_vals), len(n_vals), len(m_vals)))
+        util_volume = np.full(
+            (len(cot_vals), len(plot_domain.n_vals), len(plot_domain.m_vals)),
+            np.nan,
+            dtype=float,
+        )
 
-        for i_n, n_ed in enumerate(n_vals):
-            for i_m, m_ed in enumerate(m_vals):
-                mn_case = ShearLoadCase(V_Ed=case.V_Ed, M_Ed=float(m_ed), N_Ed=float(n_ed))
-                context = self._build_context(load_case=mn_case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
-
+        for i_n, row in enumerate(context_grid):
+            for i_m, context in enumerate(row):
+                if context is None:
+                    continue
                 for i_cot, cot_theta in enumerate(cot_vals):
                     cot_f = float(cot_theta)
                     V_Rd_s = self._find_V_Rd_s(cot_f, context)
@@ -992,16 +1251,22 @@ class CircularShearViewer:
                     V_Rd = min(V_Rd_s, V_Rd_max)
                     util_volume[i_cot, i_n, i_m] = context.V_Ed / V_Rd if V_Rd > 0.0 else float("inf")
 
+        display_volume = np.repeat(
+            np.repeat(util_volume, display_oversample, axis=1),
+            display_oversample,
+            axis=2,
+        )
+
         finite_vals = util_volume[np.isfinite(util_volume)]
         zmax = max(1.5, float(np.nanmax(finite_vals))) if finite_vals.size else 1.5
         colorscale = _utilization_colorscale(zmin=0.0, zmax=zmax)
 
-        first_slice = util_volume[0, :, :]
+        first_slice = display_volume[0, :, :]
         fig = go.Figure()
         fig.add_trace(
             go.Heatmap(
-                x=m_vals,
-                y=n_vals,
+                x=display_m_vals,
+                y=display_n_vals,
                 z=first_slice,
                 colorscale=colorscale,
                 zmin=0.0,
@@ -1017,8 +1282,8 @@ class CircularShearViewer:
         )
         fig.add_trace(
             go.Contour(
-                x=m_vals,
-                y=n_vals,
+                x=display_m_vals,
+                y=display_n_vals,
                 z=first_slice,
                 contours=dict(start=1.0, end=1.0, size=1.0, coloring="none"),
                 line=dict(color="black", width=2),
@@ -1027,17 +1292,84 @@ class CircularShearViewer:
                 hoverinfo="skip",
             ),
         )
+        fig.add_trace(
+            go.Scatter(
+                x=left_mask[0],
+                y=left_mask[1],
+                mode="none",
+                fill="toself",
+                fillcolor="white",
+                showlegend=False,
+                hoverinfo="skip",
+                name="_clip_left",
+            ),
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=right_mask[0],
+                y=right_mask[1],
+                mode="none",
+                fill="toself",
+                fillcolor="white",
+                showlegend=False,
+                hoverinfo="skip",
+                name="_clip_right",
+            ),
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=plot_domain.m_curve,
+                y=plot_domain.n_curve,
+                mode="lines",
+                name="M-N Capacity",
+                line=dict(color="black", width=2),
+                hovertemplate=(
+                    "M_Rd: %{x:.2f} kN*m<br>"
+                    "N_Rd: %{y:.1f} kN<extra></extra>"
+                ),
+            ),
+        )
+
+        for plotted_case in plotted_loadcases:
+            capacity = plot_diagram.get_capacity_vector(
+                N_Ed=plotted_case.N_Ed,
+                M_Ed=plotted_case.M_Ed,
+                n_points=n_diagram_points,
+                return_details=False,
+            )
+            is_inside = bool(capacity.is_safe)
+            status = "Inside envelope" if is_inside else "Outside envelope"
+            fig.add_trace(
+                go.Scatter(
+                    x=[plotted_case.M_Ed],
+                    y=[plotted_case.N_Ed],
+                    mode="markers",
+                    name=plotted_case.name,
+                    marker=dict(
+                        color="green" if is_inside else "red",
+                        size=8,
+                        symbol="circle",
+                        line=dict(color="black", width=1),
+                    ),
+                    hovertemplate=(
+                        f"<b>{plotted_case.name}</b><br>"
+                        f"M_Ed: {plotted_case.M_Ed:.2f} kN*m<br>"
+                        f"N_Ed: {plotted_case.N_Ed:.1f} kN<br>"
+                        f"Status: {status}<extra></extra>"
+                    ),
+                ),
+            )
 
         frames = []
         for i, cot_label in enumerate(cot_labels):
-            util_slice = util_volume[i, :, :]
+            util_slice = display_volume[i, :, :]
             frames.append(
                 {
                     "name": cot_label,
                     "data": [
                         go.Heatmap(
-                            x=m_vals,
-                            y=n_vals,
+                            x=display_m_vals,
+                            y=display_n_vals,
                             z=util_slice,
                             colorscale=colorscale,
                             zmin=0.0,
@@ -1051,8 +1383,8 @@ class CircularShearViewer:
                             name="utilization",
                         ),
                         go.Contour(
-                            x=m_vals,
-                            y=n_vals,
+                            x=display_m_vals,
+                            y=display_n_vals,
                             z=util_slice,
                             contours=dict(start=1.0, end=1.0, size=1.0, coloring="none"),
                             line=dict(color="black", width=2),

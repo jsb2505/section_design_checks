@@ -1802,10 +1802,8 @@ class ShearCheck(BaseCodeCheck):
             load_case: Base shear load case (``V_Ed`` is kept fixed). Can be
                 ``ShearLoadCase`` or a ``dict`` with keys ``V_Ed`` and optional
                 ``M_Ed``/``N_Ed``.
-            n_min: Minimum axial force ``N_Ed`` in kN.
-            n_max: Maximum axial force ``N_Ed`` in kN.
-            m_min: Minimum moment ``M_Ed`` in kN·m.
-            m_max: Maximum moment ``M_Ed`` in kN·m.
+            The axial-force and moment plotting bounds are taken automatically
+                from the cached M-N interaction diagram.
             n_axial: Number of axial-force samples.
             n_moment: Number of moment samples.
             moment_on_y_axis: If ``True``, the y-axis is moment and the slider

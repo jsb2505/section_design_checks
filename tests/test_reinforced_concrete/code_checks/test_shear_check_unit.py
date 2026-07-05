@@ -1061,10 +1061,6 @@ class TestPlotWrappers:
         out5 = check.plot_cot_theta_link_angle_heatmap(load_case=load_case, show=False)
         out6 = check.plot_force_cot_theta_contour(
             load_case=load_case,
-            n_min=-100.0,
-            n_max=100.0,
-            m_min=-50.0,
-            m_max=50.0,
             show=False,
         )
 

@@ -11,6 +11,7 @@ import types
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from materials.reinforced_concrete.analysis.circular_shear_viewer import CircularShearViewer
@@ -36,15 +37,47 @@ class _FakeRebar:
 
 
 class _FakeDiagram:
+    def __init__(self, *, m_limit: float = 100.0, n_limit: float = 200.0):
+        self.m_limit = float(m_limit)
+        self.n_limit = float(n_limit)
+
     def find_strains_for_MN(self, M_Ed: float, N_Ed: float, strict: bool = False):
         return (0.001, -0.001)
+
+    def generate_diagram_points(self, n_points: int):
+        return [
+            SimpleNamespace(M=0.0, N=self.n_limit),
+            SimpleNamespace(M=self.m_limit, N=0.0),
+            SimpleNamespace(M=0.0, N=-self.n_limit),
+            SimpleNamespace(M=-self.m_limit, N=0.0),
+            SimpleNamespace(M=0.0, N=self.n_limit),
+        ]
+
+    def get_capacity_fixed_n(self, N_Ed: float, *, n_points: int = 120):
+        n_cap = max(-self.n_limit, min(self.n_limit, float(N_Ed)))
+        ratio = max(0.0, 1.0 - abs(n_cap) / self.n_limit)
+        m_cap = self.m_limit * ratio
+        return (n_cap, m_cap, -m_cap)
+
+    def get_capacity_vector(self, N_Ed: float, M_Ed: float, n_points: int = 120, return_details: bool = False):
+        _, m_pos, m_neg = self.get_capacity_fixed_n(N_Ed, n_points=n_points)
+        is_safe = bool(m_neg <= float(M_Ed) <= m_pos)
+        return SimpleNamespace(
+            N_Rd=float(N_Ed),
+            M_Rd=max(min(float(M_Ed), m_pos), m_neg),
+            is_safe=is_safe,
+            utilization=0.75 if is_safe else 1.25,
+        )
 
 
 class _FakeShearCheck:
     """Minimal mock of ShearCheck used by CircularSectionCheck._shear_check."""
 
+    def __init__(self, *, diagram: _FakeDiagram | None = None):
+        self._diagram = diagram or _FakeDiagram()
+
     def _get_diagram(self, ignore_compression_steel: bool = False):
-        return _FakeDiagram()
+        return self._diagram
 
     def find_effective_depth(
         self,
@@ -78,13 +111,13 @@ class _FakeSection:
 class _FakeCircularCheck:
     """Minimal mock of CircularSectionCheck."""
 
-    def __init__(self, *, with_rebar: bool = True):
+    def __init__(self, *, with_rebar: bool = True, diagram: _FakeDiagram | None = None):
         self.shear_reinforcement = _FakeRebar() if with_rebar else None
         self.use_sigma_cp_for_alpha_cw = False
         self.section = _FakeSection()
         self.diameter = 600.0
         self.use_simplified_lambda_1 = True
-        self._shear_check = _FakeShearCheck()
+        self._shear_check = _FakeShearCheck(diagram=diagram)
         self._concrete_uls = SimpleNamespace(f_ck=30.0, gamma_c=1.5)
 
     @property
@@ -186,7 +219,10 @@ def _assert_force_slider_has_nice_steps(layout: dict) -> None:
     slider_steps = layout["sliders"][0]["steps"]
     assert 30 <= len(slider_steps) <= 70
 
+    labels = [step["label"] for step in slider_steps]
+    assert all("." not in label for label in labels)
     values = [float(step["label"]) for step in slider_steps]
+    assert all(np.isclose(value % 5.0, 0.0) for value in values)
     increments = [values[i + 1] - values[i] for i in range(len(values) - 1)]
     assert increments
     assert all(delta > 0.0 for delta in increments)
@@ -196,7 +232,7 @@ def _assert_force_slider_has_nice_steps(layout: dict) -> None:
 
     magnitude = 10.0 ** math.floor(math.log10(abs(main_step)))
     normalized = main_step / magnitude
-    assert any(abs(normalized - candidate) <= 1e-6 for candidate in (1.0, 2.0, 2.5, 5.0, 10.0))
+    assert any(abs(normalized - candidate) <= 1e-6 for candidate in (1.0, 2.0, 5.0, 10.0))
 
 
 def _patch_tension_shift(monkeypatch):
@@ -359,10 +395,6 @@ class TestCircularShearViewer:
 
         fig = viewer.plot_force_cot_theta_contour(
             load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
-            N_min=-200.0,
-            N_max=200.0,
-            M_min=-100.0,
-            M_max=100.0,
             n_axial=4,
             n_moment=3,
             n_cot=4,
@@ -373,6 +405,20 @@ class TestCircularShearViewer:
         trace_types = [t[0]["type"] for t in fig.traces]
         assert "Heatmap" in trace_types
         assert "Contour" in trace_types
+        assert "Scatter" in trace_types
+        trace_names = [t[0].get("name") for t in fig.traces if t[0]["type"] == "Scatter"]
+        assert "Upper M-N limit" in trace_names
+        assert "Lower M-N limit" in trace_names
+        assert "_top_mask" in trace_names
+        assert "_bottom_mask" in trace_names
+        upper_trace = next(t[0] for t in fig.traces if t[0].get("name") == "Upper M-N limit")
+        lower_trace = next(t[0] for t in fig.traces if t[0].get("name") == "Lower M-N limit")
+        assert max(upper_trace["y"]) < viewer.check._shear_check._diagram.n_limit
+        assert min(lower_trace["y"]) > -viewer.check._shear_check._diagram.n_limit
+        heatmap_trace = next(t[0] for t in fig.traces if t[0]["type"] == "Heatmap")
+        heatmap_z = np.asarray(heatmap_trace["z"], dtype=float)
+        assert np.isnan(heatmap_z).any()
+        assert np.isfinite(heatmap_z).any()
         assert hasattr(fig, "frames")
         assert 30 <= len(fig.frames) <= 70
         layout = fig.layout_updates[-1]
@@ -387,10 +433,6 @@ class TestCircularShearViewer:
 
         fig = viewer.plot_force_cot_theta_contour(
             load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
-            N_min=-150.0,
-            N_max=150.0,
-            M_min=-80.0,
-            M_max=80.0,
             n_axial=5,
             n_moment=4,
             moment_on_y_axis=True,
@@ -406,6 +448,10 @@ class TestCircularShearViewer:
         assert "sliders" in layout
         assert layout.get("yaxis_title") == "Moment M_Ed (kN*m)"
         assert layout["sliders"][0]["currentvalue"]["prefix"] == "N_Ed (kN): "
+        upper_trace = next(t[0] for t in fig.traces if t[0].get("name") == "Upper M-N limit")
+        lower_trace = next(t[0] for t in fig.traces if t[0].get("name") == "Lower M-N limit")
+        assert max(upper_trace["y"]) < viewer.check._shear_check._diagram.m_limit
+        assert min(lower_trace["y"]) > -viewer.check._shear_check._diagram.m_limit
         _assert_force_slider_has_nice_steps(layout)
 
     def test_plot_axial_moment_contour_has_heatmap_contour_and_frames(self, monkeypatch):
@@ -413,11 +459,7 @@ class TestCircularShearViewer:
         viewer = CircularShearViewer(_FakeCircularCheck())
 
         fig = viewer.plot_axial_moment_contour(
-            load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
-            M_min=-100.0,
-            M_max=100.0,
-            N_min=-200.0,
-            N_max=200.0,
+            V_Ed=150.0,
             n_moment=4,
             n_axial=4,
             n_cot=3,
@@ -427,6 +469,7 @@ class TestCircularShearViewer:
         trace_types = [t[0]["type"] for t in fig.traces]
         assert "Heatmap" in trace_types
         assert "Contour" in trace_types
+        assert "Scatter" in trace_types
         assert hasattr(fig, "frames")
         assert len(fig.frames) == 31
         layout = fig.layout_updates[-1]
@@ -435,14 +478,41 @@ class TestCircularShearViewer:
         assert layout["sliders"][0]["steps"][0]["label"] == "1.00"
         assert layout["sliders"][0]["steps"][-1]["label"] == "2.50"
 
+        boundary_trace = next(t[0] for t in fig.traces if t[0]["type"] == "Scatter" and t[0]["mode"] == "lines")
+        assert boundary_trace["name"] == "M-N Capacity"
+
+        heatmap_trace = next(t[0] for t in fig.traces if t[0]["type"] == "Heatmap")
+        heatmap_z = np.asarray(heatmap_trace["z"], dtype=float)
+        assert np.isnan(heatmap_z).any()
+        assert np.isfinite(heatmap_z).any()
+
+    def test_plot_axial_moment_contour_plots_loadcases_with_binary_colors(self, monkeypatch):
+        _apply_all_patches(monkeypatch)
+        viewer = CircularShearViewer(_FakeCircularCheck())
+
+        fig = viewer.plot_axial_moment_contour(
+            V_Ed=150.0,
+            loadcases=[
+                {"M_Ed": 0.0, "N_Ed": 0.0, "name": "Inside"},
+                {"M_Ed": 120.0, "N_Ed": 0.0, "name": "Outside"},
+            ],
+            n_moment=4,
+            n_axial=4,
+            n_cot=3,
+            show=False,
+        )
+
+        marker_traces = [t[0] for t in fig.traces if t[0]["type"] == "Scatter" and t[0]["mode"] == "markers"]
+        colors = {trace["name"]: trace["marker"]["color"] for trace in marker_traces}
+        assert colors["Inside"] == "green"
+        assert colors["Outside"] == "red"
+
     def test_plot_force_cot_theta_contour_capacity_metric(self, monkeypatch):
         _apply_all_patches(monkeypatch)
         viewer = CircularShearViewer(_FakeCircularCheck())
 
         fig = viewer.plot_force_cot_theta_contour(
             load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
-            N_min=-200.0,
-            N_max=200.0,
             n_axial=3,
             n_cot=3,
             metric="capacity",
@@ -461,8 +531,6 @@ class TestCircularShearViewer:
         with pytest.raises(ValueError, match="metric must be one of"):
             viewer.plot_force_cot_theta_contour(
                 load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
-                N_min=-200.0,
-                N_max=200.0,
                 metric="invalid",
                 show=False,
             )
