@@ -330,21 +330,6 @@ class StressStrainViewer:
         row: int = 1,
         col: int = 1,
     ) -> None:
-        # Outline
-        outline_x, outline_y = self._get_outline_xy()
-        fig.add_trace(
-            go.Scatter(
-                x=outline_x,
-                y=outline_y,
-                mode="lines",
-                line=dict(color="black", width=2),
-                name="Section outline",
-                showlegend=False,
-            ),
-            row=row,
-            col=col,
-        )
-
         # Concrete stress map
         if np.any(s.conc_mask):
             if section_render == "filled":
@@ -371,7 +356,7 @@ class StressStrainViewer:
                             cmin=cmin_val,
                             cmax=cmax_val,
                             colorbar=dict(
-                                title=dict(text="σ<br>(MPa)", side="right"),
+                                title=dict(text="σ<br>(MPa)", side="bottom"),
                                 thickness=15,
                             ),
                         ),
@@ -388,38 +373,63 @@ class StressStrainViewer:
                     col=col,
                 )
 
-        # Steel rebars (single trace)
+        # Rebar markers split by sign so legend can toggle compression/tension independently.
         if np.any(s.steel_mask):
             sx = s.x[s.steel_mask].astype(float)
             sy = s.y[s.steel_mask].astype(float)
             ss = s.stresses[s.steel_mask].astype(float)
             sf = (s.forces_N[s.steel_mask] * FORCE_TO_KN[ForceUnit.N]).astype(float)
             se = (s.strains[s.steel_mask] * 1000.0).astype(float)   # ‰
+            comp_mask = ss >= 0.0
+            tens_mask = ss < 0.0
 
-            s_color = np.where(ss < 0.0, "green", "darkorange")
-            custom = np.column_stack([ss, se, sf])
-
-            fig.add_trace(
-                go.Scatter(
-                    x=sx,
-                    y=sy,
-                    mode="markers",
-                    marker=dict(size=12, color=s_color, line=dict(color="black", width=1)),
-                    customdata=custom,
-                    hovertemplate=(
-                        "x: %{x:.1f} mm<br>"
-                        "y: %{y:.1f} mm<br>"
-                        "σ: %{customdata[0]:.1f} MPa<br>"
-                        "ε: %{customdata[1]:.3f} ‰<br>"
-                        "F: %{customdata[2]:.1f} kN<br>"
-                        "<extra>Steel</extra>"
+            if np.any(comp_mask):
+                comp_custom = np.column_stack([ss[comp_mask], se[comp_mask], sf[comp_mask]])
+                fig.add_trace(
+                    go.Scatter(
+                        x=sx[comp_mask],
+                        y=sy[comp_mask],
+                        mode="markers",
+                        marker=dict(size=12, color="darkorange", line=dict(color="black", width=1)),
+                        customdata=comp_custom,
+                        hovertemplate=(
+                            "x: %{x:.1f} mm<br>"
+                            "y: %{y:.1f} mm<br>"
+                            "σ: %{customdata[0]:.1f} MPa<br>"
+                            "ε: %{customdata[1]:.3f} ‰<br>"
+                            "F: %{customdata[2]:.1f} kN<br>"
+                            "<extra>Rebar (compression)</extra>"
+                        ),
+                        name="Rebar (compression)",
+                        showlegend=True,
                     ),
-                    name="Steel",
-                    showlegend=True,
-                ),
-                row=row,
-                col=col,
-            )
+                    row=row,
+                    col=col,
+                )
+
+            if np.any(tens_mask):
+                tens_custom = np.column_stack([ss[tens_mask], se[tens_mask], sf[tens_mask]])
+                fig.add_trace(
+                    go.Scatter(
+                        x=sx[tens_mask],
+                        y=sy[tens_mask],
+                        mode="markers",
+                        marker=dict(size=12, color="green", line=dict(color="black", width=1)),
+                        customdata=tens_custom,
+                        hovertemplate=(
+                            "x: %{x:.1f} mm<br>"
+                            "y: %{y:.1f} mm<br>"
+                            "σ: %{customdata[0]:.1f} MPa<br>"
+                            "ε: %{customdata[1]:.3f} ‰<br>"
+                            "F: %{customdata[2]:.1f} kN<br>"
+                            "<extra>Rebar (tension)</extra>"
+                        ),
+                        name="Rebar (tension)",
+                        showlegend=True,
+                    ),
+                    row=row,
+                    col=col,
+                )
 
         # Neutral axis line on section (clipped)
         if s.y_na is not None and s.na_in_section:
@@ -437,6 +447,22 @@ class StressStrainViewer:
                     row=row,
                     col=col,
                 )
+
+        # Draw the section boundary last so it stays crisp above the stress field.
+        outline_x, outline_y = self._get_outline_xy()
+        fig.add_trace(
+            go.Scatter(
+                x=outline_x,
+                y=outline_y,
+                mode="lines",
+                line=dict(color="black", width=2),
+                name="Section outline",
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=row,
+            col=col,
+        )
 
     def _add_strain_subplot(self, fig: Any, go: Any, s: _StressStrainPlotState, *, row: int = 2, col: int = 1) -> None:
         eps_bottom_permille = s.eps_bottom * 1000.0
@@ -622,7 +648,14 @@ class StressStrainViewer:
         if title is None:
             title = f"Stress-Strain Distribution: M<sub>Ed</sub> = {s.M_Ed:.1f} kN·m, N<sub>Ed</sub> = {s.N_Ed:.1f} kN"
             if s.section_failed:
-                title += " <span style='color:red'>(SECTION FAILS)</span>"
+                title += (
+                    "<br><span style='color:red; font-size:11px'><b>"
+                    "SECTION FAILS: Applied loads exceed capacity. Strains shown are "
+                    "bounded approximation NOT in equilibrium with applied forces."
+                    "</b></span>"
+                )
+
+        margin_top = 110 if s.section_failed else 80
 
         fig.update_layout(
             title=dict(text=title, x=0.5),
@@ -630,7 +663,7 @@ class StressStrainViewer:
             height=height,
             showlegend=True,
             legend=dict(x=1.02, y=1),
-            margin=dict(l=60, r=120, t=80, b=60),
+            margin=dict(l=60, r=120, t=margin_top, b=60),
         )
 
         # ---- Top-left: Section with true 1:1 aspect ratio ----
@@ -664,7 +697,7 @@ class StressStrainViewer:
 
         # Two-column annotation in top-right quadrant, both anchored at same top y.
         ann_left_x, ann_right_x, ann_y = self._top_right_annotation_anchors(fig)
-        left_text, right_text = self._build_annotation_columns(s)
+        left_text, right_text = self._build_annotation_columns(s, include_failure_banner=False)
         if left_text:
             fig.add_annotation(
                 xref="paper",
@@ -763,7 +796,7 @@ class StressStrainViewer:
             xanchor="left",
             yanchor="middle",
             thickness=15,
-            title=dict(text="σ<br>(MPa)", side="right"),
+            title=dict(text="σ<br>(MPa)", side="bottom"),
         )
 
         # Real Plotly figure path.
@@ -835,11 +868,16 @@ class StressStrainViewer:
         if ci.size == 0 or cj.size == 0:
             return
 
-        # Infer grid size from max indices (+1)
-        nx = int(np.max(ci)) + 1
-        ny = int(np.max(cj)) + 1
-        if nx <= 0 or ny <= 0:
+        # Infer base grid size from max indices (+1)
+        nx_base = int(np.max(ci)) + 1
+        ny_base = int(np.max(cj)) + 1
+        if nx_base <= 0 or ny_base <= 0:
             return
+
+        # Upsample the display grid to reduce staircase artifacts on curved boundaries.
+        upsample = 6
+        nx = int(nx_base * upsample)
+        ny = int(ny_base * upsample)
 
         min_x, min_y, max_x, max_y = s.bbox
         dx = (max_x - min_x) / float(nx)
@@ -851,19 +889,47 @@ class StressStrainViewer:
         x_centres = (min_x + (np.arange(nx) + 0.5) * dx).astype(float)
         y_centres = (min_y + (np.arange(ny) + 0.5) * dy).astype(float)
 
-        # Build Z grid: shape (ny, nx). Initialise NaN so outside cells don't draw.
+        # Build Z grid: shape (ny, nx). Keep NaN outside section so nothing renders there.
         Z = np.full((ny, nx), np.nan, dtype=float)
 
-        # Paint stresses into their (j,i) locations
-        # (If you ever had multiple fibres per cell, you'd want averaging; here it's 1 per cell.)
-        ii = ci.astype(int)
-        jj = cj.astype(int)
+        # Concrete stress in this 2D viewer varies only with y (linear strain field in depth).
+        if s.h > 0.0:
+            row_strains = s.eps_bottom + (s.eps_top - s.eps_bottom) * (
+                (y_centres - s.y_bottom) / s.h
+            )
+        else:
+            row_strains = np.full_like(y_centres, s.eps_bottom, dtype=float)
 
-        # Guard for any weird out-of-range indices
-        ok = (ii >= 0) & (ii < nx) & (jj >= 0) & (jj < ny)
-        Z[jj[ok], ii[ok]] = conc_stresses[ok].astype(float)
+        row_stresses = np.asarray(
+            self.diagram.concrete_model.get_stress_array(row_strains), dtype=float
+        )
 
-        cmin_val, cmax_val, colorscale = self._concrete_colorscale(conc_stresses)
+        # Clip each horizontal band to the exact section intersection at that y.
+        for j, y_mid in enumerate(y_centres):
+            segs = self._section_horizontal_segments_at_y(float(y_mid))
+            if not segs:
+                continue
+            sig = float(row_stresses[j])
+            for xa, xb in segs:
+                if xb < xa:
+                    xa, xb = xb, xa
+
+                # Indices of cells whose horizontal span overlaps [xa, xb].
+                # This avoids inset gaps at curved boundaries.
+                i0 = int(np.floor((xa - min_x) / dx))
+                i1 = int(np.ceil((xb - min_x) / dx)) - 1
+                if i1 < 0 or i0 > nx - 1:
+                    continue
+                i0 = max(i0, 0)
+                i1 = min(i1, nx - 1)
+                if i1 >= i0:
+                    Z[j, i0 : i1 + 1] = sig
+
+        finite = np.isfinite(Z)
+        if not np.any(finite):
+            return
+
+        cmin_val, cmax_val, colorscale = self._concrete_colorscale(Z[finite])
 
         # Contour with heatmap coloring gives the "filled" look without triangulation
         fig.add_trace(
@@ -871,13 +937,13 @@ class StressStrainViewer:
                 x=x_centres,
                 y=y_centres,
                 z=Z,
-                contours=dict(coloring="heatmap"),
+                contours=dict(coloring="heatmap", showlines=False),
                 colorscale=colorscale,
                 zmin=cmin_val,
                 zmax=cmax_val,
                 showscale=True,
                 colorbar=dict(
-                    title=dict(text="σ<br>(MPa)", side="right"),
+                    title=dict(text="σ<br>(MPa)", side="bottom"),
                     thickness=15,
                 ),
                 hovertemplate="x: %{x:.1f} mm<br>y: %{y:.1f} mm<br>σ: %{z:.2f} MPa<extra>Concrete</extra>",
@@ -1106,19 +1172,24 @@ class StressStrainViewer:
         )
 
     def _build_annotation_text(self, s: _StressStrainPlotState) -> str:
-        left, right = self._build_annotation_columns(s)
+        left, right = self._build_annotation_columns(s, include_failure_banner=True)
         if left and right:
             return f"{left}<br><br>{right}"
         return left or right
 
-    def _build_annotation_columns(self, s: _StressStrainPlotState) -> tuple[str, str]:
+    def _build_annotation_columns(
+        self,
+        s: _StressStrainPlotState,
+        *,
+        include_failure_banner: bool = True,
+    ) -> tuple[str, str]:
         indent = "&nbsp;&nbsp;&nbsp;&nbsp;"
         block_gap = "<br><br>"
         left_blocks: list[str] = []
         right_blocks: list[str] = []
 
         # Show prominent warning if section fails
-        if s.section_failed:
+        if s.section_failed and include_failure_banner:
             left_blocks.append(
                 '<span style="color:red; font-size:12px"><b>⚠ SECTION FAILS: '
                 'Applied loads exceed capacity. Strains shown are bounded '
@@ -1188,13 +1259,13 @@ class StressStrainViewer:
 
         # Show equilibrium error if section failed
         if s.section_failed:
-            right_blocks.append(
+            left_blocks.append(
                 '<span style="color:red"><b>Equilibrium Error:</b><br>'
                 f"{indent}ΔN = {s.equilibrium_error_N:.1f} kN<br>"
                 f"{indent}ΔM = {s.equilibrium_error_M:.1f} kN·m</span>"
             )
             right_blocks.append(
-                '<span style="color:red"><b>Achieved:</b><br>'
+                '<br><span style="color:red"><b>Achieved:</b><br>'
                 f"{indent}N = {s.achieved_N:.1f} kN<br>"
                 f"{indent}M = {s.achieved_M:.1f} kN·m</span>"
             )

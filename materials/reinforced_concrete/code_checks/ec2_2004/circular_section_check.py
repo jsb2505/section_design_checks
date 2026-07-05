@@ -23,7 +23,7 @@ from math import atan, degrees, pi, sqrt
 from typing import Any, Dict, Literal, Optional, cast
 
 import numpy as np
-from pydantic import BaseModel, Field, PrivateAttr, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, computed_field, model_validator
 
 from materials.reinforced_concrete.code_checks.base_check import (
     CheckResult,
@@ -111,6 +111,8 @@ class CircularSectionCheck(BaseModel):
         >>> cracking_result = check.perform_cracking_check(M_Ed=80, N_Ed=300)
         >>> stress_result = check.perform_stress_limits_check(M_Ed=80, N_Ed=300)
     """
+
+    model_config = ConfigDict(frozen=True)
 
     # ===========================
     # Core inputs
@@ -470,6 +472,23 @@ class CircularSectionCheck(BaseModel):
                 UserWarning,
                 stacklevel=3,
             )
+
+    def with_updates(self, **changes: Any) -> "CircularSectionCheck":
+        """
+        Return a new CircularSectionCheck with the given fields replaced.
+
+        Unlike ``model_copy``, this calls the constructor so that ``_post_init``
+        runs and all sub-check delegates are fully rebuilt with the new values.
+        There is no risk of stale sub-check state after changing section,
+        concrete, etc.
+
+        Example::
+
+            new_check = check.with_updates(concrete=c40, diameter=700)
+        """
+        current = {name: getattr(self, name) for name in type(self).model_fields}
+        current.update(changes)
+        return type(self)(**current)
 
     # ===========================
     # Computed properties
@@ -955,16 +974,29 @@ class CircularSectionCheck(BaseModel):
                 "Unreinforced circular shear design is not supported in this flow."
             )
 
-        # 1. Get d and z from the solver
+        # 1. Solve strains once for this load case; reuse across d, z and rho_l.
+        eps_top: Optional[float]
+        eps_bottom: Optional[float]
+        if abs(M_Ed) > 1e-6:
+            eps_top, eps_bottom = self._shear_check._get_diagram(
+                ignore_compression_steel
+            ).find_strains_for_MN(M_Ed, N_Ed)
+        else:
+            eps_top, eps_bottom = None, None
+
         d = self._shear_check.find_effective_depth(
             M_Ed,
             N_Ed,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
         )
         z_ec2, z_mech = self._shear_check.find_lever_arm(
             M_Ed,
             N_Ed,
             d,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
         )
         z = z_mech if z_mech is not None else z_ec2
@@ -988,6 +1020,8 @@ class CircularSectionCheck(BaseModel):
             N_Ed=N_Ed,
             b_w=b_w,
             d=d,
+            eps_top=eps_top,
+            eps_bottom=eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
         )
         V_Rd_c_cracked = find_V_Rd_c_cracked(
@@ -1300,15 +1334,29 @@ class CircularSectionCheck(BaseModel):
         assert self._shear_check is not None
         assert self._concrete_uls is not None
 
+        # Solve strains once; both find_effective_depth and find_lever_arm reuse them.
+        _eps_top: Optional[float]
+        _eps_bottom: Optional[float]
+        if abs(M_Ed) > 1e-6:
+            _eps_top, _eps_bottom = self._shear_check._get_diagram(
+                ignore_compression_steel
+            ).find_strains_for_MN(M_Ed, N_Ed)
+        else:
+            _eps_top, _eps_bottom = None, None
+
         d = self._shear_check.find_effective_depth(
             M_Ed,
             N_Ed,
+            eps_top=_eps_top,
+            eps_bottom=_eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
         )
         _, z_mech = self._shear_check.find_lever_arm(
             M_Ed,
             N_Ed,
             d,
+            eps_top=_eps_top,
+            eps_bottom=_eps_bottom,
             ignore_compression_steel=ignore_compression_steel,
         )
         z = z_mech if z_mech is not None else 0.9 * d

@@ -301,6 +301,12 @@ class MNInteractionDiagram:
         self._dense_diagram_n: int = 0
         self._diagram_points_cache: dict[int, tuple[InteractionPoint, ...]] = {}
 
+        # Strain-solve result cache keyed by (M_target, N_target, strict).
+        # Naturally invalidated when this diagram instance is rebuilt (new object created).
+        # Not keyed on tol/initial_guess — tol is always the default in practice,
+        # and initial_guess is an optimizer hint that should not alter the final result.
+        self._strain_cache: dict[tuple, tuple] = {}
+
 
     # ----------------------------
     # Core mechanics
@@ -799,6 +805,61 @@ class MNInteractionDiagram:
         return cleaned[:n_out]
 
 
+    @staticmethod
+    def _pin_extremal_points(
+        resampled: List[InteractionPoint],
+        dense: tuple[InteractionPoint, ...],
+    ) -> List[InteractionPoint]:
+        """
+        Ensure min N, max M, and min M from the dense diagram appear exactly in the
+        resampled output by replacing the nearest unused resampled neighbour.
+
+        max N is already at resampled[0] (s=0 in the chord-length resampler) and is
+        left untouched.  The other three extrema replace their nearest resampled
+        neighbour in normalised (M, N) space.
+
+        The closed-loop invariant (first == last) is maintained by protecting both
+        index 0 and index n-1 from replacement.
+        """
+        n = len(resampled)
+        if n < 4:
+            return resampled
+
+        dense_M = np.array([p.M for p in dense], dtype=float)
+        dense_N = np.array([p.N for p in dense], dtype=float)
+
+        idx_min_N = int(np.argmin(dense_N))
+        idx_max_M = int(np.argmax(dense_M))
+        idx_min_M = int(np.argmin(dense_M))
+
+        # Normalisation so M and N contribute equally to distance
+        m_rng = float(np.ptp(dense_M)) or 1.0
+        n_rng = float(np.ptp(dense_N)) or 1.0
+
+        res_Mn = np.array([p.M for p in resampled], dtype=float) / m_rng
+        res_Nn = np.array([p.N for p in resampled], dtype=float) / n_rng
+
+        # Index 0 and n-1 are protected (max N at index 0, closure at index n-1)
+        used: set[int] = {0, n - 1}
+
+        def _replace_nearest(dense_pt: InteractionPoint) -> None:
+            target_Mn = dense_pt.M / m_rng
+            target_Nn = dense_pt.N / n_rng
+            dist2 = (res_Mn - target_Mn) ** 2 + (res_Nn - target_Nn) ** 2
+            for i in np.argsort(dist2):
+                ii = int(i)
+                if ii not in used:
+                    resampled[ii] = dense_pt
+                    used.add(ii)
+                    return
+
+        _replace_nearest(dense[idx_min_N])
+        _replace_nearest(dense[idx_max_M])
+        _replace_nearest(dense[idx_min_M])
+
+        return resampled
+
+
     def _strain_limit_loop(
         self,
         n_points: int,
@@ -937,7 +998,8 @@ class MNInteractionDiagram:
             - Typical solve time: 10-50ms per unique (M,N) point
             - Hard points (e.g. near cracking transitions) may run extra fallback
               attempts with alternative starting points and Jacobians
-            - No caching - solves fresh each time per design
+            - Results are cached by (M_target, N_target, strict) per diagram instance.
+              Repeated calls with the same load case return immediately from cache.
 
         Examples:
             >>> diagram = MNInteractionDiagram(section, concrete)
@@ -946,6 +1008,10 @@ class MNInteractionDiagram:
             >>> assert abs(point.M - 50.0) < 1e-3
             >>> assert abs(point.N - 100.0) < 1e-3
         """
+        _cache_key = (M_target, N_target, strict)
+        _cached = self._strain_cache.get(_cache_key)
+        if _cached is not None:
+            return _cached
 
         def residual(eps_pair: npt.NDArray) -> npt.NDArray:
             """Residual function: [N_error, M_error]."""
@@ -1115,7 +1181,9 @@ class MNInteractionDiagram:
         best_result = primary_result
         best_abs_error, _ = residual_metrics(best_result)
         if np.isfinite(best_abs_error) and best_abs_error <= acceptable_abs_error:
-            return tuple(best_result.x)
+            _result = tuple(best_result.x)
+            self._strain_cache[_cache_key] = _result
+            return _result
 
         # Fallback pass 1: alternative guesses with preferred Jacobian.
         for i, guess in enumerate(deduped_guesses[1:], start=1):
@@ -1132,7 +1200,9 @@ class MNInteractionDiagram:
 
         best_abs_error, _ = residual_metrics(best_result)
         if np.isfinite(best_abs_error) and best_abs_error <= acceptable_abs_error:
-            return tuple(best_result.x)
+            _result = tuple(best_result.x)
+            self._strain_cache[_cache_key] = _result
+            return _result
 
         # Near cracking transitions, retry all guesses with numerical Jacobian.
         if self.tension_stiffening and not self.confined_concrete:
@@ -1167,7 +1237,9 @@ class MNInteractionDiagram:
                 "Use strict=False to return the nearest feasible strain state."
             )
 
-        return tuple(best_result.x)
+        _result = tuple(best_result.x)
+        self._strain_cache[_cache_key] = _result
+        return _result
 
     def _compute_analytical_jacobian(
         self,
@@ -1562,6 +1634,7 @@ class MNInteractionDiagram:
 
         dense_pts = self._get_dense_diagram_points(n_dense=n_dense)
         pts = self._resample_closed_polyline_by_chord(dense_pts, n_out=n_points)
+        pts = self._pin_extremal_points(pts, dense_pts)
 
         out = tuple(pts)
         self._diagram_points_cache[n_points] = out

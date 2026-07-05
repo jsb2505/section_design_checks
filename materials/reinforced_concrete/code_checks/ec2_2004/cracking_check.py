@@ -1755,9 +1755,12 @@ class CrackingCheck(BaseCodeCheck):
                 },
             )
 
-        # Step 2: Solve for strain state (cracked section)
+        # Step 2: Solve for strain state (cracked section).
+        # Capture the diagram instance here so that stress extraction in Step 2.5
+        # uses the same model (important when ignore_compression_steel=True).
+        diagram_for_check = self._get_diagram(ignore_compression_steel)
         try:
-            eps_top, eps_bottom = self._get_diagram(ignore_compression_steel).find_strains_for_MN(
+            eps_top, eps_bottom = diagram_for_check.find_strains_for_MN(
                 M_target=M_Ed,
                 N_target=N_Ed,
                 strict=True,
@@ -1777,10 +1780,9 @@ class CrackingCheck(BaseCodeCheck):
             )
 
         # Step 2.5: Stress limitation checks (EC2 §7.2) and non-linear creep
-        sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom)
+        sigma_c_peak = self._get_peak_concrete_stress(eps_top, eps_bottom, diagram=diagram_for_check)
         nonlinear_creep_applied = False
         creep_coefficient_used = self.creep_coefficient
-        diagram_for_check = self._get_diagram(ignore_compression_steel)
 
         # EC2 §7.2(2): Characteristic stress limit (longitudinal cracking risk)
         if self.check_k1_stress:

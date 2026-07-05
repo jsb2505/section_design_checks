@@ -1599,3 +1599,109 @@ class TestVectorMethodRobustness:
         # Coarse might be slightly more conservative
         assert is_safe_fine is True
         assert util_fine == pytest.approx(utilization, rel=0.2)
+
+
+class TestExtremalPinning:
+    """Tests that max N, min N, max M, min M from the dense diagram are preserved
+    exactly in the resampled output of generate_diagram_points."""
+
+    @pytest.fixture
+    def symmetric_diagram(self, rebar_20, concrete_c30):
+        """Symmetric section: equal top/bottom reinforcement (min N has M ≈ 0)."""
+        section = create_rectangular_section(300, 500)
+        for y in (50, 450):
+            layer = create_linear_rebar_layer(
+                rebar=rebar_20,
+                n_bars=3,
+                start_point=(50, y),
+                end_point=(250, y),
+            )
+            section.add_rebar_group(layer)
+        return MNInteractionDiagram(section=section, concrete=concrete_c30)
+
+    @pytest.fixture
+    def asymmetric_diagram(self, rebar_20, rebar_16, concrete_c30):
+        """Asymmetric section: heavy bottom, light top (min N has M ≠ 0)."""
+        section = create_rectangular_section(300, 500)
+        bottom = create_linear_rebar_layer(
+            rebar=rebar_20, n_bars=5,
+            start_point=(40, 50), end_point=(260, 50),
+        )
+        top = create_linear_rebar_layer(
+            rebar=rebar_16, n_bars=2,
+            start_point=(100, 450), end_point=(200, 450),
+        )
+        section.add_rebar_group(bottom)
+        section.add_rebar_group(top)
+        return MNInteractionDiagram(section=section, concrete=concrete_c30)
+
+    def _dense_extrema(self, diagram):
+        """Return (max_N, min_N, max_M, min_M) InteractionPoints from the dense set."""
+        dense = diagram._get_dense_diagram_points(n_dense=800)
+        N_arr = np.array([p.N for p in dense])
+        M_arr = np.array([p.M for p in dense])
+        return (
+            dense[int(np.argmax(N_arr))],
+            dense[int(np.argmin(N_arr))],
+            dense[int(np.argmax(M_arr))],
+            dense[int(np.argmin(M_arr))],
+        )
+
+    def test_max_N_always_present(self, symmetric_diagram):
+        """max N from generate_diagram_points must equal max N from dense set."""
+        d_max_N, *_ = self._dense_extrema(symmetric_diagram)
+        pts = symmetric_diagram.generate_diagram_points(n_points=120)
+        N_vals = np.array([p.N for p in pts])
+        assert np.max(N_vals) == pytest.approx(d_max_N.N, abs=1e-6)
+
+    def test_min_N_present_symmetric(self, symmetric_diagram):
+        """For a symmetric section, the pinned pure-tension point must match dense min N."""
+        _, d_min_N, *_ = self._dense_extrema(symmetric_diagram)
+        pts = symmetric_diagram.generate_diagram_points(n_points=120)
+        N_vals = np.array([p.N for p in pts])
+        assert np.min(N_vals) == pytest.approx(d_min_N.N, abs=1e-6)
+
+    def test_min_N_present_asymmetric(self, asymmetric_diagram):
+        """For an asymmetric section, the pinned pure-tension point must match dense min N."""
+        _, d_min_N, *_ = self._dense_extrema(asymmetric_diagram)
+        pts = asymmetric_diagram.generate_diagram_points(n_points=120)
+        N_vals = np.array([p.N for p in pts])
+        assert np.min(N_vals) == pytest.approx(d_min_N.N, abs=1e-6)
+
+    def test_max_M_present(self, symmetric_diagram):
+        """max M in generate_diagram_points must equal max M in dense set."""
+        _, _, d_max_M, _ = self._dense_extrema(symmetric_diagram)
+        pts = symmetric_diagram.generate_diagram_points(n_points=120)
+        M_vals = np.array([p.M for p in pts])
+        assert np.max(M_vals) == pytest.approx(d_max_M.M, abs=1e-6)
+
+    def test_min_M_present(self, symmetric_diagram):
+        """min M in generate_diagram_points must equal min M in dense set."""
+        _, _, _, d_min_M = self._dense_extrema(symmetric_diagram)
+        pts = symmetric_diagram.generate_diagram_points(n_points=120)
+        M_vals = np.array([p.M for p in pts])
+        assert np.min(M_vals) == pytest.approx(d_min_M.M, abs=1e-6)
+
+    @pytest.mark.parametrize("n_points", [40, 60, 80, 120, 200])
+    def test_extrema_invariant_under_n_points(self, symmetric_diagram, n_points):
+        """All four extrema must be present regardless of n_points."""
+        d_max_N, d_min_N, d_max_M, d_min_M = self._dense_extrema(symmetric_diagram)
+        pts = symmetric_diagram.generate_diagram_points(n_points=n_points)
+        N_vals = np.array([p.N for p in pts])
+        M_vals = np.array([p.M for p in pts])
+        assert np.max(N_vals) == pytest.approx(d_max_N.N, abs=1e-6)
+        assert np.min(N_vals) == pytest.approx(d_min_N.N, abs=1e-6)
+        assert np.max(M_vals) == pytest.approx(d_max_M.M, abs=1e-6)
+        assert np.min(M_vals) == pytest.approx(d_min_M.M, abs=1e-6)
+
+    def test_output_length_unchanged(self, symmetric_diagram):
+        """generate_diagram_points must return exactly n_points points."""
+        for n in (40, 80, 120, 200):
+            pts = symmetric_diagram.generate_diagram_points(n_points=n)
+            assert len(pts) == n, f"Expected {n} points, got {len(pts)}"
+
+    def test_closure_maintained(self, symmetric_diagram):
+        """First and last points must be identical after pinning."""
+        pts = symmetric_diagram.generate_diagram_points(n_points=120)
+        assert pts[0].M == pts[-1].M
+        assert pts[0].N == pts[-1].N

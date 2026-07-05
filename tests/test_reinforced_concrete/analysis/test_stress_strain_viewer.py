@@ -314,7 +314,7 @@ class TestStressStrainViewerHelpers:
         viewer = StressStrainViewer(_FakeDiagram())
         ok_text = viewer._build_annotation_text(_make_state(section_failed=False))
         assert "Load Case" in ok_text
-        assert "x = 250.0 mm from compression face" in ok_text
+        assert "x = 250.0 mm" in ok_text
         assert "SECTION FAILS" not in ok_text
 
         fail_text = viewer._build_annotation_text(
