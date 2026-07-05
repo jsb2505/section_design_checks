@@ -541,6 +541,99 @@ class RCSection(BaseGeometry):
 
         return min_cover
 
+    def get_effective_depth(
+        self,
+        compression_face: Literal["top", "bottom"] = "top",
+        *,
+        tension_zone: Optional[Literal["top", "bottom"]] = None,
+        zone_fraction: float = 0.5,
+    ) -> float:
+        """
+        Effective depth d = distance from compression face to centroid of *tension* reinforcement.
+
+        This is a geometric helper used for beam-like checks.
+
+        How tension bars are selected:
+        - By default (tension_zone=None): bars on the opposite side of the section centroid
+          from the compression face are treated as "tension side".
+            * compression_face="top"    -> tension_zone="bottom"
+            * compression_face="bottom" -> tension_zone="top"
+        - Additionally, a bar must lie within the chosen "zone" thickness:
+            zone = bottom fraction or top fraction of the section depth.
+          This avoids including mid-depth bars (e.g., side bars in walls/columns) unless desired.
+
+        Args:
+            compression_face: "top" or "bottom" compression edge reference.
+            tension_zone: Explicitly choose which side is tension ("top" or "bottom").
+                         If None, inferred as the opposite side of compression_face.
+            zone_fraction: Fraction of depth considered as the tension zone (0 < f <= 1).
+                          0.5 means "lower half" (or upper half) only.
+                          Use 1.0 to include *all* bars on the tension side.
+
+        Returns:
+            d (mm)
+
+        Raises:
+            ValueError if no rebars exist or no bars found in the chosen tension zone.
+        """
+        if not self.rebar_groups:
+            raise ValueError("Cannot compute effective depth: no rebars in section")
+
+        if compression_face not in ("top", "bottom"):
+            raise ValueError(f"compression_face must be 'top' or 'bottom', got {compression_face}")
+
+        if not (0.0 < zone_fraction <= 1.0):
+            raise ValueError(f"zone_fraction must be in (0, 1], got {zone_fraction}")
+
+        _, min_y, _, max_y = self.get_bounding_box()
+        h = max_y - min_y
+        if h <= 0.0:
+            raise ValueError("Invalid section height (bounding box height <= 0)")
+
+        # Infer tension zone if not provided
+        if tension_zone is None:
+            tension_zone = "bottom" if compression_face == "top" else "top"
+        if tension_zone not in ("top", "bottom"):
+            raise ValueError(f"tension_zone must be 'top' or 'bottom', got {tension_zone}")
+
+        # Define the band (zone) to consider
+        if tension_zone == "bottom":
+            y_limit = min_y + zone_fraction * h  # include bars with y <= y_limit
+            def in_zone(y: float) -> bool:
+                return y <= y_limit + _GEOM_TOL_MM
+        else:
+            y_limit = max_y - zone_fraction * h  # include bars with y >= y_limit
+            def in_zone(y: float) -> bool:
+                return y >= y_limit - _GEOM_TOL_MM
+
+        # Collect tension-zone bars (area-weighted)
+        A = 0.0
+        mx = 0.0
+        my = 0.0
+
+        for group in self.rebar_groups:
+            a_bar = float(group.rebar.area)
+            for pos in group.positions:
+                y = float(pos.y)
+                if in_zone(y):
+                    A += a_bar
+                    mx += a_bar * float(pos.x)
+                    my += a_bar * y
+
+        if A <= 0.0:
+            raise ValueError(
+                "No reinforcement found in the selected tension zone. "
+                f"(compression_face={compression_face}, tension_zone={tension_zone}, zone_fraction={zone_fraction})"
+            )
+
+        c = Point2D(x=mx / A, y=my / A)
+
+        # Effective depth from compression face to that centroid (orthogonal to face)
+        d = (max_y - c.y) if compression_face == "top" else (c.y - min_y)
+        d = float(d)
+
+        return d
+
     def __repr__(self) -> str:
         name_str = f"'{self.section_name}'" if self.section_name else "unnamed"
         return (

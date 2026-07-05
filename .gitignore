@@ -22,6 +22,7 @@ build/
 output/figures/*.png
 output/data/*.json
 output/data/*.csv
+_superceded/
 
 # Temporary files
 *.tmp

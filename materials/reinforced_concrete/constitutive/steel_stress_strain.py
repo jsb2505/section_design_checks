@@ -31,10 +31,17 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         - horizontal: σ = ±f_y (no strain limit)
         - inclined:   σ increases linearly from f_y at ε_y to f_t at ε_ud
 
+    The yield strength f_y can be (mutually exclusive):
+        - f_yd (design strength) when use_characteristic=False and use_accidental=False (default)
+        - f_yk (characteristic strength) when use_characteristic=True
+        - f_yd_accidental (accidental design strength) when use_accidental=True
+
     Notes on ε_ud:
         EC2 provides a limit strain for ductility classification / model validity.
         In section analysis it is usually safer to CLIP strains to ε_ud rather than
         forcing stress to zero, which would be non-physical for reinforcement.
+
+    Note: use_characteristic and use_accidental cannot both be True.
     """
 
     steel: ReinforcingSteel = Field(
@@ -49,7 +56,12 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
 
     use_characteristic: bool = Field(
         default=False,
-        description="Use f_yk instead of f_yd (for characteristic calculations)"
+        description="Use f_yk instead of f_yd (mutually exclusive with use_accidental)"
+    )
+
+    use_accidental: bool = Field(
+        default=False,
+        description="Use f_yd_accidental instead of f_yd (mutually exclusive with use_characteristic)"
     )
 
     name: str = Field(
@@ -59,8 +71,12 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
 
     @property
     def f_y(self) -> float:
-        """Yield strength (design or characteristic)."""
-        return self.steel.f_yk if self.use_characteristic else self.steel.f_yd
+        """Yield strength (design, characteristic, or accidental)."""
+        if self.use_characteristic:
+            return self.steel.f_yk
+        if self.use_accidental:
+            return self.steel.f_yd_accidental
+        return self.steel.f_yd
 
     @property
     def epsilon_y(self) -> float:
@@ -74,6 +90,11 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
 
         For inclined branch we need epsilon_ud > epsilon_y to interpolate.
         """
+        if self.use_characteristic and self.use_accidental:
+            raise ValueError(
+                "Cannot set both use_characteristic=True and use_accidental=True. "
+                "Choose one: characteristic (f_yk), design (f_yd), or accidental (f_yd_accidental)."
+            )
         if self.branch_type == "inclined":
             if self.steel.epsilon_ud <= self.epsilon_y:
                 raise ValueError(
@@ -196,6 +217,7 @@ def create_steel_stress_strain(
     steel: ReinforcingSteel,
     branch_type: SteelModelType = "inclined",
     use_characteristic: bool = False,
+    use_accidental: bool = False,
 ) -> SteelStressStrainEC2:
     """
     Factory function to create steel stress-strain models.
@@ -204,12 +226,20 @@ def create_steel_stress_strain(
         steel: Reinforcing steel material
         branch_type: "inclined" for strain hardening, "horizontal" for perfectly plastic
         use_characteristic: Use f_yk instead of f_yd
+        use_accidental: Use f_yd_accidental instead of f_yd
 
     Returns:
         Steel stress-strain model
+
+    Raises:
+        ValueError: If both use_characteristic and use_accidental are True
+
+    Note:
+        use_characteristic and use_accidental are mutually exclusive.
     """
     return SteelStressStrainEC2(
         steel=steel,
         branch_type=branch_type,
         use_characteristic=use_characteristic,
+        use_accidental=use_accidental,
     )

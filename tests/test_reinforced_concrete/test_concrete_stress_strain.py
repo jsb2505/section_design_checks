@@ -104,6 +104,25 @@ class TestConcreteStressStrainParabolaRectangle:
         assert model_c30_design.f_c == model_c30_design.concrete.f_cd
         assert model_c30_characteristic.f_c == model_c30_characteristic.concrete.f_ck
 
+    def test_accidental_strength(self, concrete_c30):
+        """Test that model uses f_cd_accidental when use_accidental=True."""
+        model_accidental = ConcreteStressStrainParabolaRectangle(
+            concrete=concrete_c30,
+            use_accidental=True,
+        )
+        assert model_accidental.f_c == concrete_c30.f_cd_accidental
+        # f_cd_accidental should be higher than f_cd (due to reduced partial factor)
+        assert concrete_c30.f_cd_accidental > concrete_c30.f_cd
+
+    def test_cannot_use_both_characteristic_and_accidental(self, concrete_c30):
+        """Test that using both flags raises an error."""
+        with pytest.raises(ValueError, match="Cannot set both use_characteristic=True and use_accidental=True"):
+            ConcreteStressStrainParabolaRectangle(
+                concrete=concrete_c30,
+                use_characteristic=True,
+                use_accidental=True,
+            )
+
     def test_stress_at_zero(self, model_c30_design):
         """Test stress at zero strain."""
         assert model_c30_design.get_stress(0.0) == 0.0
@@ -178,6 +197,25 @@ class TestConcreteStressStrainBilinear:
         """Test creating bilinear model."""
         assert model_c30.name == "EC2 Bilinear"
 
+    def test_accidental_strength(self, concrete_c30):
+        """Test that model uses f_cd_accidental when use_accidental=True."""
+        model_accidental = ConcreteStressStrainBilinear(
+            concrete=concrete_c30,
+            use_accidental=True,
+        )
+        assert model_accidental.f_c == concrete_c30.f_cd_accidental
+        # f_cd_accidental should be higher than f_cd (due to reduced partial factor)
+        assert concrete_c30.f_cd_accidental > concrete_c30.f_cd
+
+    def test_cannot_use_both_characteristic_and_accidental(self, concrete_c30):
+        """Test that using both flags raises an error."""
+        with pytest.raises(ValueError, match="Cannot set both use_characteristic=True and use_accidental=True"):
+            ConcreteStressStrainBilinear(
+                concrete=concrete_c30,
+                use_characteristic=True,
+                use_accidental=True,
+            )
+
     def test_stress_at_zero(self, model_c30):
         """Test stress at zero strain."""
         assert model_c30.get_stress(0.0) == 0.0
@@ -243,3 +281,12 @@ class TestCreateConcreteStressStrain:
             use_characteristic=True
         )
         assert model.f_c == concrete_c30.f_ck
+
+    def test_use_accidental_flag(self, concrete_c30):
+        """Test use_accidental flag."""
+        model = create_concrete_stress_strain(
+            concrete_c30,
+            "parabola-rectangle",
+            use_accidental=True
+        )
+        assert model.f_c == concrete_c30.f_cd_accidental

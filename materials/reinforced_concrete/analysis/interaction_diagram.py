@@ -70,14 +70,6 @@ def _as_float(x: Any) -> float:
     return float(x)  # raises if not convertible (good)
 
 
-def _unit_vector(m: float, n: float) -> Tuple[float, float]:
-    """Return unit vector in direction (m, n); if zero, returns (0,0)."""
-    norm = (m * m + n * n) ** 0.5
-    if norm == 0.0:
-        return (0.0, 0.0)
-    return (m / norm, n / norm)
-
-
 def _ray_segment_intersection_alpha(
     ray_dir: Tuple[float, float],
     p1: Tuple[float, float],
@@ -171,6 +163,8 @@ class MNInteractionDiagram:
         n_fibers_width: int = 20,
         n_fibers_height: int = 30,
         tension_stiffening: bool = False,
+        use_characteristic: bool = False,
+        use_accidental: bool = False,
         confined_concrete: bool = False,
         confinement_rho_s: Optional[float] = None,
         confinement_f_yh: Optional[float] = None,
@@ -190,7 +184,8 @@ class MNInteractionDiagram:
         self.concrete_model = create_concrete_stress_strain(
             concrete=concrete,
             model_type=concrete_model_type,
-            use_characteristic=False,  # design (f_cd etc.)
+            use_characteristic=use_characteristic,
+            use_accidental=use_accidental
         )
 
         if len(section.rebar_groups) == 0:
@@ -201,7 +196,8 @@ class MNInteractionDiagram:
             create_steel_stress_strain(
                 steel=g.rebar,
                 branch_type=steel_branch_type,
-                use_characteristic=False,  # design (f_yd)
+                use_characteristic=use_characteristic,
+                use_accidental=use_accidental
             )
             for g in section.rebar_groups
         ]
@@ -236,6 +232,7 @@ class MNInteractionDiagram:
 
         if self.section_height <= 0:
             raise ValueError("Section height must be > 0")
+
 
     # ----------------------------
     # Core mechanics
@@ -276,37 +273,6 @@ class MNInteractionDiagram:
 
         return (_as_float(N), _as_float(M))
 
-    def _strain_field(
-        self,
-        neutral_axis_depth: float,
-        max_concrete_strain: float,
-        *,
-        compression_from_bottom: bool,
-    ) -> npt.NDArray[np.float64]:
-        """
-        Build the strain field (compression positive) for all fibers.
-
-        For NA depth > 0:
-            ε(z) = ε_c,max * (NA - z) / NA
-        where z is distance from compression face.
-
-        This ensures:
-        - ε = ε_c,max at the compression face (z=0)
-        - ε = 0 at z=NA (neutral axis)
-        - ε < 0 (tension) for z > NA
-        """
-        _, y, _, _, _ = self.mesh.get_fiber_arrays()
-
-        if compression_from_bottom:
-            z = y - self.section_bottom
-        else:
-            z = self.section_top - y
-
-        na = float(neutral_axis_depth)
-        if na <= 0.0:
-            raise ValueError("neutral_axis_depth must be > 0 for this solver branch")
-
-        return max_concrete_strain * (na - z) / na
 
     def _concrete_stress_with_options(
         self,
@@ -399,149 +365,55 @@ class MNInteractionDiagram:
 
         return concrete_stresses
 
-    def calculate_point(
+    
+    def _strain_field_from_end_strains(
         self,
-        neutral_axis_depth: float,
-        max_concrete_strain: Optional[float] = None,
-        *,
-        compression_from_bottom: bool = False,
+        eps_top: float,
+        eps_bottom: float,
+    ) -> npt.NDArray[np.float64]:
+        """
+        Plane-sections strain field defined by strains at the extreme top/bottom fibers
+        (compression positive), linear over y.
+
+        eps_top: strain at y = section_top
+        eps_bottom: strain at y = section_bottom
+        """
+        _, y, _, _, _ = self.mesh.get_fiber_arrays()
+
+        y_top = float(self.section_top)
+        y_bot = float(self.section_bottom)
+        h = y_top - y_bot
+        if h <= 0.0:
+            raise ValueError("Invalid section height")
+
+        # linear interpolation in y
+        t = (y - y_bot) / h
+        return (eps_bottom + (eps_top - eps_bottom) * t).astype(np.float64)
+
+
+    def calculate_point_from_end_strains(
+        self,
+        eps_top: float,
+        eps_bottom: float,
     ) -> InteractionPoint:
         """
-        Calculate a single point on the interaction diagram for a given neutral axis depth.
+        Compute (N,M) from a strain profile defined by end strains.
 
-        Args:
-            neutral_axis_depth: NA depth from compression face (mm). Must be > 0 in this implementation.
-            max_concrete_strain: Extreme compression strain at the compression face. Defaults to concrete model ε_cu.
-            compression_from_bottom: If True, compression face is bottom; else top.
-
-        Returns:
-            InteractionPoint with N, M and strain metadata.
+        Notes:
+        - neutral_axis_depth and compression_from_bottom become *derived metadata* only.
+        - This method is globally valid across sign changes (no branch switching).
         """
-        if max_concrete_strain is None:
-            max_concrete_strain = float(self.concrete_model.get_ultimate_strain())
-
-        if neutral_axis_depth <= 0.0:
-            raise ValueError("neutral_axis_depth must be > 0 (solver uses explicit tension point instead)")
-
         # Fiber arrays
-        _, _, _, material_type, material_index = self.mesh.get_fiber_arrays()
-
-        # Ensure robust dtype for comparisons (avoids numpy object surprises)
-        material_type = material_type.astype("U8", copy=False)
-
-        # Strain field
-        strains = self._strain_field(
-            neutral_axis_depth=neutral_axis_depth,
-            max_concrete_strain=max_concrete_strain,
-            compression_from_bottom=compression_from_bottom,
-        )
-
-        stresses = np.zeros_like(strains)
-
-        # Concrete stresses
-        concrete_mask = material_type == "concrete"
-        if np.any(concrete_mask):
-            conc_strains = strains[concrete_mask]
-            stresses[concrete_mask] = self._concrete_stress_with_options(conc_strains)
-
-        # Steel stresses (per group)
-        steel_mask = material_type == "steel"
-        if np.any(steel_mask):
-            steel_strains = strains[steel_mask]
-            steel_indices = material_index[steel_mask]
-            steel_stresses = np.zeros_like(steel_strains)
-
-            for gi, sm in enumerate(self.steel_models):
-                m = steel_indices == gi
-                if np.any(m):
-                    steel_stresses[m] = sm.get_stress_array(steel_strains[m])
-
-            stresses[steel_mask] = steel_stresses
-
-        # Resultants
-        N, M = self.calculate_section_forces(stresses)
-
-        max_conc = float(np.max(strains[concrete_mask])) if np.any(concrete_mask) else 0.0
-        max_steel = float(np.max(np.abs(strains[steel_mask]))) if np.any(steel_mask) else 0.0
-
-        return InteractionPoint(
-            N=N,
-            M=M,
-            neutral_axis_depth=float(neutral_axis_depth),
-            compression_from_bottom=bool(compression_from_bottom),
-            max_concrete_strain=max_conc,
-            max_steel_strain=max_steel,
-        )
-
-    # ----------------------------
-    # Closing points (consistent fiber evaluation)
-    # ----------------------------
-
-    def _pure_compression_point(self) -> InteractionPoint:
-        """
-        Pure compression closing point computed by fiber integration.
-
-        Uses uniform compressive strain = ε_cu everywhere (no curvature).
-        This is consistent with the fiber system and avoids analytic area inconsistencies.
-        """
-        eps_cu = float(self.concrete_model.get_ultimate_strain())
-
         _, y, _, material_type, material_index = self.mesh.get_fiber_arrays()
         material_type = material_type.astype("U8", copy=False)
 
-        strains = np.full_like(y, eps_cu, dtype=float)
-        stresses = np.zeros_like(strains)
-
-        concrete_mask = material_type == "concrete"
-        if np.any(concrete_mask):
-            stresses[concrete_mask] = self._concrete_stress_with_options(strains[concrete_mask])
-
-        steel_mask = material_type == "steel"
-        if np.any(steel_mask):
-            steel_strains = strains[steel_mask]
-            steel_indices = material_index[steel_mask]
-            steel_stresses = np.zeros_like(steel_strains)
-            for gi, sm in enumerate(self.steel_models):
-                m = steel_indices == gi
-                if np.any(m):
-                    steel_stresses[m] = sm.get_stress_array(steel_strains[m])
-            stresses[steel_mask] = steel_stresses
-
-        N, M = self.calculate_section_forces(stresses)
-
-        return InteractionPoint(
-            N=N,
-            M=M,
-            neutral_axis_depth=self.section_height * 1e6,  # effectively "infinite" NA
-            compression_from_bottom=False,
-            max_concrete_strain=eps_cu,
-            max_steel_strain=float(np.max(np.abs(strains[steel_mask]))) if np.any(steel_mask) else 0.0,
-        )
-
-    def _pure_tension_point(self) -> InteractionPoint:
-        """
-        Pure tension closing point computed by fiber integration.
-
-        Concrete in tension:
-        - returns 0 if tension_stiffening=False
-        - returns some negative stress if tension_stiffening=True (by design choice)
-
-        Steel:
-        - driven to yield by applying a sufficiently large uniform tensile strain.
-        """
-        eps_y_max = max(float(sm.epsilon_y) for sm in self.steel_models)
-        eps_t = -10.0 * eps_y_max if eps_y_max > 0 else -0.01
-
-        _, y, _, material_type, material_index = self.mesh.get_fiber_arrays()
-        material_type = material_type.astype("U8", copy=False)
-
-        strains = np.full_like(y, eps_t, dtype=float)
+        strains = self._strain_field_from_end_strains(eps_top=eps_top, eps_bottom=eps_bottom)
         stresses = np.zeros_like(strains)
 
         # Concrete
-        concrete_mask = material_type == "concrete"
-        if np.any(concrete_mask):
-            stresses[concrete_mask] = self._concrete_stress_with_options(strains[concrete_mask])
+        conc_mask = material_type == "concrete"
+        if np.any(conc_mask):
+            stresses[conc_mask] = self._concrete_stress_with_options(strains[conc_mask])
 
         # Steel
         steel_mask = material_type == "steel"
@@ -557,56 +429,249 @@ class MNInteractionDiagram:
 
         N, M = self.calculate_section_forces(stresses)
 
-        return InteractionPoint(
-            N=N,
-            M=M,
-            neutral_axis_depth=-self.section_height * 1e6,  # effectively "infinite" NA on tension side
-            compression_from_bottom=False,
-            max_concrete_strain=float(np.max(strains[concrete_mask])) if np.any(concrete_mask) else 0.0,
-            max_steel_strain=float(np.max(np.abs(strains[steel_mask]))) if np.any(steel_mask) else 0.0,
-        )
-
-    # ----------------------------
-    # NA sampling (more sensible)
-    # ----------------------------
-
-    def _na_depths(self, n: int) -> npt.NDArray[np.float64]:
+        # Derived NA (optional metadata): where strain crosses 0
+        y_top = float(self.section_top)
+        y_bot = float(self.section_bottom)
         h = float(self.section_height)
 
-        na_max = 50.0 * h
-        na_mid_hi = 2.5 * h
-        na_mid = 0.60 * h
-        na_bal_lo = 0.12 * h
-        na_min = max(0.02 * h, 1.0)
+        # If eps_top == eps_bottom => no curvature => NA "at infinity"
+        if abs(eps_top - eps_bottom) < 1e-18:
+            na_depth = (1e6 * h) if eps_top > 0 else (-1e6 * h)
+            comp_from_bottom = False
+        else:
+            # Solve eps(y)=0 for y in [y_bot, y_top]
+            # eps(y)=eps_bottom + (eps_top-eps_bottom)*(y-y_bot)/h
+            y0 = y_bot - h * (eps_bottom / (eps_top - eps_bottom))
+            # "compression face" for metadata: side with larger strain (more compression)
+            comp_from_bottom = (eps_bottom > eps_top)
 
-        n = max(int(n), 30)
+            # Convert to "NA depth from compression face" only if inside height
+            if y_bot - 1e-9 <= y0 <= y_top + 1e-9:
+                if comp_from_bottom:
+                    na_depth = float(y0 - y_bot)
+                else:
+                    na_depth = float(y_top - y0)
+            else:
+                # NA outside section => very small/large surrogate depth
+                # sign indicates which side (outside) in a consistent way
+                na_depth = 1e6 * h if (eps_top > 0 or eps_bottom > 0) else -1e6 * h
 
-        n1 = max(8, n // 5)
-        n2 = max(10, n // 4)
-        n3 = max(10, n // 3)
-        n4 = max(8, n - (n1 + n2 + n3))
+        max_conc = float(np.max(strains[conc_mask])) if np.any(conc_mask) else 0.0
+        max_steel = float(np.max(np.abs(strains[steel_mask]))) if np.any(steel_mask) else 0.0
 
-        # Key change: seg1 endpoint=False so na_mid_hi isn't duplicated
-        seg1 = np.logspace(np.log10(na_max), np.log10(na_mid_hi), num=n1, endpoint=False)
-        seg2 = np.linspace(na_mid_hi, na_mid, num=n2, endpoint=False)
-        seg3 = np.linspace(na_mid, na_bal_lo, num=n3, endpoint=False)
-        seg4 = np.logspace(np.log10(na_bal_lo), np.log10(na_min), num=n4, endpoint=True)
+        return InteractionPoint(
+            N=float(N),
+            M=float(M),
+            neutral_axis_depth=float(na_depth),
+            compression_from_bottom=bool(comp_from_bottom),
+            max_concrete_strain=max_conc,
+            max_steel_strain=max_steel,
+        )
 
-        na = np.concatenate([seg1, seg2, seg3, seg4]).astype(np.float64)
-        na = np.maximum(na, 1e-6)
 
-        # Remove near-duplicates with tolerance (preserves current order)
-        # (tolerance in mm; choose small but > float noise)
-        tol = 1e-9 * h  # e.g. 5e-7 mm for h=500
-        out = [na[0]]
-        for v in na[1:]:
-            if abs(v - out[-1]) > tol:
-                out.append(v)
+    @staticmethod
+    def _cosine_space(n: int) -> np.ndarray:
+        """
+        Monotonic parameter in [0,1] clustered at BOTH ends.
+        Great for capturing curvature near corners without blowing up point count.
+        """
+        if n <= 1:
+            return np.array([0.0])
+        t = np.linspace(0.0, 1.0, n)
+        return 0.5 * (1.0 - np.cos(np.pi * t))
 
-        # You want descending from large->small
-        out = np.array(out, dtype=np.float64)
-        out = out[::-1]
+
+    @staticmethod
+    def _interp(a: float, b: float, s: np.ndarray) -> np.ndarray:
+        """Linear interpolation a -> b using parameter s in [0,1]."""
+        return a + (b - a) * s
+
+
+    @staticmethod
+    def _dedupe_pairs(
+        pairs: List[Tuple[float, float]],
+        tol: float = 1e-12,
+    ) -> List[Tuple[float, float]]:
+        """Remove consecutive near-duplicate strain pairs."""
+        if not pairs:
+            return pairs
+        out = [pairs[0]]
+        for p in pairs[1:]:
+            if (abs(p[0] - out[-1][0]) > tol) or (abs(p[1] - out[-1][1]) > tol):
+                out.append(p)
         return out
+
+
+    @staticmethod
+    def _resample_closed_polyline_by_chord(
+        points: List[InteractionPoint],
+        n_out: int,
+    ) -> List[InteractionPoint]:
+        """
+        Resample a CLOSED polyline (last point equals first) to n_out points, approximately
+        uniform spacing in (M,N) chord length.
+
+        Uses normalization so M and N contribute similarly to distance.
+        Keeps existing InteractionPoint objects (metadata preserved, but not recomputed).
+        """
+        if n_out < 3:
+            raise ValueError("n_out must be >= 3")
+        if len(points) < 4:
+            return points
+
+        # Ensure closed
+        pts = points
+        if (pts[0].M != pts[-1].M) or (pts[0].N != pts[-1].N):
+            pts = pts + [pts[0]]
+
+        M = np.array([p.M for p in pts], dtype=float)
+        N = np.array([p.N for p in pts], dtype=float)
+
+        # Normalize distance so one axis doesn't dominate
+        m_rng = float(np.ptp(M)) or 1.0
+        n_rng = float(np.ptp(N)) or 1.0
+        Mn = M / m_rng
+        Nn = N / n_rng
+
+        d = np.sqrt(np.diff(Mn)**2 + np.diff(Nn)**2)
+        s = np.concatenate(([0.0], np.cumsum(d)))
+        total = float(s[-1])
+        if total <= 0.0:
+            # all points identical
+            return [pts[0]] * n_out
+
+        # Target arc-length stations (include closure)
+        s_target = np.linspace(0.0, total, n_out)
+
+        # For each target station, find the segment index
+        idx = np.searchsorted(s, s_target, side="right") - 1
+        idx = np.clip(idx, 0, len(pts) - 2)
+
+        # Interpolate by "walking" along segments (choose nearer endpoint object)
+        # NOTE: We keep actual InteractionPoint objects, so we pick the closer of the two endpoints.
+        out: List[InteractionPoint] = []
+        for st, i in zip(s_target, idx):
+            s0, s1 = s[i], s[i + 1]
+            if s1 <= s0:
+                out.append(pts[i])
+                continue
+            t = (st - s0) / (s1 - s0)
+
+            # pick closer endpoint to station to preserve metadata "reasonably"
+            # (if you want exact metadata, see note below)
+            out.append(pts[i] if t < 0.5 else pts[i + 1])
+
+        # Ensure closed explicitly (common expectation for your envelope)
+        if (out[0].M != out[-1].M) or (out[0].N != out[-1].N):
+            out[-1] = out[0]
+
+        # Remove accidental consecutive duplicates
+        cleaned = [out[0]]
+        for p in out[1:]:
+            if (p.M != cleaned[-1].M) or (p.N != cleaned[-1].N):
+                cleaned.append(p)
+
+        # If we lost points to de-dupe, pad by repeating last (rare)
+        while len(cleaned) < n_out:
+            cleaned.append(cleaned[-1])
+
+        return cleaned[:n_out]
+
+
+    def _strain_limit_loop(
+        self,
+        n_points: int,
+        eps_cu: float,
+        eps_t: float,
+    ) -> List[Tuple[float, float]]:
+        """
+        Build a CLOSED loop in (eps_top, eps_bottom) that targets the interaction envelope
+        efficiently (avoids wasting points on redundant 'both-faces-tension' states).
+
+        Convention:
+        - concrete compression strain is positive
+        - tension is negative
+        - eps_t is a POSITIVE magnitude (we use -eps_t for tensile strain)
+
+        Loop idea (4 segments):
+        A) Pure compression -> top fixed at +eps_cu, bottom goes +eps_cu -> -eps_t
+        B) Approach pure tension with bottom fixed at -eps_t, top goes +eps_cu -> -eps_t
+            (keep this SHORT; it mostly collapses to the pure tension point)
+        C) Mirror of B: top fixed at -eps_t, bottom goes -eps_t -> +eps_cu
+            (also SHORT)
+        D) Return: bottom fixed at +eps_cu, top goes -eps_t -> +eps_cu
+
+        This hits the “useful” boundary states while keeping sampling where (N,M) changes rapidly.
+        """
+        n_points = int(max(n_points, 40))
+        eps_cu = float(eps_cu)
+        eps_t = float(abs(eps_t))  # magnitude
+        eps_ten = -eps_t
+
+        # Allocate points by "importance":
+        # Most curvature/variation tends to be on the two big bending edges A and D.
+        # The two short closure edges (near pure tension) get far fewer points.
+        nA = int(round(0.42 * n_points))
+        nD = int(round(0.42 * n_points))
+        nB = int(round(0.08 * n_points))
+        nC = n_points - (nA + nB + nD)
+        nC = max(nC, 4)
+        nB = max(nB, 4)
+
+        # Cluster at ends for each segment to capture the knees
+        sA = self._cosine_space(nA)
+        sB = self._cosine_space(nB)
+        sC = self._cosine_space(nC)
+        sD = self._cosine_space(nD)
+
+        pairs: List[Tuple[float, float]] = []
+
+        # Segment A: top = +eps_cu, bottom: +eps_cu -> -eps_t
+        bot_A = self._interp(eps_cu, eps_ten, sA)
+        for b in bot_A[:-1]:  # endpoint handled by next segment
+            pairs.append((eps_cu, float(b)))
+
+        # Segment B: bottom = -eps_t, top: +eps_cu -> -eps_t  (short)
+        top_B = self._interp(eps_cu, eps_ten, sB)
+        for t in top_B[:-1]:
+            pairs.append((float(t), eps_ten))
+
+        # Segment C: top = -eps_t, bottom: -eps_t -> +eps_cu  (short)
+        bot_C = self._interp(eps_ten, eps_cu, sC)
+        for b in bot_C[:-1]:
+            pairs.append((eps_ten, float(b)))
+
+        # Segment D: bottom = +eps_cu, top: -eps_t -> +eps_cu
+        top_D = self._interp(eps_ten, eps_cu, sD)
+        for t in top_D:
+            pairs.append((float(t), eps_cu))
+
+        # Ensure closed loop (start point repeated at end)
+        if pairs[0] != pairs[-1]:
+            pairs.append(pairs[0])
+
+        # Remove any consecutive duplicates (floating noise / shared endpoints)
+        pairs = self._dedupe_pairs(pairs, tol=1e-15)
+
+        return pairs
+
+
+    def _eps_tension_limit(self) -> float:
+        """
+        Choose a tensile strain magnitude for the strain-rectangle corner.
+
+        - If any steel model has finite ultimate strain (inclined), use max(ε_ud)
+        so all groups are within the model’s intended range (clipping does the rest).
+        - If all are horizontal (infinite), use a large multiple of yield strain.
+        """
+        ultimates = [float(sm.get_ultimate_strain()) for sm in self.steel_models]
+        finite = [u for u in ultimates if np.isfinite(u)]
+        if finite:
+            return float(max(finite))
+
+        eps_y_max = max(float(sm.epsilon_y) for sm in self.steel_models)
+        return float(max(10.0 * eps_y_max, 0.01))
+
 
     # ----------------------------
     # Diagram generation
@@ -615,45 +680,46 @@ class MNInteractionDiagram:
     def generate_diagram(
         self,
         n_points: int = 120,
-        include_tension: bool = True,
     ) -> List[InteractionPoint]:
         """
-        Generate a closed M-N interaction envelope.
+        Generate a closed M–N interaction envelope using end-strain parameterisation.
 
-        Args:
-            n_points: Total sampling density. Internally split across top/bottom branches.
-            include_tension: Include pure tension closing point (recommended True for closed loop).
+        The envelope is traced in (ε_top, ε_bottom) strain space:
+            - Compression is limited by concrete ultimate strain ε_cu
+            - Tension is limited by a steel-controlled strain ε_t (via _eps_tension_limit)
 
-        Returns:
-            Ordered closed loop of InteractionPoint objects.
+        This formulation:
+            - avoids neutral-axis branch switching
+            - eliminates artificial kinks near pure tension
+            - produces a smooth, convex interaction envelope
         """
-        n_branch = max(30, n_points // 2)
-        na_depths = self._na_depths(n_branch)
+        # --- Compression-side strain limit (concrete-controlled)
+        eps_cu = float(self.concrete_model.get_ultimate_strain())
 
-        p_comp = self._pure_compression_point()
-        p_tens = self._pure_tension_point() if include_tension else None
+        # --- Tension-side strain limit (steel-controlled, finite by design)
+        eps_t = self._eps_tension_limit()
 
-        top_branch: List[InteractionPoint] = [
-            self.calculate_point(float(na), compression_from_bottom=False)
-            for na in na_depths
+        # --- Build a closed loop in strain space
+        #     (ε_top, ε_bottom) pairs covering:
+        #     pure compression → bending → pure tension → reverse bending → closure
+        # Oversample in strain space (5–10x is typical)
+        n_dense = int(max(5 * n_points, 300))
+        strain_pairs_dense = self._strain_limit_loop(
+            n_points=n_dense,
+            eps_cu=eps_cu,
+            eps_t=eps_t,
+        )
+
+        dense_pts: List[InteractionPoint] = [
+            self.calculate_point_from_end_strains(eps_top=et, eps_bottom=eb)
+            for (et, eb) in strain_pairs_dense
         ]
 
-        bottom_branch: List[InteractionPoint] = [
-            self.calculate_point(float(na), compression_from_bottom=True)
-            for na in na_depths
-        ]
+        # Resample to uniform chord-length in (M,N)
+        pts = self._resample_closed_polyline_by_chord(dense_pts, n_out=int(max(n_points, 40)))
 
-        envelope: List[InteractionPoint] = []
-        envelope.append(p_comp)
-        envelope.extend(top_branch)
+        return pts
 
-        if p_tens is not None:
-            envelope.append(p_tens)
-
-        envelope.extend(reversed(bottom_branch))
-        envelope.append(p_comp)  # explicit closure
-
-        return envelope
 
     # ----------------------------
     # Capacity checks
@@ -674,7 +740,7 @@ class MNInteractionDiagram:
             (M_Rd, N_Rd) = t_cap * (M_Ed, N_Ed)
             utilization = 1 / t_cap
         """
-        diagram = self.generate_diagram(n_points=n_points, include_tension=True)
+        diagram = self.generate_diagram(n_points=n_points)
         pts = [(p.M, p.N) for p in diagram]
         if len(pts) < 3:
             return (None, None, False, float("inf"))
@@ -702,6 +768,7 @@ class MNInteractionDiagram:
 
         return (float(N_Rd), float(M_Rd), bool(is_safe), float(utilization))
 
+
     def get_utilization_vector(
         self,
         N_Ed: float,
@@ -712,60 +779,102 @@ class MNInteractionDiagram:
         _, _, is_safe, util = self.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points)
         return (bool(is_safe), float(util))
 
-    # ----------------------------
-    # Balanced point (improved guards)
-    # ----------------------------
 
-    def find_balanced_point(
-        self,
-        max_concrete_strain: Optional[float] = None,
-    ) -> Tuple[InteractionPoint, float]:
+    @staticmethod
+    def _intersections_with_horizontal(
+        pts: List[Tuple[float, float]],
+        N0: float,
+        tol: float = 1e-9,
+    ) -> List[float]:
         """
-        Find balanced failure point (ε_c at extreme compression = ε_cu, tensile steel reaches ε_y).
+        Intersect a polyline (M,N) with the horizontal line N=N0.
+        Returns list of M values where intersections occur.
+        """
+        Ms: List[float] = []
+        if len(pts) < 2:
+            return Ms
+
+        for (M1, N1), (M2, N2) in zip(pts[:-1], pts[1:]):
+            # If segment is (nearly) horizontal
+            if abs(N2 - N1) <= tol:
+                # If it's on the query horizontal line, take endpoints as intersections
+                if abs(N1 - N0) <= tol:
+                    Ms.append(float(M1))
+                    Ms.append(float(M2))
+                continue
+
+            # Check if N0 is between N1 and N2 (inclusive with tol)
+            if (N0 - N1) * (N0 - N2) > tol:
+                continue
+
+            # Linear interpolation parameter along segment
+            t = (N0 - N1) / (N2 - N1)  # can be slightly outside due to tol, clamp
+            if t < -1e-12 or t > 1.0 + 1e-12:
+                continue
+            t = min(max(t, 0.0), 1.0)
+
+            Mx = M1 + t * (M2 - M1)
+            Ms.append(float(Mx))
+
+        # De-duplicate within tolerance (important around vertices)
+        Ms.sort()
+        out: List[float] = []
+        for m in Ms:
+            if not out or abs(m - out[-1]) > 1e-7:  # moment tolerance in kN·m
+                out.append(m)
+        return out
+
+
+    def get_capacity_fixed_n(
+        self,
+        N_Ed: float,
+        *,
+        n_points: int = 160,
+    ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        """
+        Horizontal-line capacity at fixed axial force.
+
+        "Caps the axial":
+          - If N_Ed is outside the diagram's axial range, it is clamped to [N_min, N_max]
+            so you still get a sensible moment capacity at the nearest achievable axial level.
 
         Returns:
-            (balanced_point, neutral_axis_depth_mm)
+            (N_cap, M_Rd_pos, M_Rd_neg)
+
+        where:
+            - N_cap is the clamped axial level used for the intersection
+            - M_Rd_pos is the maximum positive moment capacity at N_cap
+            - M_Rd_neg is the minimum (most negative) moment capacity at N_cap
+
+        If intersections cannot be found, returns (None, None, None).
         """
-        if max_concrete_strain is None:
-            max_concrete_strain = float(self.concrete_model.get_ultimate_strain())
+        diagram = self.generate_diagram(n_points=n_points)  # should be closed already
+        if len(diagram) < 4:
+            return (None, None, None)
 
-        _, y, _, material_type, material_index = self.mesh.get_fiber_arrays()
-        material_type = material_type.astype("U8", copy=False)
+        pts = [(float(p.M), float(p.N)) for p in diagram]
 
-        steel_mask = material_type == "steel"
-        if not np.any(steel_mask):
-            raise ValueError("Cannot find balanced point - no steel fibers")
+        # Ensure closed
+        if pts[0] != pts[-1]:
+            pts = pts + [pts[0]]
 
-        steel_y = y[steel_mask]
-        steel_idx = material_index[steel_mask]
+        N_vals = [N for _, N in pts]
+        N_min = float(min(N_vals))
+        N_max = float(max(N_vals))
 
-        # For top compression, tension steel is near bottom => min y
-        i_min = int(np.argmin(steel_y))
-        y_tension = float(steel_y[i_min])
-        group_idx = int(steel_idx[i_min])
+        # Cap axial
+        N_cap = float(min(max(N_Ed, N_min), N_max))
 
-        eps_y = float(self.steel_models[group_idx].epsilon_y)
-        y_from_top = self.section_top - y_tension
+        # Find intersections with horizontal line N=N_cap
+        Ms = self._intersections_with_horizontal(pts, N0=N_cap, tol=1e-9)
 
-        x_bal_est = max_concrete_strain * y_from_top / (max_concrete_strain + eps_y)
+        if not Ms:
+            # Extremely rare if diagram is well-formed; return None to signal failure
+            return (None, None, None)
 
-        def objective(na: float) -> float:
-            if na <= 0.0:
-                return 1e9
-            eps_s = max_concrete_strain * (na - y_from_top) / na
-            return abs(eps_s) - eps_y
-
-        lo = max(0.02 * self.section_height, 1e-3)
-        hi = 5.0 * self.section_height
-
-        try:
-            sol = root_scalar(objective, bracket=[lo, hi], method="brentq", xtol=1e-3)
-            na_bal = float(sol.root) if sol.converged else float(x_bal_est)
-        except Exception:
-            na_bal = float(x_bal_est)
-
-        p = self.calculate_point(na_bal, max_concrete_strain=max_concrete_strain, compression_from_bottom=False)
-        return (p, na_bal)
+        M_Rd_pos = float(max(Ms))
+        M_Rd_neg = float(min(Ms))
+        return (N_cap, M_Rd_pos, M_Rd_neg)
 
     # ----------------------------
     # Export / convenience
@@ -779,6 +888,7 @@ class MNInteractionDiagram:
         N = np.array([p.N for p in pts], dtype=float)
         M = np.array([p.M for p in pts], dtype=float)
         return (N, M)
+
 
     def export_to_json(
         self,
@@ -808,6 +918,7 @@ class MNInteractionDiagram:
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=indent)
 
+
     def export_to_csv(
         self,
         file_path: str | Path,
@@ -836,6 +947,7 @@ class MNInteractionDiagram:
                     row = {"N_kN": row["N_kN"], "M_kNm": row["M_kNm"]}
                 writer.writerow(row)
 
+
     def to_dict(
         self,
         n_points: int = 120,
@@ -861,6 +973,7 @@ class MNInteractionDiagram:
                 "confined_concrete": self.confined_concrete,
             }
         return data
+
 
     # ----------------------------
     # Plotting (kept for encapsulated UX)
@@ -912,7 +1025,7 @@ class MNInteractionDiagram:
             ) from e
 
         # Generate diagram
-        diagram_points = self.generate_diagram(n_points=n_points, include_tension=True)
+        diagram_points = self.generate_diagram(n_points=n_points)
         M_curve = [p.M for p in diagram_points]
         N_curve = [p.N for p in diagram_points]
 
@@ -1027,6 +1140,36 @@ class MNInteractionDiagram:
         )
         fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
         fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
+
+        # ---- Force axes to include everything (capacity + loads + vectors) ----
+        # Collect all x/y values you actually plotted
+        xs = list(M_curve) + [0.0]
+        ys = list(N_curve) + [0.0]
+
+        if load_points:
+            for lp in load_points:
+                xs.append(float(lp.get("M_Ed", 0.0)))
+                ys.append(float(lp.get("N_Ed", 0.0)))
+
+                if show_vectors:
+                    N_Rd, M_Rd, _, _ = self.get_capacity_vector(
+                        N_Ed=float(lp.get("N_Ed", 0.0)),
+                        M_Ed=float(lp.get("M_Ed", 0.0)),
+                        n_points=n_points
+                    )
+                    if (M_Rd is not None) and (N_Rd is not None):
+                        xs.append(float(M_Rd))
+                        ys.append(float(N_Rd))
+
+        xmin, xmax = min(xs), max(xs)
+        ymin, ymax = min(ys), max(ys)
+
+        # Pad by 5% (fallback to 1.0 if range is tiny)
+        xpad = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
+        ypad = 0.05 * (ymax - ymin) if ymax > ymin else 1.0
+
+        fig.update_xaxes(range=[xmin - xpad, xmax + xpad], autorange=False)
+        fig.update_yaxes(range=[ymin - ypad, ymax + ypad], autorange=False)
 
         if save_path:
             fig.write_html(str(save_path))

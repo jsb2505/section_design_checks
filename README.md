@@ -143,7 +143,7 @@ stress = steel_model.get_stress(0.01)
 print(f"Steel stress at ε=0.01: {stress:.1f} MPa")
 ```
 
-### M-N Interaction Diagrams
+### M-N Interaction Diagrams (Uniaxial Bending)
 
 ```python
 from section_design_checks.reinforced_concrete.analysis import create_interaction_diagram
@@ -176,6 +176,57 @@ print(f"Safe: {is_safe}")
 M_Rd_pos, M_Rd_neg = diagram.get_capacity(N_Ed=1000)
 print(f"M_Rd at N=1000 kN: ±{M_Rd_pos:.1f} kN·m")
 ```
+
+### Biaxial M-M-N Interaction Surfaces
+
+```python
+from section_design_checks.reinforced_concrete.analysis.biaxial_interaction import (
+    BiaxialMNInteractionSurface
+)
+
+# Create biaxial M-M-N interaction surface
+surface = BiaxialMNInteractionSurface(
+    section=section,  # RC section with rebars
+    concrete=concrete,
+    concrete_model_type="parabola-rectangle",
+    steel_branch_type="inclined",
+    n_fibers_width=20,
+    n_fibers_height=30,
+)
+
+# Generate 3D surface using EC2 Pivot Method
+points = surface.generate_surface_pivot(
+    n_angles=36,        # Number of bending angles (0-360°)
+    n_axial_levels=20,  # Number of uniform N levels
+)
+
+# Check biaxial capacity
+N_Ed = 1000   # kN
+My_Ed = 150   # kN·m about y-axis
+Mz_Ed = 100   # kN·m about z-axis
+
+N_Rd, My_Rd, Mz_Rd, is_safe, utilization = surface.check_point(N_Ed, My_Ed, Mz_Ed)
+
+print(f"Applied: N={N_Ed}, My={My_Ed}, Mz={Mz_Ed}")
+print(f"Capacity: N={N_Rd:.1f}, My={My_Rd:.1f}, Mz={Mz_Rd:.1f}")
+print(f"Utilization: {utilization:.1%}, Safe: {is_safe}")
+
+# Interactive 3D plot with load points
+load_cases = [
+    {"N_Ed": 1000, "My_Ed": 150, "Mz_Ed": 100, "name": "LC1: DL+LL"},
+    {"N_Ed": 800, "My_Ed": 200, "Mz_Ed": 80, "name": "LC2: DL+Wind"},
+]
+
+surface.plot(
+    load_points=load_cases,
+    show_vectors=True,  # Show projection rays to capacity
+    n_angles=36,
+    n_axial_levels=16,
+    save_path="biaxial_surface.html"
+)
+```
+
+**EC2 Pivot Method**: The biaxial surface generation uses Eurocode 2's pivot zone approach (Zones A, B, C) to ensure strain profiles always touch an ultimate limit strain (ε_cu2, ε_c2, or ε_ud). This mathematically guarantees all points lie on the true failure surface with no interior points. See [docs/PIVOT_METHOD_IMPLEMENTATION.md](docs/PIVOT_METHOD_IMPLEMENTATION.md) for details.
 
 ### Fiber Mesh for Custom Analysis
 
@@ -322,12 +373,43 @@ for element in results["beam_elements"]:
     #     print(f"Element {element['id']} fails: {result}")
 ```
 
+## Project Structure
+
+```
+section_design_checks/
+├── materials/                    # Core library code
+│   ├── reinforced_concrete/     # RC materials and analysis
+│   │   ├── analysis/            # M-N diagrams, biaxial surfaces
+│   │   ├── constitutive/        # Stress-strain models
+│   │   ├── geometry/            # Section geometry
+│   │   └── materials/           # Material properties
+│   └── core/                    # Base abstractions
+├── examples/                    # Example scripts and notebooks
+│   ├── *.ipynb                 # Jupyter tutorials
+│   └── *.py                    # Example scripts
+├── tests/                       # Test suite
+│   ├── unit/                   # Unit tests (240 tests)
+│   └── integration/            # Integration tests
+├── docs/                        # Technical documentation
+│   └── README.md               # Documentation index
+├── output/                      # Generated outputs
+│   ├── figures/                # Plots and diagrams
+│   └── data/                   # JSON/CSV exports
+└── README.md                    # This file
+```
+
 ## Documentation & Examples
 
+**Getting Started:**
 - **[GETTING_STARTED.md](GETTING_STARTED.md)** - Quick start guide with examples
-- **[M-N_DIAGRAM_IMPLEMENTATION.md](M-N_DIAGRAM_IMPLEMENTATION.md)** - Detailed M-N diagram documentation
-- **[examples/m_n_interaction_diagram_tutorial.ipynb](examples/m_n_interaction_diagram_tutorial.ipynb)** - Comprehensive Jupyter notebook tutorial
-- **[TEST_RESULTS_FINAL.md](TEST_RESULTS_FINAL.md)** - Complete test coverage report
+
+**Interactive Tutorials:**
+- **[examples/m_n_interaction_diagram_tutorial.ipynb](examples/m_n_interaction_diagram_tutorial.ipynb)** - Uniaxial M-N diagrams
+- **[examples/biaxial_mn_interaction_tutorial.ipynb](examples/biaxial_mn_interaction_tutorial.ipynb)** - Biaxial M-M-N surfaces
+
+**Technical Documentation:**
+- **[docs/](docs/)** - Implementation guides, bug fixes, test results
+  - See [docs/README.md](docs/README.md) for complete documentation index
 
 ## Test Coverage
 

@@ -53,10 +53,9 @@ print("  This creates constant-N contours -> proper rugby ball shape")
 print()
 
 # Use the corrected method with constant N contours
-points = surface.generate_surface(
+points = surface.generate_surface_pivot(
     n_angles=36,          # Points per contour
     n_axial_levels=20,    # Number of N levels
-    include_tension=True,
 )
 
 print(f"✓ Generated {len(points)} points")

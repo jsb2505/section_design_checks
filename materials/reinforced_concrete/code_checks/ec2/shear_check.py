@@ -93,7 +93,7 @@ class ShearCheck(BaseCodeCheck):
         if self.d is not None:
             return self.d
         else:
-            return self.section.get_effective_depth(reference="top")
+            return self.section.get_effective_depth(compression_face="top")
 
     @computed_field
     @property

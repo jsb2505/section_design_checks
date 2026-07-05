@@ -40,6 +40,22 @@ class TestSteelStressStrainEC2:
         assert design_model.f_y == steel_b500b.f_yd
         assert char_model.f_y == steel_b500b.f_yk
 
+    def test_accidental_strength(self, steel_b500b):
+        """Test that model uses f_yd_accidental when use_accidental=True."""
+        model_accidental = SteelStressStrainEC2(steel=steel_b500b, use_accidental=True)
+        assert model_accidental.f_y == steel_b500b.f_yd_accidental
+        # f_yd_accidental should be higher than f_yd (due to reduced partial factor)
+        assert steel_b500b.f_yd_accidental > steel_b500b.f_yd
+
+    def test_cannot_use_both_characteristic_and_accidental(self, steel_b500b):
+        """Test that using both flags raises an error."""
+        with pytest.raises(ValueError, match="Cannot set both use_characteristic=True and use_accidental=True"):
+            SteelStressStrainEC2(
+                steel=steel_b500b,
+                use_characteristic=True,
+                use_accidental=True,
+            )
+
     def test_yield_strain(self, model_inclined, steel_b500b):
         """Test yield strain calculation."""
         expected = steel_b500b.f_yd / steel_b500b.E_s
@@ -179,6 +195,11 @@ class TestCreateSteelStressStrain:
         """Test use_characteristic flag."""
         model = create_steel_stress_strain(steel_b500b, use_characteristic=True)
         assert model.f_y == steel_b500b.f_yk
+
+    def test_use_accidental_flag(self, steel_b500b):
+        """Test use_accidental flag."""
+        model = create_steel_stress_strain(steel_b500b, use_accidental=True)
+        assert model.f_y == steel_b500b.f_yd_accidental
 
     def test_comparison_inclined_vs_horizontal(self, steel_b500b):
         """Test that inclined has higher stress at large strains."""

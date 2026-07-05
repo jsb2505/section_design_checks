@@ -188,13 +188,25 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
         σ_c = f_c · [1 - (1 - ε/ε_c2)^n]  for 0 ≤ ε ≤ ε_c2
         σ_c = f_c                          for ε_c2 < ε ≤ ε_cu2
         σ_c = 0                             for ε > ε_cu2
+
+    The strength f_c can be (mutually exclusive):
+        - f_cd (design strength) when use_characteristic=False and use_accidental=False (default)
+        - f_ck (characteristic strength) when use_characteristic=True
+        - f_cd_accidental (accidental design strength) when use_accidental=True
+
+    Note: use_characteristic and use_accidental cannot both be True.
     """
 
     concrete: ConcreteMaterial = Field(..., description="Concrete material")
 
     use_characteristic: bool = Field(
         default=False,
-        description="Use f_ck instead of f_cd (for characteristic calculations)"
+        description="Use f_ck instead of f_cd (mutually exclusive with use_accidental)"
+    )
+
+    use_accidental: bool = Field(
+        default=False,
+        description="Use f_cd_accidental instead of f_cd (mutually exclusive with use_characteristic)"
     )
 
     name: str = Field(default="EC2 Parabola-Rectangle", description="Model name")
@@ -207,11 +219,20 @@ class ConcreteStressStrainParabolaRectangle(BaseConstitutiveModel):
 
     @property
     def f_c(self) -> float:
-        """Design or characteristic strength depending on use_characteristic flag."""
-        return self.concrete.f_ck if self.use_characteristic else self.concrete.f_cd
+        """Design, characteristic, or accidental strength depending on flags."""
+        if self.use_characteristic:
+            return self.concrete.f_ck
+        if self.use_accidental:
+            return self.concrete.f_cd_accidental
+        return self.concrete.f_cd
 
     @model_validator(mode="after")
     def validate_parameters(self) -> "ConcreteStressStrainParabolaRectangle":
+        if self.use_characteristic and self.use_accidental:
+            raise ValueError(
+                "Cannot set both use_characteristic=True and use_accidental=True. "
+                "Choose one: characteristic (f_ck), design (f_cd), or accidental (f_cd_accidental)."
+            )
         if self.concrete.epsilon_c2 <= 0:
             raise ValueError(f"Concrete epsilon_c2 must be > 0, got {self.concrete.epsilon_c2}")
         if self.concrete.epsilon_cu2 <= 0:
@@ -296,13 +317,25 @@ class ConcreteStressStrainBilinear(BaseConstitutiveModel):
         σ_c = f_c · ε/ε_c3       for 0 ≤ ε ≤ ε_c3
         σ_c = f_c                for ε_c3 < ε ≤ ε_cu3
         σ_c = 0                  for ε > ε_cu3
+
+    The strength f_c can be (mutually exclusive):
+        - f_cd (design strength) when use_characteristic=False and use_accidental=False (default)
+        - f_ck (characteristic strength) when use_characteristic=True
+        - f_cd_accidental (accidental design strength) when use_accidental=True
+
+    Note: use_characteristic and use_accidental cannot both be True.
     """
 
     concrete: ConcreteMaterial = Field(..., description="Concrete material")
 
     use_characteristic: bool = Field(
         default=False,
-        description="Use f_ck instead of f_cd"
+        description="Use f_ck instead of f_cd (mutually exclusive with use_accidental)"
+    )
+
+    use_accidental: bool = Field(
+        default=False,
+        description="Use f_cd_accidental instead of f_cd (mutually exclusive with use_characteristic)"
     )
 
     name: str = Field(default="EC2 Bilinear", description="Model name")
@@ -315,11 +348,20 @@ class ConcreteStressStrainBilinear(BaseConstitutiveModel):
 
     @property
     def f_c(self) -> float:
-        """Design or characteristic strength."""
-        return self.concrete.f_ck if self.use_characteristic else self.concrete.f_cd
+        """Design, characteristic, or accidental strength depending on flags."""
+        if self.use_characteristic:
+            return self.concrete.f_ck
+        if self.use_accidental:
+            return self.concrete.f_cd_accidental
+        return self.concrete.f_cd
 
     @model_validator(mode="after")
     def validate_parameters(self) -> "ConcreteStressStrainBilinear":
+        if self.use_characteristic and self.use_accidental:
+            raise ValueError(
+                "Cannot set both use_characteristic=True and use_accidental=True. "
+                "Choose one: characteristic (f_ck), design (f_cd), or accidental (f_cd_accidental)."
+            )
         if self.concrete.epsilon_c3 <= 0:
             raise ValueError(f"Concrete epsilon_c3 must be > 0, got {self.concrete.epsilon_c3}")
         if self.concrete.epsilon_cu3 <= 0:
@@ -394,6 +436,7 @@ def create_concrete_stress_strain(
     concrete: ConcreteMaterial,
     model_type: ConcreteModelType = "parabola-rectangle",
     use_characteristic: bool = False,
+    use_accidental: bool = False,
 ) -> BaseConstitutiveModel:
     """
     Factory function to create concrete stress-strain models.
@@ -402,9 +445,16 @@ def create_concrete_stress_strain(
         concrete: Concrete material
         model_type: Type of model to create
         use_characteristic: Use f_ck instead of f_cd (ignored for schematic)
+        use_accidental: Use f_cd_accidental instead of f_cd (ignored for schematic)
 
     Returns:
         Concrete stress-strain model
+
+    Raises:
+        ValueError: If both use_characteristic and use_accidental are True
+
+    Note:
+        use_characteristic and use_accidental are mutually exclusive.
     """
     if model_type == "schematic":
         return ConcreteStressStrainSchematic(concrete=concrete)
@@ -412,13 +462,15 @@ def create_concrete_stress_strain(
     if model_type == "parabola-rectangle":
         return ConcreteStressStrainParabolaRectangle(
             concrete=concrete,
-            use_characteristic=use_characteristic
+            use_characteristic=use_characteristic,
+            use_accidental=use_accidental
         )
 
     if model_type == "bilinear":
         return ConcreteStressStrainBilinear(
             concrete=concrete,
-            use_characteristic=use_characteristic
+            use_characteristic=use_characteristic,
+            use_accidental=use_accidental
         )
 
     raise ValueError(f"Unknown model type: {model_type}")
