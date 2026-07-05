@@ -10,9 +10,10 @@ not fields. This enables checking multiple load cases against the same section e
 
 from typing import Optional, ClassVar
 from math import sqrt, atan, degrees
+import warnings
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, PrivateAttr, computed_field
 
 from materials.reinforced_concrete.code_checks.base_check import (
     BaseCodeCheck,
@@ -71,6 +72,7 @@ class ShearCheck(BaseCodeCheck):
         shear_reinforcement: Shear links/stirrups (optional)
         use_accidental: Use accidental limit state partial factors (default: False)
         use_rigorous: Use solver-based approach for NA and lever arm (default: True)
+        cap_lever_arm: Cap lever arm to 0.9d per EC2 (default: True, rigorous mode only)
         concrete_model_type: Concrete stress-strain model (for rigorous mode)
         steel_branch_type: Steel stress-strain branch (for rigorous mode)
 
@@ -147,6 +149,16 @@ class ShearCheck(BaseCodeCheck):
         ),
     )
 
+    cap_lever_arm: bool = Field(
+        default=True,
+        description=(
+            "Cap computed lever arm to 0.9d per EC2 codified simplification (default: True). "
+            "When True, lever arm z is limited to z <= 0.9d to match EC2 truss model assumptions. "
+            "The uncapped mechanical lever arm z_mech is still stored in details for reference. "
+            "Only affects rigorous mode - approximate mode always uses z=0.9d."
+        ),
+    )
+
     # ==================================
     # Material models for rigorous mode
     # ==================================
@@ -165,7 +177,7 @@ class ShearCheck(BaseCodeCheck):
     # Internal state (private)
     # ===========================
 
-    _diagram: Optional[MNInteractionDiagram] = None
+    _diagram: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
 
     # Constants from EC2
     MIN_COT_THETA: ClassVar[float] = 1.0  # θ = 45°
@@ -330,7 +342,7 @@ class ShearCheck(BaseCodeCheck):
         d: float,
         eps_top: Optional[float] = None,
         eps_bottom: Optional[float] = None,
-    ) -> float:
+    ) -> tuple[float, Optional[float]]:
         """
         Lever arm for this load case.
 
@@ -345,15 +357,36 @@ class ShearCheck(BaseCodeCheck):
             eps_bottom: Pre-computed bottom strain (optional, avoids re-solving)
 
         Returns:
-            Lever arm in mm
+            Tuple of (z_ec2, z_mech):
+                z_ec2: Lever arm for EC2 check (mm) - used in capacity calculations,
+                       capped to 0.9d if cap_lever_arm=True
+                z_mech: Mechanical lever arm (mm) - None if approximate mode, otherwise uncapped value
         """
         if not self.use_rigorous or self._diagram is None:
-            return 0.9 * d  # EC2 approximation
+            return (0.9 * d, None)  # EC2 approximation - no mechanical value
 
         # Rigorous: compute from strain state
         if eps_top is None or eps_bottom is None:
             eps_top, eps_bottom = self._diagram.find_strains_for_MN(M_Ed, N_Ed)
-        return self._compute_lever_arm_from_strains(eps_top, eps_bottom, d)
+
+        # Get mechanical lever arm (uncapped)
+        z_mech = self._compute_lever_arm_from_strains(eps_top, eps_bottom, d)
+
+        # Apply EC2 cap if enabled (codified truss model simplification)
+        if self.cap_lever_arm:
+            limit_09d = 0.9 * d
+            if z_mech > limit_09d:
+                warnings.warn(
+                    f"Lever arm capped: z_mech={z_mech:.1f}mm > 0.9d={limit_09d:.1f}mm. "
+                    f"Using z={limit_09d:.1f}mm per EC2 §6.2.3 truss model. "
+                    f"Set cap_lever_arm=False to use uncapped value.",
+                    stacklevel=2
+                )
+            z_ec2 = min(z_mech, limit_09d)
+        else:
+            z_ec2 = z_mech
+
+        return (z_ec2, z_mech)
 
     def find_rho_l(
         self,
@@ -435,14 +468,6 @@ class ShearCheck(BaseCodeCheck):
         y_bot = float(self.section.outline.bounds[1])
         h = y_top - y_bot
 
-        # Find neutral axis y-coordinate
-        if abs(eps_top - eps_bottom) < 1e-18:
-            # Pure axial - use centroid
-            na_y = self.section.get_centroid()[1]
-        else:
-            # NA at zero strain: eps_bot + (eps_top - eps_bot) * (na_y - y_bot) / h = 0
-            na_y = y_bot - h * (eps_bottom / (eps_top - eps_bottom))
-
         # Sum steel in tension (strain < 0, negative = tension)
         A_sl = 0.0
         for group in self.section.rebar_groups:
@@ -466,17 +491,17 @@ class ShearCheck(BaseCodeCheck):
         d: float
     ) -> float:
         """
-        Compute lever arm from force resultant centroids.
+        Compute mechanical lever arm from force resultant centroids.
 
         z = |y_T - y_C| where y_T, y_C are centroids of tension/compression forces
 
         Args:
             eps_top: Strain at top fiber
             eps_bottom: Strain at bottom fiber
-            d: Effective depth in mm (already computed with correct compression face)
+            d: Effective depth in mm (for fallback if lever arm is too small)
 
         Returns:
-            Lever arm in mm
+            Mechanical lever arm in mm (uncapped)
         """
         # This method should only be called when diagram exists (rigorous mode)
         if self._diagram is None:
@@ -507,15 +532,14 @@ class ShearCheck(BaseCodeCheck):
         else:
             y_C = y_top
 
-        lever_arm = abs(y_T - y_C)
+        z_mech = abs(y_T - y_C)
 
         # Fallback: if lever arm is too small (numerical issue or pure axial),
         # use 0.9d approximation
-        if lever_arm < 1.0:  # Less than 1mm is suspicious
-            # Use the already-computed d (which has correct compression face)
-            lever_arm = 0.9 * d
+        if z_mech < 1.0:  # Less than 1mm is suspicious
+            z_mech = 0.9 * d
 
-        return lever_arm
+        return z_mech
 
     # ===========================
     # EC2 calculation methods
@@ -729,14 +753,14 @@ class ShearCheck(BaseCodeCheck):
 
         # Compute load-dependent geometric parameters (pass strains to avoid re-solving)
         d = self.find_effective_depth(M_Ed, N_Ed, eps_top, eps_bottom)
-        z = self.find_lever_arm(M_Ed, N_Ed, d, eps_top, eps_bottom)
+        z_ec2, z_mech = self.find_lever_arm(M_Ed, N_Ed, d, eps_top, eps_bottom)
         sigma_cp = self.find_sigma_cp(N_Ed)
         rho_l = self.find_rho_l(M_Ed, N_Ed, d, eps_top, eps_bottom)
 
-        # Compute capacities
+        # Compute capacities (use z_ec2 for design checks per EC2)
         V_Rd_c = self.find_V_Rd_c(d, rho_l, sigma_cp)
-        V_Rd_s = self.find_V_Rd_s(cot_theta_used, z)
-        V_Rd_max = self.find_V_Rd_max(cot_theta_used, z, sigma_cp)
+        V_Rd_s = self.find_V_Rd_s(cot_theta_used, z_ec2)
+        V_Rd_max = self.find_V_Rd_max(cot_theta_used, z_ec2, sigma_cp)
 
         # Determine governing capacity
         if self.shear_reinforcement is None:
@@ -793,11 +817,13 @@ class ShearCheck(BaseCodeCheck):
             "theta_deg": degrees(atan(1 / cot_theta_used)),
             "section_name": self.section.section_name or "unnamed",
             "d": d,
-            "z": z,
+            "z": z_ec2,  # Lever arm used in EC2 check (capped if cap_lever_arm=True)
+            "z_mech": z_mech,  # Mechanical lever arm from force centroids (uncapped)
             "b_w": self.breadth,
             "rho_l": rho_l,
             "sigma_cp": sigma_cp,
             "mode": "rigorous" if self.use_rigorous else "approximate",
+            "cap_lever_arm": self.cap_lever_arm,  # Document if capping was applied
         }
 
         return self._create_result(
@@ -849,7 +875,7 @@ class ShearCheck(BaseCodeCheck):
         if V_Ed <= V_Rd_c:
             return 0.0
 
-        z = self.find_lever_arm(M_Ed, N_Ed, d)
+        z_ec2, _ = self.find_lever_arm(M_Ed, N_Ed, d)
 
         if f_ywd is None and self.shear_reinforcement is not None:
             f_ywd = self.f_ywd_design
@@ -861,5 +887,5 @@ class ShearCheck(BaseCodeCheck):
 
         cot_theta_limited = max(self.MIN_COT_THETA, min(self.MAX_COT_THETA, cot_theta))
 
-        A_sw_over_s = (V_Ed * 1000) / (z * f_ywd * cot_theta_limited)
+        A_sw_over_s = (V_Ed * 1000) / (z_ec2 * f_ywd * cot_theta_limited)
         return A_sw_over_s

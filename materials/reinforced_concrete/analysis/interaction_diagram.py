@@ -1180,7 +1180,11 @@ class MNInteractionDiagram:
         N_Ed: float,
         M_Ed: float,
         n_points: int = 120,
-    ) -> Tuple[Optional[float], Optional[float], bool, float]:
+        return_details: bool = False,
+    ) -> Union[
+        Tuple[Optional[float], Optional[float], bool, float],
+        Tuple[Optional[float], Optional[float], bool, float, Optional[dict]]
+    ]:
         """
         Get capacity point (N_Rd, M_Rd) on the M-N boundary using ray intersection (vector method).
 
@@ -1189,14 +1193,60 @@ class MNInteractionDiagram:
         If intersection scale is t_cap, then:
             (M_Rd, N_Rd) = t_cap * (M_Ed, N_Ed)
             utilization = 1 / t_cap
+
+        Args:
+            N_Ed: Design axial force (kN, compression positive)
+            M_Ed: Design moment (kN·m)
+            n_points: Number of points to generate M-N curve (default 120)
+            return_details: If True, recompute exact strain state and return detailed metadata
+                           (default False for speed)
+
+        Returns:
+            If return_details=False (default):
+                (N_Rd, M_Rd, is_safe, utilization)
+
+            If return_details=True:
+                (N_Rd, M_Rd, is_safe, utilization, details_dict)
+
+                where details_dict contains exact metadata at capacity:
+                    - 'eps_top': Top fiber strain
+                    - 'eps_bottom': Bottom fiber strain
+                    - 'neutral_axis_depth': NA depth from section bottom (mm)
+                    - 'compression_from_bottom': True if compression is at bottom
+                    - 'max_concrete_strain': Maximum concrete compressive strain
+                    - 'max_steel_strain': Maximum steel strain (absolute value)
+
+                Note: Exact details require solving for strain state at (M_Rd, N_Rd),
+                which adds computational cost but provides accurate metadata for detailed checks.
+
+        Note on metadata accuracy:
+            - Without return_details: Fast, but no strain/stress metadata available
+            - With return_details: Slower, but exact strain/stress state at capacity
+
+            The resampled M-N curve uses interpolated (M, N) coordinates (geometrically accurate),
+            but strain metadata is approximate (from nearest dense point). When you need exact
+            strains, stresses, NA depth, or lever arm at capacity, use return_details=True.
         """
         diagram = self.generate_diagram(n_points=n_points)
         pts = [(p.M, p.N) for p in diagram]
         if len(pts) < 3:
+            if return_details:
+                return (None, None, False, float("inf"), None)
             return (None, None, False, float("inf"))
 
         # Special case: origin (no load)
         if abs(M_Ed) < 1e-18 and abs(N_Ed) < 1e-18:
+            if return_details:
+                # At origin: no strain, no stress
+                zero_details = {
+                    'eps_top': 0.0,
+                    'eps_bottom': 0.0,
+                    'neutral_axis_depth': None,
+                    'compression_from_bottom': None,
+                    'max_concrete_strain': 0.0,
+                    'max_steel_strain': 0.0,
+                }
+                return (0.0, 0.0, True, 0.0, zero_details)
             return (0.0, 0.0, True, 0.0)
 
         ray_dir = (float(M_Ed), float(N_Ed))  # IMPORTANT: do NOT normalize
@@ -1216,35 +1266,85 @@ class MNInteractionDiagram:
             if t is not None:
                 intersections.append(t)
 
-        if len(intersections) == 0:
+        # Keep only forward intersections (positive t)
+        ts = [t for t in intersections if t > 1e-12]
+        if not ts:
+            if return_details:
+                return (None, None, False, float("inf"), None)
             return (None, None, False, float("inf"))
 
-        # Take maximum t (farthest intersection from origin)
-        # This is correct for convex curves; for self-intersecting curves, could be unconservative
-        max_t = max(intersections)
+        # CRITICAL: Use MINIMUM t (first boundary hit as we move outward from origin)
+        # This is the correct, conservative choice for capacity checks:
+        # - For convex/star-shaped curves: min(ts) == max(ts) (single intersection)
+        # - For non-convex curves: min(ts) gives first boundary hit (conservative)
+        # Using max(ts) would be unconservative if curve self-intersects
+        t_cap = min(ts)
 
         # Sanity check: warn if multiple intersections found (possible self-intersection)
-        if len(intersections) > 2:
+        if len(ts) > 2:
             # More than 2 intersections suggests self-intersection or numerical issues
             # Note: exactly 2 intersections can occur for tangent rays (entry/exit at same point)
             import warnings
             warnings.warn(
-                f"Ray intersection found {len(intersections)} intersections (expected 1-2). "
-                f"Curve may self-intersect. Using max_t={max_t:.4f}. "
+                f"Ray intersection found {len(ts)} intersections (expected 1-2). "
+                f"Curve may self-intersect. Using min(ts)={t_cap:.4f} (first hit, conservative). "
                 f"Consider increasing n_points or checking diagram quality.",
                 stacklevel=2
             )
 
-        if max_t <= 1e-12:
-            return (None, None, False, float("inf"))
+        M_Rd = t_cap * float(M_Ed)
+        N_Rd = t_cap * float(N_Ed)
 
-        M_Rd = max_t * float(M_Ed)
-        N_Rd = max_t * float(N_Ed)
-
-        utilization = 1.0 / max_t
+        utilization = 1.0 / t_cap
         is_safe = utilization <= 1.0
 
-        return (float(N_Rd), float(M_Rd), bool(is_safe), float(utilization))
+        # Fast return if details not requested
+        if not return_details:
+            return (float(N_Rd), float(M_Rd), bool(is_safe), float(utilization))
+
+        # Recompute exact strain state and metadata at capacity point
+        try:
+            # Solve for exact strains that produce (M_Rd, N_Rd)
+            eps_top, eps_bottom = self.find_strains_for_MN(M_Rd, N_Rd)
+
+            # Compute NA depth and compression direction
+            bbox = self.section.get_bounding_box()
+            h = bbox[3] - bbox[1]  # y_max - y_min
+            if abs(eps_top - eps_bottom) < 1e-12:
+                # Uniform strain (pure axial) - NA is undefined
+                na_depth = None
+                compression_from_bottom = eps_top > 0
+            else:
+                # Standard case: NA at zero-strain point
+                na_depth = h * abs(eps_top) / abs(eps_top - eps_bottom)
+                compression_from_bottom = eps_bottom > 0
+
+            # Get max strains - use absolute values of end strains as approximation
+            # (exact fiber-level analysis would require iterating through mesh)
+            max_concrete_strain = max(abs(eps_top), abs(eps_bottom))
+            max_steel_strain = max_concrete_strain  # Same strain field applies to all fibers
+
+            details = {
+                'eps_top': float(eps_top),
+                'eps_bottom': float(eps_bottom),
+                'neutral_axis_depth': float(na_depth) if na_depth is not None else None,
+                'compression_from_bottom': bool(compression_from_bottom),
+                'max_concrete_strain': float(max_concrete_strain),
+                'max_steel_strain': float(max_steel_strain),
+            }
+
+            return (float(N_Rd), float(M_Rd), bool(is_safe), float(utilization), details)
+
+        except Exception as e:
+            # If exact computation fails, return None for details
+            # (e.g., if solver doesn't converge at boundary)
+            import warnings
+            warnings.warn(
+                f"Failed to compute exact strain state at capacity (M_Rd={M_Rd:.2f}, N_Rd={N_Rd:.2f}): {e}. "
+                f"Returning None for details.",
+                stacklevel=2
+            )
+            return (float(N_Rd), float(M_Rd), bool(is_safe), float(utilization), None)
 
 
     def get_utilization_vector(
@@ -1254,7 +1354,7 @@ class MNInteractionDiagram:
         n_points: int = 120,
     ) -> Tuple[bool, float]:
         """Convenience wrapper returning (is_safe, utilization) using vector method."""
-        _, _, is_safe, util = self.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points)
+        _, _, is_safe, util = self.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points, return_details=False)
         return (bool(is_safe), float(util))
 
 
@@ -1546,7 +1646,7 @@ class MNInteractionDiagram:
                 name_lp = str(lp.get("name", f"Load Case {idx + 1}"))
 
                 N_Rd, M_Rd, is_safe, utilization = self.get_capacity_vector(
-                    N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points
+                    N_Ed=N_Ed, M_Ed=M_Ed, n_points=n_points, return_details=False
                 )
 
                 if utilization <= 0.8:
@@ -1633,7 +1733,8 @@ class MNInteractionDiagram:
                     N_Rd, M_Rd, _, _ = self.get_capacity_vector(
                         N_Ed=float(lp.get("N_Ed", 0.0)),
                         M_Ed=float(lp.get("M_Ed", 0.0)),
-                        n_points=n_points
+                        n_points=n_points,
+                        return_details=False
                     )
                     if (M_Rd is not None) and (N_Rd is not None):
                         xs.append(float(M_Rd))

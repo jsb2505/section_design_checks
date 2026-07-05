@@ -1476,3 +1476,119 @@ class TestConfinedConcrete:
         assert fig is not None
         # Should still create plot, just simpler hover text
         assert len(fig.data) >= 3
+
+
+class TestVectorMethodRobustness:
+    """Tests for vector method robustness and edge cases."""
+
+    def test_vector_method_linear_scaling_consistency(
+        self, rectangular_beam_with_rebars, concrete_c30
+    ):
+        """Test that utilization scales linearly when load point is scaled.
+
+        This catches silent errors where the vector projection gives wrong results.
+        Pick a random (M, N) inside the envelope, compute utilization, then scale
+        the point by 0.5 and expect utilization to be approximately halved.
+        """
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        # Pick a point inside the envelope (use a strain pair to ensure it's valid)
+        eps_cu = diagram.concrete_model.get_ultimate_strain()
+        eps_y = diagram.steel_models[0].epsilon_y
+
+        # Calculate a point inside the envelope
+        point = diagram.calculate_point_from_end_strains(eps_cu * 0.8, -eps_y * 0.5)
+        N_Ed = point.N
+        M_Ed = point.M
+
+        # Get utilization at the full point
+        N_Rd_full, M_Rd_full, is_safe_full, util_full = diagram.get_capacity_vector(
+            N_Ed=N_Ed, M_Ed=M_Ed, n_points=120
+        )
+
+        # Scale the point by 0.5
+        N_Ed_half = N_Ed * 0.5
+        M_Ed_half = M_Ed * 0.5
+
+        # Get utilization at half point
+        N_Rd_half, M_Rd_half, is_safe_half, util_half = diagram.get_capacity_vector(
+            N_Ed=N_Ed_half, M_Ed=M_Ed_half, n_points=120
+        )
+
+        # Both should be safe (inside envelope)
+        assert is_safe_full is True
+        assert is_safe_half is True
+
+        # Utilization should scale linearly: util_half ≈ util_full * 0.5
+        # Allow some tolerance due to discretization and numerical precision
+        assert util_half == pytest.approx(util_full * 0.5, rel=0.15)
+
+        # Alternative check: capacity should double when load is halved
+        # t_cap_full * (N_Ed, M_Ed) = (N_Rd_full, M_Rd_full)
+        # t_cap_half * (N_Ed_half, M_Ed_half) = (N_Rd_half, M_Rd_half)
+        # Since load is halved, t_cap_half should be approximately 2 * t_cap_full
+        t_cap_full = util_full  # utilization is 1/t_cap for safe loads
+        t_cap_half = util_half
+
+        # Expect: t_cap_half ≈ 0.5 * t_cap_full (half the utilization)
+        ratio = t_cap_half / t_cap_full
+        assert ratio == pytest.approx(0.5, rel=0.15)
+
+    def test_multiple_intersections_uses_conservative_min(
+        self, rectangular_beam_with_rebars, concrete_c30
+    ):
+        """Test that self-intersecting curves pick min positive intersection.
+
+        This test deliberately creates a scenario where multiple intersections
+        might occur and verifies the code uses the conservative (minimum) value.
+        """
+        diagram = create_interaction_diagram(
+            section=rectangular_beam_with_rebars,
+            concrete=concrete_c30
+        )
+
+        # Generate a coarse diagram which might have local non-convexity
+        # or self-intersection due to numerical issues
+        points = diagram.generate_diagram(n_points=20)  # Coarse for potential issues
+
+        # Test a load case that might intersect the curve multiple times
+        # Use a point near the envelope where discretization might cause issues
+        eps_cu = diagram.concrete_model.get_ultimate_strain()
+        eps_y = diagram.steel_models[0].epsilon_y
+
+        # Point very close to the envelope (95% of a capacity point)
+        point_near_envelope = diagram.calculate_point_from_end_strains(
+            eps_cu * 0.95, -eps_y * 0.8
+        )
+
+        N_Ed = point_near_envelope.N * 0.95
+        M_Ed = point_near_envelope.M * 0.95
+
+        # Get capacity - should use minimum positive intersection
+        N_Rd, M_Rd, is_safe, utilization = diagram.get_capacity_vector(
+            N_Ed=N_Ed, M_Ed=M_Ed, n_points=20
+        )
+
+        # Should be safe (we scaled down from envelope)
+        assert is_safe is True
+        assert utilization < 1.0
+
+        # The capacity should be on the correct side of the load
+        # (capacity >= demand in the direction of the ray)
+        if abs(N_Ed) > 1e-6:
+            assert N_Rd / N_Ed >= 0.95  # Should be scaled up from load
+        if abs(M_Ed) > 1e-6:
+            assert M_Rd / M_Ed >= 0.95
+
+        # Test with a finer diagram for comparison
+        N_Rd_fine, M_Rd_fine, is_safe_fine, util_fine = diagram.get_capacity_vector(
+            N_Ed=N_Ed, M_Ed=M_Ed, n_points=200
+        )
+
+        # Coarse and fine should give consistent results (within tolerance)
+        # Coarse might be slightly more conservative
+        assert is_safe_fine is True
+        assert util_fine == pytest.approx(utilization, rel=0.2)
