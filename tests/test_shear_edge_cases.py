@@ -26,7 +26,7 @@ def test_pure_axial_compression_face():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     # Test with rigorous mode
     print("\n=== Testing Pure Axial Load (Rigorous Mode) ===")
@@ -90,7 +90,7 @@ def test_very_small_moment():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     check = ShearCheck(
         section=section,
@@ -120,3 +120,4 @@ if __name__ == "__main__":
     test_pure_axial_compression_face()
     test_very_small_moment()
     print("\n=== All edge case tests passed! ===")
+

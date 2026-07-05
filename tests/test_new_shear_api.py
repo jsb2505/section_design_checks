@@ -22,7 +22,7 @@ def test_new_api_single_case():
 
     # Materials
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     # Create check with rigorous mode
     print("\n=== Creating ShearCheck (rigorous mode) ===")
@@ -69,7 +69,7 @@ def test_new_api_multiple_cases():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     # Create check
     print("\n=== Creating ShearCheck for batch checking ===")
@@ -109,7 +109,7 @@ def test_approximate_mode():
     section.add_rebar_group(group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     print("\n=== Creating ShearCheck (approximate mode) ===")
     check = ShearCheck(
@@ -135,3 +135,4 @@ if __name__ == "__main__":
     test_new_api_multiple_cases()
     test_approximate_mode()
     print("\n=== All tests passed! ===")
+

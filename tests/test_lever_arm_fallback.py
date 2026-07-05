@@ -36,7 +36,7 @@ def test_lever_arm_fallback_respects_compression_face():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     check = ShearCheck(
         section=section,
@@ -107,7 +107,7 @@ def test_pure_axial_fallback():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     check = ShearCheck(
         section=section,
@@ -143,3 +143,4 @@ if __name__ == "__main__":
     test_lever_arm_fallback_respects_compression_face()
     test_pure_axial_fallback()
     print("\n=== All lever arm fallback tests passed! ===")
+

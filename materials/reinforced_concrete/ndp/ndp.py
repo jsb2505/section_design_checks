@@ -75,6 +75,54 @@ def _max_link_spacing_eu_de(
 
     return min(0.25 * h, 200.0)
 
+
+def _max_leg_spacing_ec2(
+    *,
+    effective_depth: float,
+    section_depth: float,
+    f_ck: float,
+    V_Ed: float,
+    V_Rd_max: float,
+    V_Rd_c: float | None,
+    link_angle_degrees: float,
+) -> float:
+    """Base EC2 §9.2.2(8): s_t,max = min(600 mm, 0.75 d)."""
+    if effective_depth <= 0:
+        raise ValueError(f"effective_depth must be > 0, got {effective_depth}")
+    return min(600.0, 0.75 * float(effective_depth))
+
+
+def _max_leg_spacing_eu_de(
+    *,
+    effective_depth: float,
+    section_depth: float,
+    f_ck: float,
+    V_Ed: float,
+    V_Rd_max: float,
+    V_Rd_c: float | None,
+    link_angle_degrees: float,
+) -> float:
+    """
+    German NA maximum leg spacing limits (piecewise in V_Ed / V_Rd,max).
+
+    Bands:
+    - V_Ed <= 0.3*V_Rd,max
+    - 0.3*V_Rd,max < V_Ed <= V_Rd,max
+    """
+    h = float(section_depth)
+    if h <= 0:
+        raise ValueError(f"section_depth must be > 0, got {section_depth}")
+
+    ved = abs(float(V_Ed))
+    vrd_max = max(float(V_Rd_max), 1e-12)
+    ratio = ved / vrd_max
+
+    if ratio <= 0.3:
+        return min(h, 800.0) if float(f_ck) <= 50.0 else min(h, 600.0)
+
+    # Include ratio > 1.0 in the same branch (check fails anyway on utilization).
+    return min(h, 600.0) if float(f_ck) <= 50.0 else min(h, 400.0)
+
 # =============================================================================
 # METADATA: Descriptions and code references for all NDP parameters
 # =============================================================================
@@ -208,6 +256,10 @@ _NDP_METADATA = {
         "description": "Maximum allowable longitudinal spacing of shear links/stirrups",
         "ref": "9.2.2(6)",
     },
+    "max_leg_spacing": {
+        "description": "Maximum allowable transverse spacing between shear reinforcement legs",
+        "ref": "9.2.2(8)",
+    },
 }
 
 
@@ -260,6 +312,7 @@ EN1992_1_1_2004 = {
         "s_r_max_lim": None,  # No additional limit in base EC2
         "rho_w_min": lambda f_ck, f_yk, f_ctm: 0.08 * sqrt(f_ck) / f_yk,
         "max_link_spacing": _max_link_spacing_ec2,
+        "max_leg_spacing": _max_leg_spacing_ec2,
     },
 
     # -------------------------------------------------------------------------
@@ -315,6 +368,7 @@ EN1992_1_1_2004 = {
         "s_r_max_lim": lambda sigma_s, diameter, f_ct_eff: (sigma_s * diameter) / (3.6 * f_ct_eff),
         "rho_w_min": lambda f_ck, f_yk, f_ctm: 0.16 * f_ctm / f_yk,  # (9.5aDE)
         "max_link_spacing": _max_link_spacing_eu_de,
+        "max_leg_spacing": _max_leg_spacing_eu_de,
     },
 }
 
@@ -367,6 +421,7 @@ EN1992_2_2005 = {
         "k_4_crack": 0.425,
         "s_r_max_lim": None,  # No additional limit in base EC2
         "max_link_spacing": _max_link_spacing_ec2,
+        "max_leg_spacing": _max_leg_spacing_ec2,
     },
 
     # -------------------------------------------------------------------------
@@ -421,5 +476,6 @@ EN1992_2_2005 = {
         "k_4_crack": 1.0 / 3.6,
         "s_r_max_lim": lambda sigma_s, diameter, f_ct_eff: (sigma_s * diameter) / (3.6 * f_ct_eff),
         "max_link_spacing": _max_link_spacing_eu_de,
+        "max_leg_spacing": _max_leg_spacing_eu_de,
     },
 }

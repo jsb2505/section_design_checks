@@ -30,7 +30,7 @@ def test_solver_not_called_when_M_zero():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     check = ShearCheck(
         section=section,
@@ -99,7 +99,7 @@ def test_results_consistent_with_optimization():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     print("\n=== Test: Results Consistent with Optimization ===")
 
@@ -150,3 +150,4 @@ if __name__ == "__main__":
     test_solver_not_called_when_M_zero()
     test_results_consistent_with_optimization()
     print("\n=== All solver optimization tests passed! ===")
+

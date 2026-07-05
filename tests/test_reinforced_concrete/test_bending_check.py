@@ -141,7 +141,7 @@ class TestTensionShiftRuleSimplified:
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
 
         # Create shear reinforcement
-        shear_rebar = ShearRebar(grade="B500B", diameter=10, spacing=200, n_legs=2)
+        shear_rebar = ShearRebar(grade="B500B", diameter=10, link_spacing=200, n_legs=2)
 
         result = check.perform_check(
             M_Ed=100.0,
@@ -541,7 +541,7 @@ class TestCheckResultDetails:
     def test_all_details_present_with_tension_shift(self, test_beam, concrete_c30):
         """Test all expected details are present with tension shift enabled."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
-        shear_rebar = ShearRebar(grade="B500B", diameter=10, spacing=200, n_legs=2)
+        shear_rebar = ShearRebar(grade="B500B", diameter=10, link_spacing=200, n_legs=2)
 
         result = check.perform_check(
             M_Ed=100.0,
@@ -604,7 +604,7 @@ class TestTensionShiftResultDataclass:
     def test_tension_shift_result_details_dict_enabled(self, test_beam, concrete_c30):
         """Test details when tension shift is enabled via diagram.apply_tension_shift."""
         check = BendingCheck(section=test_beam, concrete=concrete_c30)
-        shear_rebar = ShearRebar(grade="B500B", diameter=10, spacing=200, n_legs=2)
+        shear_rebar = ShearRebar(grade="B500B", diameter=10, link_spacing=200, n_legs=2)
 
         # Use the diagram's apply_tension_shift method
         shift_result = check._get_diagram().apply_tension_shift(
@@ -732,3 +732,4 @@ class TestMultipleLoadCases:
 
         # Diagram should be the same object (cached, inputs unchanged)
         assert check._diagram is diagram_ref
+

@@ -36,6 +36,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
 )
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     find_max_allowable_link_spacing,
+    find_max_allowable_leg_spacing,
     find_cot_theta_for_V_Ed_fromV_Rd_max,
     find_cot_theta_for_V_Ed_from_V_Rd_s,
     find_alpha_cw,
@@ -79,7 +80,7 @@ class CircularSectionCheck(BaseModel):
             Links are assumed to be on the outer layer.
             If no shear reinforcement, cover is not used.
         shear_reinforcement: Shear links/spirals (optional)
-        is_spiral: If True, ShearRebar.spacing is treated as spiral pitch for λ2
+        is_spiral: If True, ShearRebar.link_spacing is treated as spiral pitch for λ2
         apply_k_f: If True, multiply γ_c by k_f for cast-in-place piles (EC2 §2.4.2.5)
 
     Example:
@@ -89,7 +90,7 @@ class CircularSectionCheck(BaseModel):
         >>> section = create_circular_section(diameter=600)
         >>> # ... add perimeter reinforcement ...
         >>> concrete = ConcreteMaterial(grade="C30/37")
-        >>> links = ShearRebar(diameter=12, spacing=200, n_legs=2, grade="B500B")
+        >>> links = ShearRebar(diameter=12, link_spacing=200, n_legs=2, grade="B500B")
         >>>
         >>> check = CircularSectionCheck(
         ...     section=section, concrete=concrete, diameter=600,
@@ -141,7 +142,7 @@ class CircularSectionCheck(BaseModel):
     is_spiral: bool = Field(
         default=False,
         description=(
-            "If True, treat ShearRebar.spacing as the spiral pitch for λ2 "
+            "If True, treat ShearRebar.link_spacing as the spiral pitch for λ2 "
             "calculation. When False (default), λ2 = 1.0 (closed links)."
         ),
     )
@@ -289,8 +290,8 @@ class CircularSectionCheck(BaseModel):
         if self.shear_reinforcement is not None:
             if self.shear_reinforcement.diameter <= 0:
                 raise ValueError("ShearRebar.diameter must be > 0")
-            if self.shear_reinforcement.spacing <= 0:
-                raise ValueError("ShearRebar.spacing must be > 0")
+            if self.shear_reinforcement.link_spacing <= 0:
+                raise ValueError("ShearRebar.link_spacing must be > 0")
 
             r_sv = self.diameter / 2 - self.cover - self.shear_reinforcement.diameter / 2
             if self.r_sv_override is None and r_sv <= 0:
@@ -477,7 +478,7 @@ class CircularSectionCheck(BaseModel):
         For closed links (is_spiral=False), returns 1.0.
         For spiral links, accounts for the helix angle reduction:
             λ2 = 1 / √((p / (2π·r_sv))² + 1)
-        where p = spiral pitch (= ShearRebar.spacing).
+        where p = spiral pitch (= ShearRebar.link_spacing).
 
         Returns:
             λ2 efficiency factor (0 to 1).
@@ -485,7 +486,7 @@ class CircularSectionCheck(BaseModel):
         if not self.is_spiral or self.shear_reinforcement is None:
             return 1.0
 
-        p = self.shear_reinforcement.spacing
+        p = self.shear_reinforcement.link_spacing
         r_sv = self.r_sv
         if r_sv <= 0:
             return 1.0
@@ -850,8 +851,10 @@ class CircularSectionCheck(BaseModel):
             f_ck=f_ck,
             gamma_c=self._concrete_uls.gamma_c,
         )
-        spacing_max_allowable: Optional[float] = None
-        spacing_satisfied: Optional[bool] = None
+        link_spacing_max_allowable: Optional[float] = None
+        link_spacing_satisfied: Optional[bool] = None
+        leg_spacing_max_allowable: Optional[float] = None
+        leg_spacing_satisfied: Optional[bool] = None
 
         used_note_2 = False
         if cot_theta_override is not None:
@@ -906,7 +909,7 @@ class CircularSectionCheck(BaseModel):
                 ForceUnit.N,
             )
 
-        spacing_max_allowable = find_max_allowable_link_spacing(
+        link_spacing_max_allowable = find_max_allowable_link_spacing(
             effective_depth=d,
             section_depth=self.diameter,
             f_ck=f_ck,
@@ -915,13 +918,31 @@ class CircularSectionCheck(BaseModel):
             V_Rd_c=V_Rd_c_for_spacing,
             link_angle_degrees=self.shear_reinforcement.angle,
         )
-        spacing_satisfied = self.shear_reinforcement.spacing <= spacing_max_allowable + 1e-9
-        if not spacing_satisfied and not suppress_warnings:
+        link_spacing_satisfied = self.shear_reinforcement.link_spacing <= link_spacing_max_allowable + 1e-9
+        if not link_spacing_satisfied and not suppress_warnings:
             warnings.warn(
                 "Provided shear link spacing exceeds the maximum allowable spacing: "
-                f"s={self.shear_reinforcement.spacing:.1f} mm > s_max={spacing_max_allowable:.1f} mm.",
+                f"s={self.shear_reinforcement.link_spacing:.1f} mm > s_max={link_spacing_max_allowable:.1f} mm.",
                 stacklevel=2,
             )
+
+        if self.shear_reinforcement.leg_spacing is not None:
+            leg_spacing_max_allowable = find_max_allowable_leg_spacing(
+                effective_depth=d,
+                section_depth=self.diameter,
+                f_ck=f_ck,
+                V_Ed=V_Ed,
+                V_Rd_max=V_Rd_max,
+                V_Rd_c=V_Rd_c_for_spacing,
+                link_angle_degrees=self.shear_reinforcement.angle,
+            )
+            leg_spacing_satisfied = self.shear_reinforcement.leg_spacing <= leg_spacing_max_allowable + 1e-9
+            if not leg_spacing_satisfied and not suppress_warnings:
+                warnings.warn(
+                    "Provided shear leg spacing exceeds the maximum allowable spacing: "
+                    f"s_t={self.shear_reinforcement.leg_spacing:.1f} mm > s_t,max={leg_spacing_max_allowable:.1f} mm.",
+                    stacklevel=2,
+                )
 
         # Governing capacity
         V_Rd = min(V_Rd_s, V_Rd_max)
@@ -947,9 +968,12 @@ class CircularSectionCheck(BaseModel):
                 f_ywd=f_ywd, used_note_2=used_note_2,
                 cot_theta_from_v_rd_s=use_v_rd_s_for_cot_theta,
                 lambda_1=lambda_1, lambda_2=lambda_2, z_0=z_0,
-                spacing_satisfied=spacing_satisfied,
-                spacing_provided=self.shear_reinforcement.spacing,
-                spacing_max_allowable=spacing_max_allowable,
+                link_spacing_satisfied=link_spacing_satisfied,
+                link_spacing_provided=self.shear_reinforcement.link_spacing,
+                link_spacing_max_allowable=link_spacing_max_allowable,
+                leg_spacing_satisfied=leg_spacing_satisfied,
+                leg_spacing_provided=self.shear_reinforcement.leg_spacing,
+                leg_spacing_max_allowable=leg_spacing_max_allowable,
             ),
         )
 
@@ -1198,9 +1222,12 @@ class CircularSectionCheck(BaseModel):
         lambda_1: Optional[float] = None,
         lambda_2: Optional[float] = None,
         z_0: Optional[float] = None,
-        spacing_satisfied: Optional[bool] = None,
-        spacing_provided: Optional[float] = None,
-        spacing_max_allowable: Optional[float] = None,
+        link_spacing_satisfied: Optional[bool] = None,
+        link_spacing_provided: Optional[float] = None,
+        link_spacing_max_allowable: Optional[float] = None,
+        leg_spacing_satisfied: Optional[bool] = None,
+        leg_spacing_provided: Optional[float] = None,
+        leg_spacing_max_allowable: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Assemble details dict for shear check results.
 
@@ -1232,9 +1259,12 @@ class CircularSectionCheck(BaseModel):
             "f_ywd": f_ywd,
             "used_note_2": used_note_2,
             "cot_theta_from_v_rd_s": cot_theta_from_v_rd_s,
-            "spacing_satisfied": spacing_satisfied,
-            "spacing_provided": spacing_provided,
-            "spacing_max_allowable": spacing_max_allowable,
+            "link_spacing_satisfied": link_spacing_satisfied,
+            "link_spacing_provided": link_spacing_provided,
+            "link_spacing_max_allowable": link_spacing_max_allowable,
+            "leg_spacing_satisfied": leg_spacing_satisfied,
+            "leg_spacing_provided": leg_spacing_provided,
+            "leg_spacing_max_allowable": leg_spacing_max_allowable,
         }
         # Circular-specific fields
         details["is_cracked"] = is_cracked
@@ -1251,3 +1281,4 @@ class CircularSectionCheck(BaseModel):
         if z_0 is not None:
             details["z_0"] = z_0
         return details
+

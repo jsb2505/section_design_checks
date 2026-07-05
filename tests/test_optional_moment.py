@@ -26,7 +26,7 @@ def test_optional_M_Ed():
     section.add_rebar_group(group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     print("\n=== Test 1: M_Ed can be omitted ===")
     check = ShearCheck(
@@ -68,7 +68,7 @@ def test_approximate_mode_compression_face():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     check = ShearCheck(
         section=section,
@@ -136,7 +136,7 @@ def test_rigorous_mode_with_optional_M():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     print("\n=== Test 3: Rigorous mode with optional M_Ed ===")
     check = ShearCheck(
@@ -174,7 +174,7 @@ def test_simple_use_case():
     section.add_rebar_group(group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     # Approximate mode (fast, simple)
     check = ShearCheck(
@@ -201,3 +201,4 @@ if __name__ == "__main__":
     test_rigorous_mode_with_optional_M()
     test_simple_use_case()
     print("\n=== All optional M_Ed tests passed! ===")
+

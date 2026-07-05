@@ -46,7 +46,7 @@ def shear_links():
     return ShearRebar(
         diameter=10,
         grade="B500B",
-        spacing=200,
+        link_spacing=200,
         n_legs=2,
         angle=90.0,
     )
@@ -70,3 +70,4 @@ def rectangular_beam_with_rebars(rectangular_beam, rebar_20):
     )
     rectangular_beam.add_rebar_group(bottom_layer)
     return rectangular_beam
+

@@ -109,7 +109,8 @@ class TestShearRebar:
     def test_create_shear_rebar(self, shear_links):
         """Test creating shear reinforcement."""
         assert shear_links.diameter == 10
-        assert shear_links.spacing == 200
+        assert shear_links.link_spacing == 200
+        assert shear_links.leg_spacing is None
         assert shear_links.n_legs == 2
         assert shear_links.angle == 90.0
 
@@ -143,7 +144,7 @@ class TestShearRebar:
         links = ShearRebar(
             diameter=10,
             grade="B500B",
-            spacing=200,
+            link_spacing=200,
             n_legs=2,
             angle=45.0,
         )
@@ -157,7 +158,7 @@ class TestShearRebar:
             ShearRebar(
                 diameter=10,
                 grade="B500B",
-                spacing=-100,
+                link_spacing=-100,
                 n_legs=2,
             )
 
@@ -167,8 +168,19 @@ class TestShearRebar:
             ShearRebar(
                 diameter=10,
                 grade="B500B",
-                spacing=200,
+                link_spacing=200,
                 n_legs=0,
+            )
+
+    def test_leg_spacing_validation(self):
+        """Test that leg_spacing, when provided, must be positive."""
+        with pytest.raises(ValidationError):
+            ShearRebar(
+                diameter=10,
+                grade="B500B",
+                link_spacing=200,
+                leg_spacing=-20,
+                n_legs=2,
             )
 
     def test_angle_validation_too_small(self):
@@ -177,7 +189,7 @@ class TestShearRebar:
             ShearRebar(
                 diameter=10,
                 grade="B500B",
-                spacing=200,
+                link_spacing=200,
                 n_legs=2,
                 angle=30.0,
             )
@@ -188,7 +200,7 @@ class TestShearRebar:
             ShearRebar(
                 diameter=10,
                 grade="B500B",
-                spacing=200,
+                link_spacing=200,
                 n_legs=2,
                 angle=120.0,
             )
@@ -201,7 +213,7 @@ class TestShearRebar:
 
     def test_max_link_spacing_inclined(self):
         """Test EC2 §9.2.2(6) for inclined links: s_l,max = 0.75d(1+cot α)."""
-        links = ShearRebar(diameter=10, grade="B500B", spacing=200, n_legs=2, angle=45.0)
+        links = ShearRebar(diameter=10, grade="B500B", link_spacing=200, n_legs=2, angle=45.0)
         d = 500.0
         # cot(45)=1 => 0.75 d (1+1) = 1.5 d
         assert links.max_link_spacing(d) == pytest.approx(1.5 * d, rel=1e-12)
@@ -261,3 +273,4 @@ class TestRebarInstantiation:
         for d in diameters:
             bar = Rebar(diameter=d)
             assert bar.diameter == d
+

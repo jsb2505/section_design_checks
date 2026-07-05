@@ -88,15 +88,15 @@ def main():
     # Shear reinforcement: φ10 links @ 200mm spacing, 2 legs
     shear_links = ShearRebar(
         diameter=10,
-        spacing=200,
+        link_spacing=200,
         n_legs=2,
         grade="B500B",
     )
 
-    print(f"Shear reinforcement: φ{shear_links.diameter} @ {shear_links.spacing}mm")
+    print(f"Shear reinforcement: φ{shear_links.diameter} @ {shear_links.link_spacing}mm")
     print(f"  Number of legs: {shear_links.n_legs}")
     print(f"  Total A_sw = {shear_links.area:.0f} mm²")
-    print(f"  A_sw/s = {shear_links.area/shear_links.spacing:.2f} mm²/mm")
+    print(f"  A_sw/s = {shear_links.area/shear_links.link_spacing:.2f} mm²/mm")
     print()
 
     # ========================================================================
@@ -263,3 +263,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

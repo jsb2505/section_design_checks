@@ -40,7 +40,7 @@ def test_lever_arm_capping_warning():
     ]))
 
     concrete = ConcreteMaterial(grade='C30/37')
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade='B500B')
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade='B500B')
 
     # Test case 1: With capping enabled (should warn if z > 0.9d)
     print("Test 1: cap_lever_arm=True (default)")
@@ -139,3 +139,4 @@ def test_lever_arm_capping_warning():
 
 if __name__ == "__main__":
     test_lever_arm_capping_warning()
+

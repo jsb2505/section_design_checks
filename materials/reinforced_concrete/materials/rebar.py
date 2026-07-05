@@ -3,7 +3,7 @@ Rebar (reinforcing bar) with geometry and material properties.
 """
 
 import warnings
-from typing import Final
+from typing import Final, Optional
 from math import pi, sin, radians
 from pydantic import Field, computed_field, field_validator
 from materials.reinforced_concrete.materials.reinforcing_steel import ReinforcingSteel
@@ -68,7 +68,16 @@ class Rebar(ReinforcingSteel):
 class ShearRebar(Rebar):
     """Shear reinforcement (links/stirrups) with spacing and leg configuration."""
 
-    spacing: float = Field(..., description="Link spacing along member axis (or pitch if spiral) (mm)", gt=0)
+    link_spacing: float = Field(
+        ...,
+        description="Longitudinal link spacing along member axis (or pitch if spiral) (mm)",
+        gt=0,
+    )
+    leg_spacing: Optional[float] = Field(
+        default=None,
+        description="Transverse spacing between shear legs across section width (mm)",
+        gt=0,
+    )
     n_legs: int = Field(default=2, description="Number of link legs crossing the shear plane", ge=1)
     angle: float = Field(default=90.0, description="Angle of links to member axis (degrees)", ge=45.0, le=90.0)
 
@@ -82,7 +91,7 @@ class ShearRebar(Rebar):
     @property
     def area_per_unit_length(self) -> float:
         """A_sw / s (mm²/mm)."""
-        return self.total_area_per_spacing / self.spacing
+        return self.total_area_per_spacing / self.link_spacing
 
     @computed_field
     @property
@@ -92,7 +101,7 @@ class ShearRebar(Rebar):
         Divide by b_w to get full EC2 ρ_w.
         """
         angle_rad = radians(self.angle)
-        return self.total_area_per_spacing / (self.spacing * sin(angle_rad))
+        return self.total_area_per_spacing / (self.link_spacing * sin(angle_rad))
 
 
     #------------------------
@@ -104,7 +113,7 @@ class ShearRebar(Rebar):
         EC2 §9.2.2(6): s_l,max = 0.75 d (1 + cot α).
 
         Note:
-            This is an NDP. This function is teh base EC2 version.
+            This is an NDP. This function is the base EC2 version.
         """
         if effective_depth <= 0:
             raise ValueError("effective_depth must be > 0")
@@ -113,18 +122,21 @@ class ShearRebar(Rebar):
             cot_alpha = 0.0
         else:
             cot_alpha = cot(radians(self.angle))
-
         return 0.75 * effective_depth * (1.0 + cot_alpha)
 
     def max_leg_spacing(self, effective_depth: float) -> float:
-        """EC2 §9.2.2(8): s_t,max = min(600 mm, 0.75 d)."""
+        """
+        EC2 §9.2.2(8): s_t,max = min(600 mm, 0.75 d).
+        
+        Note:
+            This is an NDP. This function is the base EC2 version.
+        """
         if effective_depth <= 0:
             raise ValueError("effective_depth must be > 0")
-        # TODO this is an NDP. Germans differ
         return min(600.0, 0.75 * effective_depth)
 
     def __str__(self) -> str:
         return (
-            f"ϕ{self.diameter} {self.grade} links @ {self.spacing}mm c/c, "
+            f"ϕ{self.diameter} {self.grade} links @ {self.link_spacing}mm c/c, "
             f"{self.n_legs} legs, {self.angle}°"
         )

@@ -36,7 +36,7 @@ def test_mn_interaction_overrides_moment_sign():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     print("\n=== Test: Large N_Ed + Small Hogging M_Ed ===")
 
@@ -109,7 +109,7 @@ def test_approximate_vs_simple_sign_check():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     check = ShearCheck(
         section=section,
@@ -170,7 +170,7 @@ def test_lever_arm_difference():
     section.add_rebar_group(top_group)
 
     concrete = ConcreteMaterial(grade="C30/37")
-    shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+    shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
     print("\n=== Test: Lever Arm Difference Between Modes ===")
 
@@ -228,3 +228,4 @@ if __name__ == "__main__":
     test_approximate_vs_simple_sign_check()
     test_lever_arm_difference()
     print("\n=== All M-N interaction tests passed! ===")
+

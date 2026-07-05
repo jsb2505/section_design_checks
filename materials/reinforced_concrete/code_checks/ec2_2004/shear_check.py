@@ -27,6 +27,7 @@ from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     calculate_section_breadth,
     find_max_allowable_link_spacing,
+    find_max_allowable_leg_spacing,
     find_cot_theta_for_V_Ed_fromV_Rd_max,
     find_cot_theta_for_V_Ed_from_V_Rd_s,
     find_alpha_cw,
@@ -110,7 +111,7 @@ class ShearCheck(BaseCodeCheck):
         >>> # ... add tension reinforcement ...
         >>>
         >>> concrete = ConcreteMaterial(grade="C30/37")
-        >>> shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+        >>> shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
         >>>
         >>> # Create check once (diagram created on init if use_rigorous=True)
         >>> check = ShearCheck(
@@ -1063,8 +1064,10 @@ class ShearCheck(BaseCodeCheck):
         z_mech: Optional[float] = None
         K: Optional[float] = None
         used_note_2: bool = False
-        spacing_max_allowable: Optional[float] = None
-        spacing_satisfied: Optional[bool] = None
+        link_spacing_max_allowable: Optional[float] = None
+        link_spacing_satisfied: Optional[bool] = None
+        leg_spacing_max_allowable: Optional[float] = None
+        leg_spacing_satisfied: Optional[bool] = None
 
         # Compute capacities (use z_ec2 for design checks per EC2)
 
@@ -1176,10 +1179,10 @@ class ShearCheck(BaseCodeCheck):
             # Calculate V_Rd_s with appropriate f_ywd (reduced if Note 2 is used)
             V_Rd_s = self.find_V_Rd_s(cot_theta, z_ec2, use_note_2=used_note_2)
 
-            # Maximum allowable link spacing (NDP-dependent, e.g. EU_DE piecewise rule)
+            # Maximum allowable longitudinal link spacing (NDP-dependent)
             _, min_y, _, max_y = self.section.get_bounding_box()
             section_depth = max_y - min_y
-            spacing_max_allowable = find_max_allowable_link_spacing(
+            link_spacing_max_allowable = find_max_allowable_link_spacing(
                 effective_depth=d,
                 section_depth=section_depth,
                 f_ck=self.concrete.f_ck,
@@ -1188,13 +1191,32 @@ class ShearCheck(BaseCodeCheck):
                 V_Rd_c=V_Rd_c,
                 link_angle_degrees=reinforcement.angle,
             )
-            spacing_satisfied = reinforcement.spacing <= spacing_max_allowable + 1e-9
-            if not spacing_satisfied and not suppress_warnings:
+            link_spacing_satisfied = reinforcement.link_spacing <= link_spacing_max_allowable + 1e-9
+            if not link_spacing_satisfied and not suppress_warnings:
                 warnings.warn(
                     "Provided shear link spacing exceeds the maximum allowable spacing: "
-                    f"s={reinforcement.spacing:.1f} mm > s_max={spacing_max_allowable:.1f} mm.",
+                    f"s={reinforcement.link_spacing:.1f} mm > s_max={link_spacing_max_allowable:.1f} mm.",
                     stacklevel=2,
                 )
+
+            # Maximum allowable transverse leg spacing (only when provided by user)
+            if reinforcement.leg_spacing is not None:
+                leg_spacing_max_allowable = find_max_allowable_leg_spacing(
+                    effective_depth=d,
+                    section_depth=section_depth,
+                    f_ck=self.concrete.f_ck,
+                    V_Ed=V_Ed,
+                    V_Rd_max=V_Rd_max,
+                    V_Rd_c=V_Rd_c,
+                    link_angle_degrees=reinforcement.angle,
+                )
+                leg_spacing_satisfied = reinforcement.leg_spacing <= leg_spacing_max_allowable + 1e-9
+                if not leg_spacing_satisfied and not suppress_warnings:
+                    warnings.warn(
+                        "Provided shear leg spacing exceeds the maximum allowable spacing: "
+                        f"s_t={reinforcement.leg_spacing:.1f} mm > s_t,max={leg_spacing_max_allowable:.1f} mm.",
+                        stacklevel=2,
+                    )
 
         # TODO would an else work here? why is reinforcement variable used in some places and
         # self.shear_reinforcement used elsewhere when they are the same thing?
@@ -1289,9 +1311,14 @@ class ShearCheck(BaseCodeCheck):
             ),
             "used_note_2": used_note_2 if reinforcement else None,
             "cot_theta_from_v_rd_s": use_v_rd_s_for_cot_theta if reinforcement else None,
-            "spacing_satisfied": spacing_satisfied if reinforcement else None,
-            "spacing_provided": reinforcement.spacing if reinforcement else None,
-            "spacing_max_allowable": spacing_max_allowable if reinforcement else None,
+            "link_spacing_satisfied": link_spacing_satisfied if reinforcement else None,
+            "link_spacing_provided": reinforcement.link_spacing if reinforcement else None,
+            "link_spacing_max_allowable": link_spacing_max_allowable if reinforcement else None,
+            "leg_spacing_satisfied": leg_spacing_satisfied if reinforcement else None,
+            "leg_spacing_provided": (
+                reinforcement.leg_spacing if reinforcement and reinforcement.leg_spacing is not None else None
+            ),
+            "leg_spacing_max_allowable": leg_spacing_max_allowable if reinforcement else None,
             # ShearCheck-specific
             "rho_l": rho_l,
             "z_mode": "rigorous" if self.use_rigorous else "approximate",
@@ -1395,3 +1422,4 @@ class ShearCheck(BaseCodeCheck):
         rho_w_min = find_minimum_ratio_of_shear_reinforcement(self.concrete.f_ck, f_yk, self.concrete.f_ctm)
         reinforcement_angle_rads = radians(link_angle_deg)
         return rho_w_min * self.breadth * sin(reinforcement_angle_rads)
+

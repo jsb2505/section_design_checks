@@ -109,7 +109,7 @@ class TestShearCheckAccidental:
         """Test that shear reinforcement also uses accidental strength."""
         section = create_test_section()
         concrete = ConcreteMaterial(grade="C30/37")
-        shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+        shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
         check_design = ShearCheck(
             section=section,
@@ -150,7 +150,7 @@ class TestShearCheckAccidental:
         """Test that V_Rd_max also uses accidental f_cd."""
         section = create_test_section()
         concrete = ConcreteMaterial(grade="C30/37")
-        shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+        shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
         check_design = ShearCheck(
             section=section,
@@ -231,7 +231,7 @@ class TestShearCheckAccidental:
         """Test that required shear reinforcement calculation uses accidental strength."""
         section = create_test_section()
         concrete = ConcreteMaterial(grade="C30/37")
-        shear_rebar = ShearRebar(diameter=10, spacing=200, n_legs=2, grade="B500B")
+        shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
 
         V_Ed = 200  # kN (requires shear reinforcement)
         M_Ed, N_Ed = 50.0, 100.0  # Typical load case
@@ -326,7 +326,7 @@ class TestShearSpacingNDP:
     def test_eu_de_spacing_exceedance_warns_and_sets_flag(self):
         section = create_test_section()
         concrete = ConcreteMaterial(grade="C30/37")
-        shear_rebar = ShearRebar(diameter=10, spacing=350, n_legs=2, grade="B500B")
+        shear_rebar = ShearRebar(diameter=10, link_spacing=350, n_legs=2, grade="B500B")
         check = ShearCheck(
             section=section,
             concrete=concrete,
@@ -343,15 +343,15 @@ class TestShearSpacingNDP:
         finally:
             set_ndp_context(code=old_code, country=old_country)
 
-        assert result.details["spacing_satisfied"] is False
-        assert result.details["spacing_provided"] == pytest.approx(350.0)
-        assert result.details["spacing_max_allowable"] is not None
-        assert result.details["spacing_provided"] > result.details["spacing_max_allowable"]
+        assert result.details["link_spacing_satisfied"] is False
+        assert result.details["link_spacing_provided"] == pytest.approx(350.0)
+        assert result.details["link_spacing_max_allowable"] is not None
+        assert result.details["link_spacing_provided"] > result.details["link_spacing_max_allowable"]
 
     def test_eu_de_spacing_exceedance_can_suppress_warning(self):
         section = create_test_section()
         concrete = ConcreteMaterial(grade="C30/37")
-        shear_rebar = ShearRebar(diameter=10, spacing=350, n_legs=2, grade="B500B")
+        shear_rebar = ShearRebar(diameter=10, link_spacing=350, n_legs=2, grade="B500B")
         check = ShearCheck(
             section=section,
             concrete=concrete,
@@ -370,4 +370,64 @@ class TestShearSpacingNDP:
             set_ndp_context(code=old_code, country=old_country)
 
         assert len(caught) == 0
-        assert result.details["spacing_satisfied"] is False
+        assert result.details["link_spacing_satisfied"] is False
+
+    def test_leg_spacing_check_runs_only_when_leg_spacing_is_provided(self):
+        section = create_test_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        shear_rebar = ShearRebar(diameter=10, link_spacing=200, n_legs=2, grade="B500B")
+        check = ShearCheck(
+            section=section,
+            concrete=concrete,
+            shear_reinforcement=shear_rebar,
+            use_increased_nu_1=False,
+        )
+        load_case = ShearLoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
+
+        old_code, old_country = get_ndp_context()
+        try:
+            set_ndp_context(country=CountryCode.EU_DE)
+            result = check.perform_check(load_case=load_case, suppress_warnings=True)
+        finally:
+            set_ndp_context(code=old_code, country=old_country)
+
+        assert result.details["leg_spacing_satisfied"] is None
+        assert result.details["leg_spacing_provided"] is None
+        assert result.details["leg_spacing_max_allowable"] is None
+
+    def test_eu_de_leg_spacing_exceedance_warns_and_can_be_suppressed(self):
+        section = create_test_section()
+        concrete = ConcreteMaterial(grade="C30/37")
+        shear_rebar = ShearRebar(
+            diameter=10,
+            link_spacing=200,
+            leg_spacing=550,
+            n_legs=2,
+            grade="B500B",
+        )
+        check = ShearCheck(
+            section=section,
+            concrete=concrete,
+            shear_reinforcement=shear_rebar,
+            use_increased_nu_1=False,
+        )
+        load_case = ShearLoadCase(V_Ed=250, M_Ed=50, N_Ed=100)
+
+        old_code, old_country = get_ndp_context()
+        try:
+            set_ndp_context(country=CountryCode.EU_DE)
+            with pytest.warns(UserWarning, match="leg spacing"):
+                result_warn = check.perform_check(load_case=load_case)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                result_suppressed = check.perform_check(load_case=load_case, suppress_warnings=True)
+        finally:
+            set_ndp_context(code=old_code, country=old_country)
+
+        assert len(caught) == 0
+        assert result_warn.details["leg_spacing_satisfied"] is False
+        assert result_warn.details["leg_spacing_provided"] == pytest.approx(550.0)
+        assert result_warn.details["leg_spacing_max_allowable"] is not None
+        assert result_warn.details["leg_spacing_provided"] > result_warn.details["leg_spacing_max_allowable"]
+        assert result_suppressed.details["leg_spacing_satisfied"] is False
+

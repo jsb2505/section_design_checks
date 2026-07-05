@@ -122,7 +122,7 @@ def calculate_tension_shift(
 
         >>> # With shear reinforcement
         >>> from materials.reinforced_concrete.materials import ShearRebar, Rebar
-        >>> links = ShearRebar(rebar=Rebar(diameter=10), spacing=150, n_legs=2)
+        >>> links = ShearRebar(rebar=Rebar(diameter=10), link_spacing=150, n_legs=2)
         >>> result = calculate_tension_shift(
         ...     M_Ed=100.0, V_Ed=150.0, z=450.0, d=500.0,
         ...     b_w=300.0, f_cd=20.0, f_ck=30.0,
@@ -330,6 +330,47 @@ def find_max_allowable_link_spacing(
         link_angle_degrees=float(link_angle_degrees),
     )
     return float(s_l_max)
+
+
+def find_max_allowable_leg_spacing(
+    *,
+    effective_depth: float,
+    section_depth: float,
+    f_ck: float,
+    V_Ed: float,
+    V_Rd_max: float,
+    V_Rd_c: Optional[float],
+    link_angle_degrees: float = 90.0,
+) -> float:
+    """
+    Find maximum allowable transverse spacing between shear reinforcement legs.
+
+    This delegates to NDP key ``max_leg_spacing`` so country-specific rules
+    can differ strongly from base EC2 while keeping call sites uniform.
+
+    Args:
+        effective_depth: Effective depth d in mm
+        section_depth: Section overall depth h in mm
+        f_ck: Characteristic concrete strength in MPa
+        V_Ed: Design shear force in kN
+        V_Rd_max: Compression strut resistance in kN
+        V_Rd_c: Concrete shear resistance in kN (for note-based rules, optional)
+        link_angle_degrees: Shear reinforcement angle α in degrees
+
+    Returns:
+        Maximum allowable transverse leg spacing s_t,max in mm
+    """
+    spacing_fn = get_ndp_callable("max_leg_spacing")
+    s_t_max = spacing_fn(
+        effective_depth=float(effective_depth),
+        section_depth=float(section_depth),
+        f_ck=float(f_ck),
+        V_Ed=float(V_Ed),
+        V_Rd_max=float(V_Rd_max),
+        V_Rd_c=None if V_Rd_c is None else float(V_Rd_c),
+        link_angle_degrees=float(link_angle_degrees),
+    )
+    return float(s_t_max)
 
 
 def find_cot_theta_for_V_Ed_fromV_Rd_max(
@@ -725,3 +766,4 @@ def find_minimum_ratio_of_shear_reinforcement(f_ck: float, f_yk: float, f_ctm: f
     '''
     rho_w_min_fn = get_ndp_callable("rho_w_min")
     return rho_w_min_fn(f_ck, f_yk, f_ctm)
+
