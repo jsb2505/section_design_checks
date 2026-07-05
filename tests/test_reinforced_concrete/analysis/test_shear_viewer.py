@@ -165,8 +165,26 @@ class TestShearViewer:
 
         assert isinstance(fig, _FakeFigure)
         trace_types = [t[0]["type"] for t in fig.traces]
-        assert trace_types.count("Scatter") >= 8
+        assert trace_types.count("Scatter") >= 6
+        trace_names = [t[0].get("name") for t in fig.traces if t[0]["type"] == "Scatter"]
+        assert "V_Rd,max design" in trace_names
+        assert "V_Rd,s design" in trace_names
+        assert "V_Rd,s = V_Rd,max" in trace_names
         assert fig.shown is False
+
+    def test_plot_cot_theta_moment_shift_study_builds_traces(self, monkeypatch):
+        _install_fake_plotly(monkeypatch)
+        viewer = ShearViewer(_FakeCheck())
+
+        fig = viewer.plot_cot_theta_moment_shift_study(
+            load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            n_points=6,
+            show=False,
+        )
+
+        assert isinstance(fig, _FakeFigure)
+        trace_types = [t[0]["type"] for t in fig.traces]
+        assert trace_types.count("Scatter") >= 3
 
     def test_plot_link_angle_study_builds_traces(self, monkeypatch):
         _install_fake_plotly(monkeypatch)
@@ -180,7 +198,24 @@ class TestShearViewer:
 
         assert isinstance(fig, _FakeFigure)
         trace_types = [t[0]["type"] for t in fig.traces]
-        assert trace_types.count("Scatter") >= 6
+        assert trace_types.count("Scatter") >= 4
+        trace_names = [t[0].get("name") for t in fig.traces if t[0]["type"] == "Scatter"]
+        assert "V_Rd,s(alpha)" in trace_names
+        assert "V_Rd,max(alpha)" in trace_names
+
+    def test_plot_link_angle_moment_shift_study_builds_traces(self, monkeypatch):
+        _install_fake_plotly(monkeypatch)
+        viewer = ShearViewer(_FakeCheck())
+
+        fig = viewer.plot_link_angle_moment_shift_study(
+            load_case={"V_Ed": 150.0, "M_Ed": 10.0, "N_Ed": 50.0},
+            n_points=6,
+            show=False,
+        )
+
+        assert isinstance(fig, _FakeFigure)
+        trace_types = [t[0]["type"] for t in fig.traces]
+        assert trace_types.count("Scatter") >= 3
 
     def test_plot_cot_theta_link_angle_heatmap_has_heatmap_and_contour(self, monkeypatch):
         _install_fake_plotly(monkeypatch)

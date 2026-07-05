@@ -33,9 +33,11 @@ Comprehensive tutorial covering all M-N interaction diagram functions:
 Demonstrates the new ShearCheck visualization wrappers:
 
 1. `plot_cot_theta_study`
-2. `plot_link_angle_study`
-3. `plot_cot_theta_link_angle_heatmap`
-4. `plot_axial_cot_theta_contour`
+2. `plot_cot_theta_moment_shift_study`
+3. `plot_link_angle_study`
+4. `plot_link_angle_moment_shift_study`
+5. `plot_cot_theta_link_angle_heatmap`
+6. `plot_axial_cot_theta_contour`
 
 Includes a complete section/material setup and an example load case.
 

@@ -960,8 +960,14 @@ class TestPlotWrappers:
             def plot_cot_theta_study(self, *, load_case, **kwargs):
                 return ("cot_theta", load_case, kwargs)
 
+            def plot_cot_theta_moment_shift_study(self, *, load_case, **kwargs):
+                return ("cot_theta_moment_shift", load_case, kwargs)
+
             def plot_link_angle_study(self, *, load_case, **kwargs):
                 return ("link_angle", load_case, kwargs)
+
+            def plot_link_angle_moment_shift_study(self, *, load_case, **kwargs):
+                return ("link_angle_moment_shift", load_case, kwargs)
 
             def plot_cot_theta_link_angle_heatmap(self, *, load_case, **kwargs):
                 return ("heatmap", load_case, kwargs)
@@ -979,11 +985,15 @@ class TestPlotWrappers:
         load_case = ShearLoadCase(V_Ed=100.0, M_Ed=20.0, N_Ed=30.0)
 
         out1 = check.plot_cot_theta_study(load_case=load_case, show=False)
-        out2 = check.plot_link_angle_study(load_case=load_case, show=False)
-        out3 = check.plot_cot_theta_link_angle_heatmap(load_case=load_case, show=False)
-        out4 = check.plot_axial_cot_theta_contour(load_case=load_case, N_min=-100.0, N_max=100.0, show=False)
+        out2 = check.plot_cot_theta_moment_shift_study(load_case=load_case, show=False)
+        out3 = check.plot_link_angle_study(load_case=load_case, show=False)
+        out4 = check.plot_link_angle_moment_shift_study(load_case=load_case, show=False)
+        out5 = check.plot_cot_theta_link_angle_heatmap(load_case=load_case, show=False)
+        out6 = check.plot_axial_cot_theta_contour(load_case=load_case, N_min=-100.0, N_max=100.0, show=False)
 
         assert out1[0] == "cot_theta"
-        assert out2[0] == "link_angle"
-        assert out3[0] == "heatmap"
-        assert out4[0] == "axial"
+        assert out2[0] == "cot_theta_moment_shift"
+        assert out3[0] == "link_angle"
+        assert out4[0] == "link_angle_moment_shift"
+        assert out5[0] == "heatmap"
+        assert out6[0] == "axial"

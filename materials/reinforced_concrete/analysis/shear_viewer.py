@@ -1,4 +1,4 @@
-"""
+﻿"""
 Shear visualization helpers for EC2 shear checks.
 
 Provides plotting routines for comparative studies of:
@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from math import radians, sin
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING, Union
+from typing import Any, Dict, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 
 import numpy as np
 
@@ -47,6 +47,34 @@ class _StudyContext:
     V_Rd_c_uncracked: float
     cot_min: float
     cot_max: float
+
+
+@dataclass(frozen=True)
+class _CotThetaStudySeries:
+    """Computed series used by cot(theta)-based plotting methods."""
+
+    context: _StudyContext
+    cot_vals: np.ndarray
+    V_Rd_s_vals: list[float]
+    V_Rd_max_theta_vals: list[float]
+    util_vals: list[float]
+    M_add_vals: list[float]
+    V_Rd_s_design: float
+    V_Rd_max_design: float
+    cot_intersection: Optional[float]
+
+
+@dataclass(frozen=True)
+class _LinkAngleStudySeries:
+    """Computed series used by link-angle plotting methods."""
+
+    context: _StudyContext
+    cot_theta: float
+    angle_vals: np.ndarray
+    V_Rd_s_vals: list[float]
+    V_Rd_max_vals: list[float]
+    util_vals: list[float]
+    M_add_vals: list[float]
 
 
 def _as_load_case(load_case: Union[ShearLoadCase, Dict[str, Any]]) -> ShearLoadCase:
@@ -194,32 +222,43 @@ class ShearViewer:
         V_Rd_max = to_kn(V_Rd_max_N, ForceUnit.N)
         return V_Rd_s, V_Rd_max
 
-    def plot_cot_theta_study(
+    @staticmethod
+    def _find_curve_intersection_x(
+        x_vals: np.ndarray,
+        y_a_vals: Sequence[float],
+        y_b_vals: Sequence[float],
+    ) -> Optional[float]:
+        """Return first x-position where two sampled curves intersect."""
+        diff = np.asarray(y_a_vals, dtype=float) - np.asarray(y_b_vals, dtype=float)
+        if diff.size < 2:
+            return None
+
+        for i in range(diff.size - 1):
+            d0 = float(diff[i])
+            d1 = float(diff[i + 1])
+            x0 = float(x_vals[i])
+            x1 = float(x_vals[i + 1])
+
+            if np.isclose(d0, 0.0):
+                return x0
+            if np.isclose(d1, 0.0):
+                return x1
+            if d0 * d1 < 0.0:
+                return x0 - d0 * (x1 - x0) / (d1 - d0)
+
+        return None
+
+    def _compute_cot_theta_study_series(
         self,
         *,
         load_case: Union[ShearLoadCase, Dict[str, Any]],
-        n_points: int = 60,
-        cot_theta_min: Optional[float] = None,
-        cot_theta_max: Optional[float] = None,
-        use_uncracked_V_Rd_c: bool = False,
-        use_note_2: bool = False,
-        save_path: Optional[Union[str, Path]] = None,
-        show: bool = True,
-        title: Optional[str] = None,
-        width: int = 1000,
-        height: int = 820,
-    ) -> Any:
-        """
-        Plot cot(theta) sweep with capacities, utilization, and tension-shift effect.
-        """
-        self._require_shear_reinforcement()
-
-        try:
-            import plotly.graph_objects as go
-            from plotly.subplots import make_subplots
-        except ImportError as e:
-            raise ImportError("Plotly is required for plotting. Install with: pip install plotly") from e
-
+        n_points: int,
+        cot_theta_min: Optional[float],
+        cot_theta_max: Optional[float],
+        use_uncracked_V_Rd_c: bool,
+        use_note_2: bool,
+    ) -> _CotThetaStudySeries:
+        """Compute reusable cot(theta) sweep values for plotting."""
         case = _as_load_case(load_case)
         context = self._build_context(load_case=case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
 
@@ -232,7 +271,6 @@ class ShearViewer:
 
         V_Rd_s_vals: list[float] = []
         V_Rd_max_theta_vals: list[float] = []
-        V_Rd_vals: list[float] = []
         util_vals: list[float] = []
         M_add_vals: list[float] = []
 
@@ -240,6 +278,11 @@ class ShearViewer:
             context.cot_min,
             context.z,
             context.sigma_cp,
+            use_note_2=use_note_2,
+        )
+        V_Rd_s_design = self.check.find_V_Rd_s(
+            context.cot_max,
+            context.z,
             use_note_2=use_note_2,
         )
 
@@ -275,21 +318,66 @@ class ShearViewer:
 
             V_Rd_s_vals.append(V_Rd_s)
             V_Rd_max_theta_vals.append(V_Rd_max_theta)
-            V_Rd_vals.append(V_Rd)
             util_vals.append(util)
             M_add_vals.append(shift.M_add)
 
-        fig = make_subplots(
-            rows=2,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.08,
-            subplot_titles=(
-                "Shear Capacities vs cot(theta)",
-                "Utilization and Tension-Shift Moment Add-on",
-            ),
-            specs=[[{}], [{"secondary_y": True}]],
+        cot_intersection = self._find_curve_intersection_x(cot_vals, V_Rd_s_vals, V_Rd_max_theta_vals)
+        return _CotThetaStudySeries(
+            context=context,
+            cot_vals=cot_vals,
+            V_Rd_s_vals=V_Rd_s_vals,
+            V_Rd_max_theta_vals=V_Rd_max_theta_vals,
+            util_vals=util_vals,
+            M_add_vals=M_add_vals,
+            V_Rd_s_design=V_Rd_s_design,
+            V_Rd_max_design=V_Rd_max_design,
+            cot_intersection=cot_intersection,
         )
+
+    def plot_cot_theta_study(
+        self,
+        *,
+        load_case: Union[ShearLoadCase, Dict[str, Any]],
+        n_points: int = 60,
+        cot_theta_min: Optional[float] = None,
+        cot_theta_max: Optional[float] = None,
+        use_uncracked_V_Rd_c: bool = False,
+        use_note_2: bool = False,
+        save_path: Optional[Union[str, Path]] = None,
+        show: bool = True,
+        title: Optional[str] = None,
+        width: int = 1000,
+        height: int = 560,
+    ) -> Any:
+        """
+        Plot cot(theta) sweep for shear capacities only.
+
+        Includes:
+        - V_Ed and V_Rd,c reference lines
+        - V_Rd,s(cot(theta)) and V_Rd,max(cot(theta))
+        - V_Rd,max design line at cot(theta)=cot_min
+        - V_Rd,s design line at cot(theta)=cot_max
+        - Vertical crossover marker where V_Rd,s and V_Rd,max intersect
+        """
+        self._require_shear_reinforcement()
+
+        try:
+            import plotly.graph_objects as go
+        except ImportError as e:
+            raise ImportError("Plotly is required for plotting. Install with: pip install plotly") from e
+
+        series = self._compute_cot_theta_study_series(
+            load_case=load_case,
+            n_points=n_points,
+            cot_theta_min=cot_theta_min,
+            cot_theta_max=cot_theta_max,
+            use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
+            use_note_2=use_note_2,
+        )
+        context = series.context
+        cot_vals = series.cot_vals
+
+        fig = go.Figure()
 
         fig.add_trace(
             go.Scatter(
@@ -300,8 +388,6 @@ class ShearViewer:
                 line=dict(color="black", dash="dash"),
                 hovertemplate="cot(theta): %{x:.3f}<br>V_Ed: %{y:.1f} kN<extra></extra>",
             ),
-            row=1,
-            col=1,
         )
         fig.add_trace(
             go.Scatter(
@@ -312,102 +398,78 @@ class ShearViewer:
                 line=dict(color="#8c564b", dash="dot"),
                 hovertemplate="cot(theta): %{x:.3f}<br>V_Rd,c: %{y:.1f} kN<extra></extra>",
             ),
-            row=1,
-            col=1,
         )
         fig.add_trace(
             go.Scatter(
                 x=cot_vals,
-                y=V_Rd_s_vals,
+                y=series.V_Rd_s_vals,
                 mode="lines",
                 name="V_Rd,s(cot)",
                 line=dict(color="#1f77b4"),
                 hovertemplate="cot(theta): %{x:.3f}<br>V_Rd,s: %{y:.1f} kN<extra></extra>",
             ),
-            row=1,
-            col=1,
         )
         fig.add_trace(
             go.Scatter(
                 x=cot_vals,
-                y=V_Rd_max_theta_vals,
+                y=series.V_Rd_max_theta_vals,
                 mode="lines",
                 name="V_Rd,max(cot)",
                 line=dict(color="#ff7f0e"),
                 hovertemplate="cot(theta): %{x:.3f}<br>V_Rd,max(cot): %{y:.1f} kN<extra></extra>",
             ),
-            row=1,
-            col=1,
         )
         fig.add_trace(
             go.Scatter(
                 x=cot_vals,
-                y=[V_Rd_max_design] * len(cot_vals),
+                y=[series.V_Rd_max_design] * len(cot_vals),
                 mode="lines",
                 name="V_Rd,max design",
                 line=dict(color="#ff7f0e", dash="dash"),
                 hovertemplate="cot(theta): %{x:.3f}<br>V_Rd,max design: %{y:.1f} kN<extra></extra>",
             ),
-            row=1,
-            col=1,
         )
         fig.add_trace(
             go.Scatter(
                 x=cot_vals,
-                y=V_Rd_vals,
+                y=[series.V_Rd_s_design] * len(cot_vals),
                 mode="lines",
-                name="Governing V_Rd",
-                line=dict(color="#2ca02c", width=3),
-                hovertemplate="cot(theta): %{x:.3f}<br>V_Rd: %{y:.1f} kN<extra></extra>",
+                name="V_Rd,s design",
+                line=dict(color="#1f77b4", dash="dash"),
+                hovertemplate="cot(theta): %{x:.3f}<br>V_Rd,s design: %{y:.1f} kN<extra></extra>",
             ),
-            row=1,
-            col=1,
         )
 
-        fig.add_trace(
-            go.Scatter(
-                x=cot_vals,
-                y=util_vals,
-                mode="lines",
-                name="Utilization",
-                line=dict(color="#d62728"),
-                hovertemplate="cot(theta): %{x:.3f}<br>Utilization: %{y:.3f}<extra></extra>",
-            ),
-            row=2,
-            col=1,
-            secondary_y=False,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=cot_vals,
-                y=M_add_vals,
-                mode="lines",
-                name="M_add (tension shift)",
-                line=dict(color="#9467bd"),
-                hovertemplate="cot(theta): %{x:.3f}<br>M_add: %{y:.2f} kN·m<extra></extra>",
-            ),
-            row=2,
-            col=1,
-            secondary_y=True,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=cot_vals,
-                y=[1.0] * len(cot_vals),
-                mode="lines",
-                name="Utilization = 1.0",
-                line=dict(color="black", dash="dot"),
-                hovertemplate="Utilization limit<extra></extra>",
-            ),
-            row=2,
-            col=1,
-            secondary_y=False,
-        )
+        if series.cot_intersection is not None:
+            y_min = min(
+                min(series.V_Rd_s_vals),
+                min(series.V_Rd_max_theta_vals),
+                context.V_Ed,
+                context.V_Rd_c,
+                series.V_Rd_max_design,
+                series.V_Rd_s_design,
+            )
+            y_max = max(
+                max(series.V_Rd_s_vals),
+                max(series.V_Rd_max_theta_vals),
+                context.V_Ed,
+                context.V_Rd_c,
+                series.V_Rd_max_design,
+                series.V_Rd_s_design,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[series.cot_intersection, series.cot_intersection],
+                    y=[y_min, y_max],
+                    mode="lines",
+                    name="V_Rd,s = V_Rd,max",
+                    line=dict(color="#2ca02c", dash="dash"),
+                    hovertemplate="cot(theta): %{x:.3f}<br>Crossover<extra></extra>",
+                ),
+            )
 
-        fig.update_xaxes(title_text="cot(theta)", row=2, col=1)
-        fig.update_yaxes(title_text="Capacity (kN)", row=1, col=1)
-        fig.update_yaxes(title_text="Utilization (-)", row=2, col=1, secondary_y=False)
-        fig.update_yaxes(title_text="M_add (kN·m)", row=2, col=1, secondary_y=True)
+        fig.update_xaxes(title_text="cot(theta)")
+        fig.update_yaxes(title_text="Capacity (kN)")
         fig.update_layout(
             title=title or "Shear Capacity Study vs cot(theta)",
             template="plotly_white",
@@ -426,24 +488,23 @@ class ShearViewer:
         _show_or_save(fig, save_path=save_path, show=show)
         return fig
 
-    def plot_link_angle_study(
+    def plot_cot_theta_moment_shift_study(
         self,
         *,
         load_case: Union[ShearLoadCase, Dict[str, Any]],
-        cot_theta: Optional[float] = None,
-        angle_min: float = 45.0,
-        angle_max: float = 90.0,
-        n_points: int = 46,
+        n_points: int = 60,
+        cot_theta_min: Optional[float] = None,
+        cot_theta_max: Optional[float] = None,
         use_uncracked_V_Rd_c: bool = False,
         use_note_2: bool = False,
         save_path: Optional[Union[str, Path]] = None,
         show: bool = True,
         title: Optional[str] = None,
         width: int = 1000,
-        height: int = 820,
+        height: int = 560,
     ) -> Any:
         """
-        Plot link-angle sweep with capacities, utilization, and tension-shift effect.
+        Plot cot(theta) sweep for utilization and tension-shift moment add-on.
         """
         self._require_shear_reinforcement()
 
@@ -453,6 +514,83 @@ class ShearViewer:
         except ImportError as e:
             raise ImportError("Plotly is required for plotting. Install with: pip install plotly") from e
 
+        series = self._compute_cot_theta_study_series(
+            load_case=load_case,
+            n_points=n_points,
+            cot_theta_min=cot_theta_min,
+            cot_theta_max=cot_theta_max,
+            use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
+            use_note_2=use_note_2,
+        )
+
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        fig.add_trace(
+            go.Scatter(
+                x=series.cot_vals,
+                y=series.util_vals,
+                mode="lines",
+                name="Utilization",
+                line=dict(color="#d62728"),
+                hovertemplate="cot(theta): %{x:.3f}<br>Utilization: %{y:.3f}<extra></extra>",
+            ),
+            secondary_y=False,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=series.cot_vals,
+                y=series.M_add_vals,
+                mode="lines",
+                name="M_add (tension shift)",
+                line=dict(color="#9467bd"),
+                hovertemplate="cot(theta): %{x:.3f}<br>M_add: %{y:.2f} kN*m<extra></extra>",
+            ),
+            secondary_y=True,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=series.cot_vals,
+                y=[1.0] * len(series.cot_vals),
+                mode="lines",
+                name="Utilization = 1.0",
+                line=dict(color="black", dash="dot"),
+                hovertemplate="Utilization limit<extra></extra>",
+            ),
+            secondary_y=False,
+        )
+
+        fig.update_xaxes(title_text="cot(theta)")
+        fig.update_yaxes(title_text="Utilization (-)", secondary_y=False)
+        fig.update_yaxes(title_text="M_add (kN*m)", secondary_y=True)
+        fig.update_layout(
+            title=title or "Tension-Shift Study vs cot(theta)",
+            template="plotly_white",
+            width=width,
+            height=height,
+            legend=dict(
+                orientation="v",
+                yanchor="top",
+                y=1.0,
+                xanchor="left",
+                x=1.02,
+            ),
+            margin=dict(r=240),
+        )
+
+        _show_or_save(fig, save_path=save_path, show=show)
+        return fig
+
+    def _compute_link_angle_study_series(
+        self,
+        *,
+        load_case: Union[ShearLoadCase, Dict[str, Any]],
+        cot_theta: Optional[float],
+        angle_min: float,
+        angle_max: float,
+        n_points: int,
+        use_uncracked_V_Rd_c: bool,
+        use_note_2: bool,
+    ) -> _LinkAngleStudySeries:
+        """Compute reusable link-angle sweep values for plotting."""
         case = _as_load_case(load_case)
         context = self._build_context(load_case=case, use_uncracked_V_Rd_c=use_uncracked_V_Rd_c)
 
@@ -466,7 +604,7 @@ class ShearViewer:
                 use_note_2=use_note_2,
                 use_v_rd_s_for_cot_theta=False,
             )
-        cot_theta = float(cot_theta)
+        cot_theta_val = float(cot_theta)
 
         a_min = min(float(angle_min), float(angle_max))
         a_max = max(float(angle_min), float(angle_max))
@@ -484,10 +622,11 @@ class ShearViewer:
             angle_f = float(angle)
             V_Rd_s, V_Rd_max = self._find_angle_sweep_capacity(
                 angle_deg=angle_f,
-                cot_theta=cot_theta,
+                cot_theta=cot_theta_val,
                 context=context,
                 use_note_2=use_note_2,
             )
+
             if context.V_Ed > context.V_Rd_c:
                 V_Rd = min(V_Rd_s, V_Rd_max)
             else:
@@ -501,7 +640,7 @@ class ShearViewer:
                 z=context.z,
                 d=context.d,
                 shear_reinforcement=angle_rebar,
-                cot_theta_override=cot_theta,
+                cot_theta_override=cot_theta_val,
             )
 
             V_Rd_s_vals.append(V_Rd_s)
@@ -509,112 +648,192 @@ class ShearViewer:
             util_vals.append(util)
             M_add_vals.append(shift.M_add)
 
-        fig = make_subplots(
-            rows=2,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.08,
-            subplot_titles=(
-                "Shear Capacities vs Link Angle",
-                "Utilization and Tension-Shift Moment Add-on",
-            ),
-            specs=[[{}], [{"secondary_y": True}]],
+        return _LinkAngleStudySeries(
+            context=context,
+            cot_theta=cot_theta_val,
+            angle_vals=angle_vals,
+            V_Rd_s_vals=V_Rd_s_vals,
+            V_Rd_max_vals=V_Rd_max_vals,
+            util_vals=util_vals,
+            M_add_vals=M_add_vals,
         )
 
+    def plot_link_angle_study(
+        self,
+        *,
+        load_case: Union[ShearLoadCase, Dict[str, Any]],
+        cot_theta: Optional[float] = None,
+        angle_min: float = 45.0,
+        angle_max: float = 90.0,
+        n_points: int = 46,
+        use_uncracked_V_Rd_c: bool = False,
+        use_note_2: bool = False,
+        save_path: Optional[Union[str, Path]] = None,
+        show: bool = True,
+        title: Optional[str] = None,
+        width: int = 1000,
+        height: int = 560,
+    ) -> Any:
+        """
+        Plot link-angle sweep for shear capacities only.
+        """
+        self._require_shear_reinforcement()
+
+        try:
+            import plotly.graph_objects as go
+        except ImportError as e:
+            raise ImportError("Plotly is required for plotting. Install with: pip install plotly") from e
+
+        series = self._compute_link_angle_study_series(
+            load_case=load_case,
+            cot_theta=cot_theta,
+            angle_min=angle_min,
+            angle_max=angle_max,
+            n_points=n_points,
+            use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
+            use_note_2=use_note_2,
+        )
+        context = series.context
+
+        fig = go.Figure()
         fig.add_trace(
             go.Scatter(
-                x=angle_vals,
-                y=[context.V_Ed] * len(angle_vals),
+                x=series.angle_vals,
+                y=[context.V_Ed] * len(series.angle_vals),
                 mode="lines",
                 name="V_Ed",
                 line=dict(color="black", dash="dash"),
                 hovertemplate="alpha: %{x:.1f}°<br>V_Ed: %{y:.1f} kN<extra></extra>",
             ),
-            row=1,
-            col=1,
         )
         fig.add_trace(
             go.Scatter(
-                x=angle_vals,
-                y=[context.V_Rd_c] * len(angle_vals),
+                x=series.angle_vals,
+                y=[context.V_Rd_c] * len(series.angle_vals),
                 mode="lines",
                 name="V_Rd,c",
                 line=dict(color="#8c564b", dash="dot"),
                 hovertemplate="alpha: %{x:.1f}°<br>V_Rd,c: %{y:.1f} kN<extra></extra>",
             ),
-            row=1,
-            col=1,
         )
         fig.add_trace(
             go.Scatter(
-                x=angle_vals,
-                y=V_Rd_s_vals,
+                x=series.angle_vals,
+                y=series.V_Rd_s_vals,
                 mode="lines",
                 name="V_Rd,s(alpha)",
                 line=dict(color="#1f77b4"),
                 hovertemplate="alpha: %{x:.1f}°<br>V_Rd,s: %{y:.1f} kN<extra></extra>",
             ),
-            row=1,
-            col=1,
         )
         fig.add_trace(
             go.Scatter(
-                x=angle_vals,
-                y=V_Rd_max_vals,
+                x=series.angle_vals,
+                y=series.V_Rd_max_vals,
                 mode="lines",
                 name="V_Rd,max(alpha)",
                 line=dict(color="#ff7f0e"),
                 hovertemplate="alpha: %{x:.1f}°<br>V_Rd,max: %{y:.1f} kN<extra></extra>",
             ),
-            row=1,
-            col=1,
         )
+
+        fig.update_xaxes(title_text="Link angle alpha (degrees)")
+        fig.update_yaxes(title_text="Capacity (kN)")
+        fig.update_layout(
+            title=title or f"Shear Capacity Study vs Link Angle (cot(theta)={series.cot_theta:.2f})",
+            template="plotly_white",
+            width=width,
+            height=height,
+            legend=dict(
+                orientation="v",
+                yanchor="top",
+                y=1.0,
+                xanchor="left",
+                x=1.02,
+            ),
+            margin=dict(r=240),
+        )
+
+        _show_or_save(fig, save_path=save_path, show=show)
+        return fig
+
+    def plot_link_angle_moment_shift_study(
+        self,
+        *,
+        load_case: Union[ShearLoadCase, Dict[str, Any]],
+        cot_theta: Optional[float] = None,
+        angle_min: float = 45.0,
+        angle_max: float = 90.0,
+        n_points: int = 46,
+        use_uncracked_V_Rd_c: bool = False,
+        use_note_2: bool = False,
+        save_path: Optional[Union[str, Path]] = None,
+        show: bool = True,
+        title: Optional[str] = None,
+        width: int = 1000,
+        height: int = 560,
+    ) -> Any:
+        """
+        Plot link-angle sweep for utilization and tension-shift moment add-on.
+        """
+        self._require_shear_reinforcement()
+
+        try:
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+        except ImportError as e:
+            raise ImportError("Plotly is required for plotting. Install with: pip install plotly") from e
+
+        series = self._compute_link_angle_study_series(
+            load_case=load_case,
+            cot_theta=cot_theta,
+            angle_min=angle_min,
+            angle_max=angle_max,
+            n_points=n_points,
+            use_uncracked_V_Rd_c=use_uncracked_V_Rd_c,
+            use_note_2=use_note_2,
+        )
+
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
         fig.add_trace(
             go.Scatter(
-                x=angle_vals,
-                y=util_vals,
+                x=series.angle_vals,
+                y=series.util_vals,
                 mode="lines",
                 name="Utilization",
                 line=dict(color="#d62728"),
                 hovertemplate="alpha: %{x:.1f}°<br>Utilization: %{y:.3f}<extra></extra>",
             ),
-            row=2,
-            col=1,
             secondary_y=False,
         )
         fig.add_trace(
             go.Scatter(
-                x=angle_vals,
-                y=M_add_vals,
+                x=series.angle_vals,
+                y=series.M_add_vals,
                 mode="lines",
                 name="M_add (tension shift)",
                 line=dict(color="#9467bd"),
                 hovertemplate="alpha: %{x:.1f}°<br>M_add: %{y:.2f} kN·m<extra></extra>",
             ),
-            row=2,
-            col=1,
             secondary_y=True,
         )
         fig.add_trace(
             go.Scatter(
-                x=angle_vals,
-                y=[1.0] * len(angle_vals),
+                x=series.angle_vals,
+                y=[1.0] * len(series.angle_vals),
                 mode="lines",
                 name="Utilization = 1.0",
                 line=dict(color="black", dash="dot"),
                 hovertemplate="Utilization limit<extra></extra>",
             ),
-            row=2,
-            col=1,
             secondary_y=False,
         )
 
-        fig.update_xaxes(title_text="Link angle alpha (degrees)", row=2, col=1)
-        fig.update_yaxes(title_text="Capacity (kN)", row=1, col=1)
-        fig.update_yaxes(title_text="Utilization (-)", row=2, col=1, secondary_y=False)
-        fig.update_yaxes(title_text="M_add (kN·m)", row=2, col=1, secondary_y=True)
+        fig.update_xaxes(title_text="Link angle alpha (degrees)")
+        fig.update_yaxes(title_text="Utilization (-)", secondary_y=False)
+        fig.update_yaxes(title_text="M_add (kN·m)", secondary_y=True)
         fig.update_layout(
-            title=title or f"Shear Capacity Study vs Link Angle (cot(theta)={cot_theta:.2f})",
+            title=title or f"Tension-Shift Study vs Link Angle (cot(theta)={series.cot_theta:.2f})",
             template="plotly_white",
             width=width,
             height=height,

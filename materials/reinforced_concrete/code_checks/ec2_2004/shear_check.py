@@ -1435,13 +1435,28 @@ class ShearCheck(BaseCodeCheck):
         **kwargs,
     ) -> Any:
         """
-        Plot cot(theta) sweep with capacities, utilization, and tension-shift effect.
+        Plot cot(theta) sweep for shear capacities.
 
         Convenience wrapper around ``ShearViewer.plot_cot_theta_study``.
         See that method for full argument documentation.
         """
         from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
         return ShearViewer(self).plot_cot_theta_study(load_case=load_case, **kwargs)
+
+    def plot_cot_theta_moment_shift_study(
+        self,
+        *,
+        load_case: ShearLoadCase,
+        **kwargs,
+    ) -> Any:
+        """
+        Plot cot(theta) sweep for utilization and tension-shift moment add-on.
+
+        Convenience wrapper around ``ShearViewer.plot_cot_theta_moment_shift_study``.
+        See that method for full argument documentation.
+        """
+        from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
+        return ShearViewer(self).plot_cot_theta_moment_shift_study(load_case=load_case, **kwargs)
 
     def plot_link_angle_study(
         self,
@@ -1450,13 +1465,28 @@ class ShearCheck(BaseCodeCheck):
         **kwargs,
     ) -> Any:
         """
-        Plot link-angle sweep with capacities, utilization, and tension-shift effect.
+        Plot link-angle sweep for shear capacities.
 
         Convenience wrapper around ``ShearViewer.plot_link_angle_study``.
         See that method for full argument documentation.
         """
         from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
         return ShearViewer(self).plot_link_angle_study(load_case=load_case, **kwargs)
+
+    def plot_link_angle_moment_shift_study(
+        self,
+        *,
+        load_case: ShearLoadCase,
+        **kwargs,
+    ) -> Any:
+        """
+        Plot link-angle sweep for utilization and tension-shift moment add-on.
+
+        Convenience wrapper around ``ShearViewer.plot_link_angle_moment_shift_study``.
+        See that method for full argument documentation.
+        """
+        from materials.reinforced_concrete.analysis.shear_viewer import ShearViewer
+        return ShearViewer(self).plot_link_angle_moment_shift_study(load_case=load_case, **kwargs)
 
     def plot_cot_theta_link_angle_heatmap(
         self,
