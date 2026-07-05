@@ -241,10 +241,13 @@ class ShearCheck(BaseCodeCheck):
         """
         Effective depth from compression face.
 
-        Both modes use M-N strain solver to determine compression face when M_Ed or N_Ed provided.
-        This accounts for M-N interaction (e.g., large N_Ed can overpower small hogging moment).
+        Both modes use M-N strain solver to determine compression face when M_Ed is non-zero.
+        This accounts for M-N interaction (e.g., large N_Ed can affect strain distribution).
 
-        Fallback: If M_Ed and N_Ed both zero (or solver unavailable), assumes top compression.
+        Special cases:
+        - If M_Ed ≈ 0 (pure shear/axial): Returns min(d_top, d_bot) for conservatism
+          (smaller d = lower shear capacity, safer for cases with no clear compression face)
+        - If solver unavailable: Assumes top compression (legacy fallback)
 
         Args:
             M_Ed: Design moment in kN·m
@@ -259,10 +262,13 @@ class ShearCheck(BaseCodeCheck):
         if self._diagram is None:
             return self.section.get_effective_depth(compression_face="top")
 
-        # If M_Ed is negligible (pure shear or pure axial), use default (top compression)
-        # No need to solve - moment determines which face is compressed, not axial load
+        # If M_Ed is negligible (pure shear or pure axial), use conservative approach
+        # For shear checks, smaller d is more conservative (lower capacity)
         if abs(M_Ed) < 1e-6:
-            return self.section.get_effective_depth(compression_face="top")
+            # Use the smaller effective depth (more conservative for shear)
+            d_top = self.section.get_effective_depth(compression_face="top")
+            d_bot = self.section.get_effective_depth(compression_face="bottom")
+            return min(d_top, d_bot)
 
         # Use M-N solver to determine compression face (both modes)
         # Only needed when M_Ed is non-zero (accounts for M-N interaction)
@@ -376,14 +382,20 @@ class ShearCheck(BaseCodeCheck):
             ρ_l (dimensionless)
         """
         if not self.use_rigorous or self._diagram is None:
-            # Approximate: centroid-based
+            # Approximate mode: if we have strain information, use it to determine tension side
+            # This handles hogging/sagging and N-M interaction correctly
+            if eps_top is not None and eps_bottom is not None:
+                # Use strain-based approach (same as rigorous, just without diagram solver)
+                return self._compute_rho_l_from_strains(eps_top, eps_bottom, d)
+
+            # Fallback for truly approximate case (no strain info): centroid-based
+            # This assumes sagging (bottom in tension), which may be wrong for hogging
             centroid_y = self.section.get_centroid()[1]
 
-            # Assume bottom in tension
             A_sl = 0.0
             for group in self.section.rebar_groups:
                 for pos in group.positions:
-                    if pos.y < centroid_y:  # Below centroid = tension
+                    if pos.y < centroid_y:  # Below centroid = tension (sagging assumption)
                         A_sl += group.rebar.area
 
             if A_sl == 0:
@@ -470,33 +482,13 @@ class ShearCheck(BaseCodeCheck):
         if self._diagram is None:
             raise RuntimeError("_compute_lever_arm_from_strains called without diagram")
 
-        # Get fiber data (order: x, y, area, material_type, material_index)
-        _, y_coords, areas, mat_type, mat_idx = self._diagram.mesh.get_fiber_arrays()
+        # Use public interface to get fiber-level forces
+        # This avoids tight coupling to MNInteractionDiagram private internals
+        forces, y_coords, _ = self._diagram.get_fiber_forces_from_end_strains(eps_top, eps_bottom)
 
-        # Compute strains at all fibers
+        # Get section bounds for fallback centroids
         y_bot = float(self.section.outline.bounds[1])
         y_top = float(self.section.outline.bounds[3])
-        h = y_top - y_bot
-        strains = eps_bottom + (eps_top - eps_bottom) * (y_coords - y_bot) / h
-
-        # Compute stresses
-        stresses = np.zeros_like(strains)
-
-        # Concrete fibers
-        conc_mask = mat_type == "concrete"
-        if np.any(conc_mask):
-            stresses[conc_mask] = self._diagram._concrete_stress_with_options(strains[conc_mask])
-
-        # Steel fibers
-        steel_mask = mat_type == "steel"
-        if np.any(steel_mask):
-            for gi, sm in enumerate(self._diagram.steel_models):
-                m = (mat_idx == gi) & steel_mask
-                if np.any(m):
-                    stresses[m] = sm.get_stress_array(strains[m])
-
-        # Forces per fiber (compression positive)
-        forces = stresses * areas
 
         # Separate tension and compression
         tension_mask = forces < 0
@@ -718,6 +710,10 @@ class ShearCheck(BaseCodeCheck):
         warning_threshold: float,
     ) -> CheckResult:
         """Perform check for single load case (internal)."""
+        # Treat shear as magnitude (absolute value)
+        # Negative shear from FEA sign conventions should not give negative utilization
+        V_Ed = abs(V_Ed)
+
         # Validate and clamp cot_theta
         if cot_theta <= 0:
             raise ValueError(f"cot_theta must be > 0, got {cot_theta}")
@@ -840,6 +836,10 @@ class ShearCheck(BaseCodeCheck):
         Returns:
             Required A_sw/s in mm²/mm
         """
+        # Treat shear as magnitude (absolute value)
+        # Negative shear from FEA sign conventions should not give negative reinforcement
+        V_Ed = abs(V_Ed)
+
         d = self.find_effective_depth(M_Ed, N_Ed)
         sigma_cp = self.find_sigma_cp(N_Ed)
         rho_l = self.find_rho_l(M_Ed, N_Ed, d)

@@ -9,8 +9,9 @@ Key modelling choices / conventions
 Sign convention (global):
 - Axial force N > 0 => compression
 - Axial force N < 0 => tension
+- Strain: compression positive, tension negative (consistent with concrete convention)
 - Concrete constitutive models expect compression strain > 0 and return compression stress > 0
-- Steel constitutive models return stress with the same sign as strain (tension positive)
+- Steel constitutive models return stress with the same sign as strain (compression positive, tension negative)
 
 Strain compatibility:
 - Plane sections remain plane.
@@ -40,7 +41,7 @@ Notes on confinement:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import csv
 import json
@@ -239,6 +240,13 @@ class MNInteractionDiagram:
         if self.section_height <= 0:
             raise ValueError("Section height must be > 0")
 
+        # Cache fiber arrays for performance (avoid repeated allocation/copy in residual/Jacobian)
+        self._fiber_x, self._fiber_y, self._fiber_area, self._fiber_mat, self._fiber_mi = self.mesh.get_fiber_arrays()
+        self._fiber_mat = self._fiber_mat.astype("U8", copy=False)  # Ensure consistent dtype
+
+        # Cache section centroid (avoid repeated Shapely geometry access)
+        _, self._section_cy = self.section.get_centroid()
+
 
     # ----------------------------
     # Core mechanics
@@ -263,14 +271,16 @@ class MNInteractionDiagram:
                 N in kN (positive compression)
                 M in kN·m about the section centroid, using y-offset (single-axis)
         """
-        _, y, area, _, _ = self.mesh.get_fiber_arrays()
+        # Use cached fiber arrays for performance
+        y = self._fiber_y
+        area = self._fiber_area
 
         # Axial force: sum(σ * A) in N, convert to kN
         N = np.sum(stresses * area) / 1000.0
 
         # Moment about section centroid (single axis about y-offset)
         if use_section_centroid:
-            _, cy = self.section.get_centroid()
+            cy = self._section_cy  # Use cached centroid
         else:
             cy = float(np.sum(y * area) / np.sum(area))
 
@@ -371,7 +381,66 @@ class MNInteractionDiagram:
 
         return concrete_stresses
 
-    
+    def _concrete_tangent_modulus_with_options(
+        self,
+        concrete_strains: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        """
+        Compute concrete tangent modulus E_t = dσ/dε for given strains,
+        accounting for optional tension stiffening.
+
+        Note: Confined concrete tangent modulus NOT implemented - requires
+        complex Mander model derivative. See docs/ANALYTICAL_JACOBIAN_ENHANCEMENTS.md
+
+        Args:
+            concrete_strains: Strain array (compression positive)
+
+        Returns:
+            Tangent modulus array in MPa
+        """
+        # Base tangent modulus from constitutive model (parabola-rectangle)
+        E_t = self.concrete_model.get_tangent_modulus_array(concrete_strains)
+
+        # ------------------
+        # Tension stiffening tangent modulus (tension only)
+        # ------------------
+        # Overrides base model (which has E_t=0 in tension)
+        if self.tension_stiffening:
+            ten_mask = concrete_strains < 0.0
+            if np.any(ten_mask):
+                f_ctm = float(self.concrete.f_ctm)
+                E_cm = float(self.concrete.E_cm)
+                eps_cr = f_ctm / max(E_cm, 1e-9)
+
+                beta = 0.6  # short-term loading
+                eps_t = -concrete_strains[ten_mask]  # tension magnitude (positive)
+
+                # Piecewise tangent modulus:
+                # 1) Pre-cracking (ε ≤ ε_cr): σ = -E_cm * ε  →  E_t = E_cm
+                # 2) Post-cracking (ε > ε_cr): σ = -f_ctm * [1 - β*(ε - ε_cr)/(5*ε_cr)]
+                #    →  E_t = f_ctm * β / (5*ε_cr)  (linear decay slope)
+                # 3) After cutoff: σ = 0  →  E_t = 0
+
+                # Cutoff strain where tension contribution becomes zero
+                eps_cutoff = eps_cr * (1.0 + 5.0 / beta)
+
+                E_t_tension = np.where(
+                    eps_t <= eps_cr,
+                    E_cm,  # Pre-cracking: elastic, dσ/dε = E_cm > 0
+                    np.where(
+                        eps_t < eps_cutoff,
+                        -f_ctm * beta / (5.0 * eps_cr),  # Post-cracking: softening, dσ/dε < 0
+                        0.0,  # After cutoff: zero stiffness
+                    ),
+                )
+                E_t[ten_mask] = E_t_tension
+
+        # Note: Confined concrete tangent modulus would go here if implemented
+        # For now, confined concrete uses numerical Jacobian (see Jacobian selection logic)
+
+        return E_t
+
+
     def _strain_field_from_end_strains(
         self,
         eps_top: float,
@@ -384,7 +453,8 @@ class MNInteractionDiagram:
         eps_top: strain at y = section_top
         eps_bottom: strain at y = section_bottom
         """
-        _, y, _, _, _ = self.mesh.get_fiber_arrays()
+        # Use cached fiber y-coordinates
+        y = self._fiber_y
 
         y_top = float(self.section_top)
         y_bot = float(self.section_bottom)
@@ -410,9 +480,9 @@ class MNInteractionDiagram:
         - neutral_axis_depth and compression_from_bottom become *derived metadata* only.
         - This method is globally valid across sign changes (no branch switching).
         """
-        # Fiber arrays
-        _, y, _, material_type, material_index = self.mesh.get_fiber_arrays()
-        material_type = material_type.astype("U8", copy=False)
+        # Use cached fiber arrays for performance
+        material_type = self._fiber_mat  # Already converted to U8 in __init__
+        material_index = self._fiber_mi
 
         strains = self._strain_field_from_end_strains(eps_top=eps_top, eps_bottom=eps_bottom)
         stresses = np.zeros_like(strains)
@@ -480,6 +550,71 @@ class MNInteractionDiagram:
             max_concrete_strain=max_conc,
             max_steel_strain=max_steel,
         )
+
+
+    def get_fiber_forces_from_end_strains(
+        self,
+        eps_top: float,
+        eps_bottom: float,
+    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+        """
+        Compute fiber-level forces from strain profile (public helper for external tools).
+
+        This is a PUBLIC interface for computing detailed force distributions, intended
+        for use by code checks and other analyses that need fiber-level data without
+        accessing private internals.
+
+        Args:
+            eps_top: Strain at top fiber (compression positive)
+            eps_bottom: Strain at bottom fiber (compression positive)
+
+        Returns:
+            Tuple of (forces, y_coords, areas):
+                - forces: Force in each fiber (N), compression positive
+                - y_coords: Y-coordinate of each fiber (mm)
+                - areas: Area of each fiber (mm²)
+
+        Example:
+            >>> diagram = MNInteractionDiagram(section, concrete)
+            >>> eps_top, eps_bottom = diagram.find_strains_for_MN(M=50.0, N=100.0)
+            >>> forces, y_coords, areas = diagram.get_fiber_forces_from_end_strains(eps_top, eps_bottom)
+            >>> # Compute tension/compression centroids for lever arm
+            >>> tension_mask = forces < 0
+            >>> y_T = np.sum(-forces[tension_mask] * y_coords[tension_mask]) / np.sum(-forces[tension_mask])
+        """
+        # Use cached fiber arrays for performance
+        y = self._fiber_y
+        area = self._fiber_area
+        material_type = self._fiber_mat  # Already converted to U8 in __init__
+        material_index = self._fiber_mi
+
+        # Compute strains at all fibers
+        strains = self._strain_field_from_end_strains(eps_top=eps_top, eps_bottom=eps_bottom)
+
+        # Compute stresses
+        stresses = np.zeros_like(strains)
+
+        # Concrete fibers - use internal method that handles confinement/tension stiffening
+        conc_mask = material_type == "concrete"
+        if np.any(conc_mask):
+            stresses[conc_mask] = self._concrete_stress_with_options(strains[conc_mask])
+
+        # Steel fibers
+        steel_mask = material_type == "steel"
+        if np.any(steel_mask):
+            steel_strains = strains[steel_mask]
+            steel_indices = material_index[steel_mask]
+            steel_stresses = np.zeros_like(steel_strains)
+            for gi, sm in enumerate(self.steel_models):
+                m = steel_indices == gi
+                if np.any(m):
+                    steel_stresses[m] = sm.get_stress_array(steel_strains[m])
+            stresses[steel_mask] = steel_stresses
+
+        # Forces per fiber (compression positive): Force = stress × area
+        forces = stresses * area
+
+        return (forces, y, area)
 
 
     @staticmethod
@@ -560,8 +695,8 @@ class MNInteractionDiagram:
         idx = np.searchsorted(s, s_target, side="right") - 1
         idx = np.clip(idx, 0, len(pts) - 2)
 
-        # Interpolate by "walking" along segments (choose nearer endpoint object)
-        # NOTE: We keep actual InteractionPoint objects, so we pick the closer of the two endpoints.
+        # Interpolate (M, N) to create geometrically accurate points
+        # Metadata (neutral axis, etc.) comes from the nearest dense point for approximation
         out: List[InteractionPoint] = []
         for st, i in zip(s_target, idx):
             s0, s1 = s[i], s[i + 1]
@@ -570,9 +705,23 @@ class MNInteractionDiagram:
                 continue
             t = (st - s0) / (s1 - s0)
 
-            # pick closer endpoint to station to preserve metadata "reasonably"
-            # (if you want exact metadata, see note below)
-            out.append(pts[i] if t < 0.5 else pts[i + 1])
+            # Linearly interpolate M and N for geometric accuracy
+            M_interp = M[i] + t * (M[i + 1] - M[i])
+            N_interp = N[i] + t * (N[i + 1] - N[i])
+
+            # Use metadata from closer endpoint (neutral axis depth, etc.)
+            # This is an approximation, but sufficient for capacity checks
+            source_pt = pts[i] if t < 0.5 else pts[i + 1]
+
+            # Create new InteractionPoint with interpolated (M, N) but approximate metadata
+            out.append(InteractionPoint(
+                N=float(N_interp),
+                M=float(M_interp),
+                neutral_axis_depth=source_pt.neutral_axis_depth,
+                compression_from_bottom=source_pt.compression_from_bottom,
+                max_concrete_strain=source_pt.max_concrete_strain,
+                max_steel_strain=source_pt.max_steel_strain,
+            ))
 
         # Ensure closed explicitly (common expectation for your envelope)
         if (out[0].M != out[-1].M) or (out[0].N != out[-1].N):
@@ -752,27 +901,37 @@ class MNInteractionDiagram:
         lower_bounds = np.array([-eps_t, -eps_t])  # Maximum tension (negative)
         upper_bounds = np.array([+eps_cu, +eps_cu])  # Maximum compression (positive)
 
-        # Wrapper for analytical Jacobian computation
-        def analytical_jacobian(eps_pair: npt.NDArray) -> npt.NDArray:
-            """Compute analytical Jacobian at current strain pair."""
-            return self._compute_analytical_jacobian(eps_pair[0], eps_pair[1])
-
-        # Solve using least squares with analytical Jacobian
-        # Analytical Jacobian provides exact derivatives (unlike 2-point finite difference)
-        # and works with piecewise models (unlike complex-step differentiation).
-        # Expected performance: 5-10 iterations (vs 30-50 for 2-point), ~3-10x speedup
+        # Choose Jacobian method based on material model complexity
+        # CRITICAL: Analytical Jacobian requires tangent modulus matching forward model
         #
-        # PREVIOUS METHOD (2-point numerical Jacobian):
-        # To revert to 2-point, replace jac=analytical_jacobian with jac='2-point'
+        # Tension stiffening: NOW SUPPORTED via _concrete_tangent_modulus_with_options
+        # Confined concrete: NOT SUPPORTED - requires complex Mander derivative
+        #                    (see docs/ANALYTICAL_JACOBIAN_ENHANCEMENTS.md)
+        jac_method: Union[Callable[[npt.NDArray], npt.NDArray], str]
+        if self.confined_concrete:
+            # Use numerical Jacobian for confined concrete (Mander model derivative not implemented)
+            jac_method = '2-point'
+            max_iterations = 200  # May need more iterations with numerical gradients
+        else:
+            # Use analytical Jacobian for plain concrete + tension stiffening (3-10x faster)
+            def analytical_jacobian(eps_pair: npt.NDArray) -> npt.NDArray:
+                """Compute analytical Jacobian at current strain pair."""
+                return self._compute_analytical_jacobian(eps_pair[0], eps_pair[1])
+            jac_method = analytical_jacobian
+            max_iterations = 50  # Analytical Jacobian converges much faster
+
+        # Solve using least squares
+        # Analytical Jacobian: exact derivatives, 5-10 iterations typical
+        # Numerical Jacobian: finite difference, 30-50 iterations typical
         result = least_squares(
             residual,
             x0=np.array(initial_guess),
             bounds=(lower_bounds, upper_bounds),  # Prevent absurd strains
-            jac=analytical_jacobian,  # type: ignore[arg-type]  # Analytical Jacobian (exact derivatives, faster convergence)
+            jac=jac_method,  # type: ignore[arg-type]  # Analytical (plain) or numerical (confined/tension stiffening)
             ftol=tol,
             xtol=tol,
             gtol=tol,  # Gradient tolerance (helps convergence for awkward load points)
-            max_nfev=200,  # Safety buffer for complex sections/awkward load combos (analytical typically needs <50)
+            max_nfev=max_iterations,
         )
 
         if not result.success:
@@ -830,8 +989,11 @@ class MNInteractionDiagram:
             2×2 Jacobian matrix [[dN_deps_top, dN_deps_bottom],
                                  [dM_deps_top, dM_deps_bottom]]
         """
-        # Get fiber mesh
-        _, y_coords, areas, material_type, material_index = self.mesh.get_fiber_arrays()
+        # Use cached fiber arrays for performance
+        y_coords = self._fiber_y
+        areas = self._fiber_area
+        material_type = self._fiber_mat  # Already converted to U8 in __init__
+        material_index = self._fiber_mi
 
         y_top = float(self.section_top)
         y_bot = float(self.section_bottom)
@@ -843,10 +1005,10 @@ class MNInteractionDiagram:
         # Compute tangent modulus E_t = dσ/dε at each fiber
         E_t = np.zeros_like(strains)
 
-        # Concrete fibers
+        # Concrete fibers - use method with tension stiffening support
         conc_mask = material_type == "concrete"
         if np.any(conc_mask):
-            E_t[conc_mask] = self.concrete_model.get_tangent_modulus_array(strains[conc_mask])
+            E_t[conc_mask] = self._concrete_tangent_modulus_with_options(strains[conc_mask])
 
         # Steel fibers
         steel_mask = material_type == "steel"
@@ -872,9 +1034,8 @@ class MNInteractionDiagram:
         dN_deps_top = np.sum(dF_deps_top) / 1000.0
         dN_deps_bottom = np.sum(dF_deps_bottom) / 1000.0
 
-        # Jacobian for moment (moment arm from centroid, convert N·mm→kN·m)
-        _, cy = self.section.get_centroid()
-        y_offset = y_coords - cy
+        # Jacobian for moment (moment arm from cached centroid, convert N·mm→kN·m)
+        y_offset = y_coords - self._section_cy
 
         dM_deps_top = np.sum(dF_deps_top * y_offset) / 1_000_000.0
         dM_deps_bottom = np.sum(dF_deps_bottom * y_offset) / 1_000_000.0
@@ -930,6 +1091,11 @@ class MNInteractionDiagram:
                 return (+eps_cu * 0.8, +eps_cu * 0.8)
             elif M > 0:  # Compression + positive moment (sagging)
                 # Top more compressed, bottom less compressed or in tension
+                # TODO: Could be improved by checking eccentricity e = M/N vs h
+                # to determine if tension develops (e > h/6 typically indicates tension).
+                # However, changing this requires extensive testing to avoid wrong local minima.
+                # See docs/INITIAL_GUESS_HEURISTIC.md for details and attempted implementation.
+                # Current simple guess works reliably for most cases.
                 return (+eps_cu * 0.8, +eps_cu * 0.2)
             else:  # Compression + negative moment (hogging)
                 # Bottom more compressed, top less compressed or in tension
@@ -1039,13 +1205,35 @@ class MNInteractionDiagram:
         if pts[0] != pts[-1]:
             pts = pts + [pts[0]]
 
-        max_t = 0.0
+        # Find all ray-segment intersections
+        # NOTE: For a convex closed curve, there should be exactly ONE intersection
+        # If multiple intersections found, the curve may self-intersect (non-convex)
+        intersections = []
         for p1, p2 in zip(pts[:-1], pts[1:]):
             if p1 == p2:
                 continue
             t = _ray_segment_intersection_alpha(ray_dir, p1, p2, tol=1e-12)
             if t is not None:
-                max_t = max(max_t, t)
+                intersections.append(t)
+
+        if len(intersections) == 0:
+            return (None, None, False, float("inf"))
+
+        # Take maximum t (farthest intersection from origin)
+        # This is correct for convex curves; for self-intersecting curves, could be unconservative
+        max_t = max(intersections)
+
+        # Sanity check: warn if multiple intersections found (possible self-intersection)
+        if len(intersections) > 2:
+            # More than 2 intersections suggests self-intersection or numerical issues
+            # Note: exactly 2 intersections can occur for tangent rays (entry/exit at same point)
+            import warnings
+            warnings.warn(
+                f"Ray intersection found {len(intersections)} intersections (expected 1-2). "
+                f"Curve may self-intersect. Using max_t={max_t:.4f}. "
+                f"Consider increasing n_points or checking diagram quality.",
+                stacklevel=2
+            )
 
         if max_t <= 1e-12:
             return (None, None, False, float("inf"))
