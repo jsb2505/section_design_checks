@@ -186,6 +186,16 @@ class ShearCheck(BaseCodeCheck):
         ),
     )
 
+    breadth_override: Optional[float] = Field(
+        default=None,
+        description=(
+            "User-supplied web breadth b_w (mm). If provided, overrides the automatic "
+            "minimum-width calculation from section geometry. Useful for non-standard "
+            "sections or when the automatic slicing does not capture the intended width."
+        ),
+        gt=0,
+    )
+
 
     # ==================================
     # Material models for rigorous mode
@@ -248,9 +258,12 @@ class ShearCheck(BaseCodeCheck):
         """
         Minimum web breadth b_w for shear design (mm).
 
-        Per EC2 §6.2, b_w is the minimum width between tension and compression chords.
-        For rectangular sections this is the section width; for T-beams it's the web width.
+        If ``breadth_override`` is set, that value is used directly.
+        Otherwise, computed automatically per EC2 §6.2 as the minimum width
+        between tension and compression chords.
         """
+        if self.breadth_override is not None:
+            return self.breadth_override
         return calculate_section_breadth(self.section)
 
     @cached_property

@@ -2,6 +2,8 @@ from typing import TYPE_CHECKING, Any, Optional
 import numpy as np
 from shapely.geometry import Polygon
 
+from materials.core.units import StressUnit, from_mpa
+
 if TYPE_CHECKING:
     from materials.reinforced_concrete.geometry.section import RCSection
     from materials.reinforced_concrete.materials.concrete import ConcreteMaterial
@@ -93,7 +95,7 @@ class SectionViewer:
             E_cm = concrete.E_cm
             A_tr, cx_tr, cy_tr = self.section.get_transformed_centroid(E_cm=E_cm)
             I_tr_xx, I_tr_yy, I_tr_xy = self.section.get_transformed_second_moment_area(E_cm=E_cm)
-            E_cm_GPa = E_cm / 1000.0
+            E_cm_GPa = from_mpa(E_cm, StressUnit.GPA)
 
             # Store in a local dictionary or namedtuple to pass around
             transformed_data = {

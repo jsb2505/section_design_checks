@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from materials.reinforced_concrete.analysis import MNInteractionDiagram
+from materials.core.units import ForceUnit, MomentUnit, to_kn, to_knm
 
 
 # ------------------------------------------
@@ -75,7 +76,7 @@ class _StressStrainPlotState:
 class StressStrainViewer:
     def __init__(self, diagram: "MNInteractionDiagram") -> None:
         self.diagram = diagram
-
+ 
     def plot(
         self,
         M_Ed: float,
@@ -173,8 +174,8 @@ class StressStrainViewer:
         )
 
         # 5) Resultants (kN)
-        conc_forces_kN = forces_N[conc_mask] / 1000.0
-        steel_forces_kN = forces_N[steel_mask] / 1000.0
+        conc_forces_kN = to_kn(forces_N[conc_mask], ForceUnit.N)
+        steel_forces_kN = to_kn(forces_N[steel_mask], ForceUnit.N)
 
         F_c_comp = float(np.sum(conc_forces_kN[conc_forces_kN > 0.0])) if conc_forces_kN.size else 0.0
         F_c_tens = float(np.sum(conc_forces_kN[conc_forces_kN < 0.0])) if conc_forces_kN.size else 0.0
@@ -183,11 +184,11 @@ class StressStrainViewer:
 
         # 5b) Equilibrium check: compute achieved N and M from the strain state
         # This tells us if the solver hit bounds and couldn't find an exact solution
-        achieved_N_kN = float(np.sum(forces_N)) / 1000.0
+        achieved_N_kN = to_kn(float(np.sum(forces_N)), ForceUnit.N)
         # Moment about centroid (using section centroid y-coordinate)
         centroid_x, centroid_y = d.section.get_centroid()
         achieved_M_Nm = float(np.sum(forces_N * (y_coords - centroid_y)))
-        achieved_M_kNm = achieved_M_Nm / 1e6  # N·mm to kN·m
+        achieved_M_kNm = to_knm(achieved_M_Nm, MomentUnit.NMM)
 
         equilibrium_error_N = abs(achieved_N_kN - N_Ed)
         equilibrium_error_M = abs(achieved_M_kNm - M_Ed)
@@ -360,7 +361,7 @@ class StressStrainViewer:
             sx = s.x_mm[s.steel_mask].astype(float)
             sy = s.y_mm[s.steel_mask].astype(float)
             ss = s.stresses_MPa[s.steel_mask].astype(float)
-            sf = (s.forces_N[s.steel_mask] / 1000.0).astype(float)  # kN
+            sf = to_kn(s.forces_N[s.steel_mask], ForceUnit.N).astype(float)
             se = (s.strains[s.steel_mask] * 1000.0).astype(float)   # ‰
 
             s_color = np.where(ss < 0.0, "green", "darkorange")

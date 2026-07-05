@@ -23,6 +23,7 @@ from materials.reinforced_concrete.materials import ConcreteMaterial
 from materials.reinforced_concrete.analysis import create_interaction_diagram
 from materials.reinforced_concrete.analysis.interaction_diagram import MNInteractionDiagram
 from materials.reinforced_concrete.code_checks.ec2_2004 import flexure_utils
+from materials.core.units import MomentUnit, to_knm
 
 
 class LoadDuration(StrEnum):
@@ -284,8 +285,8 @@ class CrackingCheck(BaseCodeCheck):
 
         W_el = I_yy / y_tension if y_tension > 0 else I_yy / (self.height / 2)
 
-        # M_cr in kN·m (W_el in mm³, f_ctm_fl in MPa)
-        return f_ctm_fl * W_el / 1e6
+        # M_cr in kN·m (W_el in mm³, f_ctm_fl in MPa → result in N·mm)
+        return to_knm(f_ctm_fl * W_el, MomentUnit.NMM)
 
     # ===============================================
     # h_c,ef calculation (EC2 §7.3.2(3), Fig 7.1)

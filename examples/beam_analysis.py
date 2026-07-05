@@ -548,6 +548,7 @@ def apply_tension_shift_to_beam(
     diagram: "MNInteractionDiagram",
     N_Ed: float = 0.0,
     shear_reinforcement: "ShearRebar | None" = None,
+    cot_theta_override: "float | None" = None,
     iterate_z: bool = False,
     prefer_rigorous: bool = False,
     cap_to_09d: bool = True,
@@ -564,6 +565,9 @@ def apply_tension_shift_to_beam(
         diagram: MNInteractionDiagram instance for the section
         N_Ed: Axial force (kN), constant along beam (default 0.0)
         shear_reinforcement: ShearRebar instance, or None for no shear reinforcement
+        cot_theta_override: Optional user-supplied cot(θ) value. When provided with
+            shear_reinforcement, this value is used directly instead of calculating
+            cot(θ) from V_Ed and V_Rd,max. Must be in range [1.0, 2.5].
         iterate_z: If True, iterate to find z at each section (more accurate but slower)
         prefer_rigorous: If True, attempt to compute the rigorous centroid-based
             lever arm from strain analysis. If False (default), use the simplified
@@ -601,6 +605,7 @@ def apply_tension_shift_to_beam(
             N_Ed=N_Ed,
             M_cap=M_cap,
             shear_reinforcement=shear_reinforcement,
+            cot_theta_override=cot_theta_override,
             iterate_z=iterate_z,
             prefer_rigorous=prefer_rigorous,
             cap_to_09d=cap_to_09d,

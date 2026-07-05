@@ -12,6 +12,7 @@ from math import log
 from pydantic import Field, BeforeValidator, ConfigDict
 
 from materials.core.base_material import BaseMaterial
+from materials.core.units import StressUnit, to_mpa
 
 
 # Concrete grades according to EC2 Table 3.1 (single source of truth)
@@ -235,7 +236,7 @@ class ConcreteMaterial(BaseMaterial):
         """
         e_base_gpa = 22.0 * ((self.f_cm / 10.0) ** 0.3)
         factor = self.aggregate_type.e_cm_factor
-        return e_base_gpa * 1000.0 * factor
+        return to_mpa(e_base_gpa * factor, StressUnit.GPA)
 
     def get_elastic_modulus(self) -> float:
         """Implements BaseMaterial abstract method: return E_cm (MPa)."""

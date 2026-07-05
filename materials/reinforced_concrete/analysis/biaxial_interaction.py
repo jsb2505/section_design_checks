@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field, ConfigDict
 from scipy.optimize import brentq
 from scipy.spatial import ConvexHull
 
+from materials.core.units import ForceUnit, MomentUnit, to_kn, to_knm
+
 from materials.reinforced_concrete.geometry import RCSection, FibreMesh
 from materials.reinforced_concrete.constitutive import (
     create_concrete_stress_strain,
@@ -337,7 +339,7 @@ class BiaxialMNInteractionSurface:
                 stress_tension = self.steel_models[int(g_idx)].get_stress(-eps_ud)
                 n_steel_tension += stress_tension * np.sum(area[group_mask])
 
-            n_min = n_steel_tension / 1000.0  # Convert to kN
+            n_min = to_kn(n_steel_tension, ForceUnit.N)
 
         # 2. PURE COMPRESSION (N_max)
         # Uniform strain eps_c2 across entire section
@@ -347,7 +349,7 @@ class BiaxialMNInteractionSurface:
         conc_mask = (mat_type == 'concrete')
         if np.any(conc_mask):
             stress_c = self.concrete_model.get_stress(eps_cu2)
-            n_max += stress_c * np.sum(area[conc_mask]) / 1000.0
+            n_max += to_kn(stress_c * np.sum(area[conc_mask]), ForceUnit.N)
 
         # Steel contribution at eps_c2 compression
         if np.any(steel_mask):
@@ -359,7 +361,7 @@ class BiaxialMNInteractionSurface:
                 stress_comp = self.steel_models[int(g_idx)].get_stress(eps_cu2)
                 n_steel_compression += stress_comp * np.sum(area[group_mask])
 
-            n_max += n_steel_compression / 1000.0
+            n_max += to_kn(n_steel_compression, ForceUnit.N)
 
         return (n_min, n_max)
 
@@ -525,14 +527,14 @@ class BiaxialMNInteractionSurface:
 
         # Calculate forces
         # Axial force (N = sum(stress * A))
-        N = np.sum(stresses * area) / 1000.0  # kN
+        N = to_kn(np.sum(stresses * area), ForceUnit.N)
 
         # Moments about centroid (axis convention: x along member, My from z-forces, Mz from y-forces)
         # My (about y-axis): M = sum(stress * A * x_offset)
-        My = np.sum(stresses * area * x_rel) / 1e6  # kN·m
+        My = to_knm(np.sum(stresses * area * x_rel), MomentUnit.NMM)
 
         # Mz (about z-axis): M = sum(stress * A * y_offset)
-        Mz = np.sum(stresses * area * y_rel) / 1e6  # kN·m
+        Mz = to_knm(np.sum(stresses * area * y_rel), MomentUnit.NMM)
 
         # Track maximum strains
         max_conc_strain = np.max(np.abs(strains[concrete_mask])) if np.any(concrete_mask) else 0.0

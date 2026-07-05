@@ -10,6 +10,7 @@ from math import exp, sqrt
 from pydantic import BaseModel, Field, ConfigDict
 
 from .concrete import ConcreteMaterial
+from materials.core.units import LengthUnit, from_mm
 
 
 class CementClass(StrEnum):
@@ -142,7 +143,7 @@ class ConcreteAge(BaseModel):
 
         f_ctm,fl = f_ctm(t) · max(1.6 - h/1000, 1.0)
         """
-        h_m = section_height_mm / 1000.0
+        h_m = from_mm(section_height_mm, LengthUnit.M)
         return self.f_ctm_t * max(1.6 - h_m, 1.0)
 
     def __str__(self) -> str:

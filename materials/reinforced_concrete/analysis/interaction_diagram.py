@@ -63,6 +63,7 @@ from materials.reinforced_concrete.constitutive import (
 )
 from materials.reinforced_concrete.geometry import FibreMesh, RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial
+from materials.core.units import ForceUnit, MomentUnit, to_kn, to_knm
 
 
 # ------------------------
@@ -306,7 +307,7 @@ class MNInteractionDiagram:
         area = self._fibre_area
 
         # Axial force: sum(σ * A) in N, convert to kN
-        N = np.sum(stresses * area) / 1000.0
+        N = to_kn(np.sum(stresses * area), ForceUnit.N)
 
         # Moment about section centroid (single axis about y-offset)
         if use_section_centroid:
@@ -315,7 +316,7 @@ class MNInteractionDiagram:
             cy = float(np.sum(y * area) / np.sum(area))
 
         y_offset = y - cy
-        M = np.sum(stresses * area * y_offset) / 1_000_000.0  # N·mm -> kN·m
+        M = to_knm(np.sum(stresses * area * y_offset), MomentUnit.NMM)
 
         return (as_float(N), as_float(M))
 
@@ -1065,14 +1066,14 @@ class MNInteractionDiagram:
         dF_deps_bottom = E_t * areas * beta
 
         # Jacobian for axial force (sum contributions, convert N→kN)
-        dN_deps_top = np.sum(dF_deps_top) / 1000.0
-        dN_deps_bottom = np.sum(dF_deps_bottom) / 1000.0
+        dN_deps_top = to_kn(np.sum(dF_deps_top), ForceUnit.N)
+        dN_deps_bottom = to_kn(np.sum(dF_deps_bottom), ForceUnit.N)
 
         # Jacobian for moment (moment arm from cached centroid, convert N·mm→kN·m)
         y_offset = y_coords - self._section_cy
 
-        dM_deps_top = np.sum(dF_deps_top * y_offset) / 1_000_000.0
-        dM_deps_bottom = np.sum(dF_deps_bottom * y_offset) / 1_000_000.0
+        dM_deps_top = to_knm(np.sum(dF_deps_top * y_offset), MomentUnit.NMM)
+        dM_deps_bottom = to_knm(np.sum(dF_deps_bottom * y_offset), MomentUnit.NMM)
 
         # Assemble 2×2 Jacobian
         jac = np.array([
@@ -1912,6 +1913,7 @@ class MNInteractionDiagram:
         N_Ed: float = 0.0,
         M_cap: Optional[float] = None,
         shear_reinforcement: Optional["ShearRebar"] = None,
+        cot_theta_override: Optional[float] = None,
         iterate_z: bool = False,
         prefer_rigorous: bool = False,
         cap_to_09d: bool = True,
@@ -1932,6 +1934,10 @@ class MNInteractionDiagram:
             shear_reinforcement: Optional ShearRebar object. If provided, calculates
                                 cot(θ) using the variable strut angle method.
                                 If not provided, uses a_l = d (no shear reinforcement).
+            cot_theta_override: Optional user-supplied cot(θ) value. When provided
+                with shear_reinforcement, this value is used directly instead of
+                calculating cot(θ) from V_Ed and V_Rd,max. Must be in the valid
+                EC2 range [1.0, 2.5]. Clamped if outside range.
             iterate_z: If True, iteratively recalculate z based on M_design until
                       convergence (0.5% tolerance, max 5 iterations). Only has an
                       effect when BOTH shear_reinforcement is provided (so a_l depends
@@ -2003,6 +2009,7 @@ class MNInteractionDiagram:
             f_ck=f_ck,
             sigma_cp=sigma_cp,
             shear_reinforcement=shear_reinforcement,
+            cot_theta_override=cot_theta_override,
         )
 
         # Iterate z if requested, shear reinforcement is provided, AND prefer_rigorous=True
@@ -2040,6 +2047,7 @@ class MNInteractionDiagram:
                             f_ck=f_ck,
                             sigma_cp=sigma_cp,
                             shear_reinforcement=shear_reinforcement,
+                            cot_theta_override=cot_theta_override,
                         )
                         break
 
@@ -2057,6 +2065,7 @@ class MNInteractionDiagram:
                     f_ck=f_ck,
                     sigma_cp=sigma_cp,
                     shear_reinforcement=shear_reinforcement,
+                    cot_theta_override=cot_theta_override,
                 )
 
         return shift_result

@@ -13,6 +13,7 @@ from shapely.geometry import LineString, MultiLineString, Point
 from materials.utils.helpers import cot
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ShearRebar
+from materials.core.units import LengthUnit, ForceUnit, from_mm, from_kn
 
 
 # ==============================================================================
@@ -59,6 +60,7 @@ def calculate_tension_shift(
     f_ck: Optional[float] = None,
     sigma_cp: float = 0.0,
     shear_reinforcement: Optional[ShearRebar] = None,
+    cot_theta_override: Optional[float] = None,
 ) -> TensionShiftResult:
     """
     Apply EC2 §9.2.1.3 tension shift rule to a bending moment.
@@ -85,12 +87,20 @@ def calculate_tension_shift(
         z_mm: Lever arm (mm). Typically 0.9d or from strain analysis.
         d_mm: Effective depth (mm). Used as a_l when no shear reinforcement.
         M_cap: Optional moment capacity cap (kN·m). Limits |M_design| ≤ |M_cap|.
-        b_w_mm: Web width (mm). Required if shear_reinforcement is provided.
-        f_cd: Design concrete strength (MPa). Required if shear_reinforcement is provided.
-        f_ck: Characteristic concrete strength (MPa). Required if shear_reinforcement is provided.
+        b_w_mm: Web width (mm). Required if shear_reinforcement is provided and
+                cot_theta_override is not.
+        f_cd: Design concrete strength (MPa). Required if shear_reinforcement is
+              provided and cot_theta_override is not.
+        f_ck: Characteristic concrete strength (MPa). Required if shear_reinforcement
+              is provided and cot_theta_override is not.
         sigma_cp: Axial stress in concrete (MPa), for α_cw calculation. Default 0.
         shear_reinforcement: Optional ShearRebar object. If provided, calculates
-                            cot(θ) from V_Ed using the variable strut angle method.
+                            cot(θ) from V_Ed using the variable strut angle method
+                            (unless cot_theta_override is given).
+        cot_theta_override: Optional user-supplied cot(θ) value. When provided with
+                           shear_reinforcement, this value is used directly instead
+                           of calculating cot(θ) from V_Ed and V_Rd,max. Is clamped
+                           to be in the valid EC2 range [1.0, 2.5].
 
     Returns:
         TensionShiftResult with shifted moment and calculation details.
@@ -114,8 +124,8 @@ def calculate_tension_shift(
         ...     shear_reinforcement=links
         ... )
     """
-    # Validate inputs for shear reinforcement case
-    if shear_reinforcement is not None:
+    # Validate inputs for shear reinforcement case (only needed when computing cot_theta)
+    if shear_reinforcement is not None and cot_theta_override is None:
         missing = []
         if b_w_mm is None:
             missing.append("b_w_mm")
@@ -125,8 +135,8 @@ def calculate_tension_shift(
             missing.append("f_ck")
         if missing:
             raise ValueError(
-                f"When shear_reinforcement is provided, the following parameters "
-                f"are required: {', '.join(missing)}"
+                f"When shear_reinforcement is provided without cot_theta_override, "
+                f"the following parameters are required: {', '.join(missing)}"
             )
 
     abs_M_Ed = abs(float(M_Ed))
@@ -138,22 +148,26 @@ def calculate_tension_shift(
     cot_theta: Optional[float] = None
 
     if shear_reinforcement is not None:
-        # Type narrowing: validation above ensures these are not None
-        assert f_cd is not None
-        assert f_ck is not None
-        assert b_w_mm is not None
+        if cot_theta_override is not None:
+            # User-supplied cot(θ)
+            cot_theta = clamp_cot_theta(cot_theta_override)
+        else:
+            # Type narrowing: validation above ensures these are not None
+            assert f_cd is not None
+            assert f_ck is not None
+            assert b_w_mm is not None
 
-        # Variable strut angle method (EC2 §6.2.3)
-        # K = α_cw · b_w · z · ν · f_cd
-        alpha_cw = find_alpha_cw(f_cd=f_cd, sigma_cp=sigma_cp)
-        nu = find_nu_factor(f_ck=f_ck)
-        K = alpha_cw * b_w_mm * z * nu * f_cd  # in N
+            # Variable strut angle method (EC2 §6.2.3)
+            # K = α_cw · b_w · z · ν · f_cd
+            alpha_cw = find_alpha_cw(f_cd=f_cd, sigma_cp=sigma_cp)
+            nu = find_nu_factor(f_ck=f_ck)
+            K = alpha_cw * b_w_mm * z * nu * f_cd  # in N
 
-        cot_theta = find_cot_theta_for_V_Ed(
-            V_Ed=V_Ed,
-            K=K,
-            link_angle_degrees=shear_reinforcement.angle,
-        )
+            cot_theta = find_cot_theta_for_V_Ed(
+                V_Ed=V_Ed,
+                K=K,
+                link_angle_degrees=shear_reinforcement.angle,
+            )
         # EC2 §9.2.1.3: a_l = z(cot θ - cot α)/2
         # where α is the stirrup angle (90° for vertical, typically 45° for inclined)
         alpha_rad = radians(float(shear_reinforcement.angle))
@@ -166,7 +180,7 @@ def calculate_tension_shift(
         a_l = d
 
     # Calculate additional moment
-    M_add = abs_V_Ed * (a_l / 1000.0)  # Convert a_l from mm to m
+    M_add = abs_V_Ed * from_mm(a_l, LengthUnit.M)
 
     # Calculate shifted moment magnitude
     abs_M_design = abs_M_Ed + M_add
@@ -297,8 +311,7 @@ def find_cot_theta_for_V_Ed(
         cot(θ) clamped to EC2 range [1.0, 2.5]
     """
     # Normalise inputs
-    # Convert V_Ed from kN to N
-    V_Ed_N = abs(float(V_Ed)) * 1000.0
+    V_Ed_N = from_kn(abs(float(V_Ed)), ForceUnit.N)
     K = float(K)
     C = cot(radians(link_angle_degrees))
 
@@ -434,7 +447,7 @@ def sigma_cp_from_N_and_area(N_Ed: float, A_mm2: float) -> float:
         Returns:
             sigma_cp in MPa
     """
-    return (N_Ed * 1000.0) / A_mm2
+    return from_kn(N_Ed, ForceUnit.N) / A_mm2
 
 
 def cap_sigma_cp_upper(sigma_cp: float, f_cd: float) -> float:
