@@ -8,7 +8,7 @@ N_Ed, M_Ed, and V_Ed are now parameters to perform_check(),not fields.
 This enables checking multiple load cases against the same section efficiently.
 """
 
-from typing import Optional, cast
+from typing import Optional
 from math import atan, degrees, radians, sin
 import warnings
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
@@ -28,14 +28,13 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     calculate_section_breadth,
     find_cot_theta_for_V_Ed,
     find_alpha_cw,
-    find_nu_factor,
+    find_V_Rd_c_cracked,
     find_nu_1_factor,
     find_nu_1_factor_note_2,
-    find_k_factor,
-    find_v_min,
     sigma_cp_from_N_and_area,
     cap_sigma_cp_upper,
     clamp_cot_theta,
+    find_V_Rd_c_max_unreinforced,
     find_minimum_ratio_of_shear_reinforcement
 )
 from materials.reinforced_concrete.analysis.interaction_diagram import (
@@ -643,23 +642,10 @@ class ShearCheck(BaseCodeCheck):
         Returns:
             V_Rd,c in kN
         """
-        c_rd_c_coeff = cast(float, get_ndp("c_rd_c_coefficient"))
-        C_Rd_c = c_rd_c_coeff / self.gamma_c_design
-        k = find_k_factor(d)
-        f_ck = self.concrete.f_ck
-        k_1 = cast(float, get_ndp("k_1_shear"))
-        b_w = self.breadth
-
-        # Main formula (Eq. 6.2a)
-        V_Rd_c = (C_Rd_c * k * ((100 * rho_l * f_ck) ** (1/3)) + k_1 * sigma_cp) * b_w * d
-
-        # Minimum value (Eq. 6.2b)
-        v_min = find_v_min(f_ck, k, d, self.gamma_c_design)
-        b_w = self.breadth
-        V_Rd_c_min = (v_min + k_1 * sigma_cp) * b_w * d
-        V_Rd_c_result = to_kn(max(V_Rd_c, V_Rd_c_min), ForceUnit.N)
-
-        return max(V_Rd_c_result, 0)  # Prevents negative values if sigma_cp is large negative
+        return find_V_Rd_c_cracked(
+            b_w=self.breadth, d=d, rho_l=rho_l, sigma_cp=sigma_cp,
+            f_ck=self.concrete.f_ck, gamma_c=self.gamma_c_design,
+        )
 
 
     def find_V_Rd_c_max_unreinforced(self, d: float) -> float:
@@ -677,12 +663,9 @@ class ShearCheck(BaseCodeCheck):
         Returns:
             V_Rd,c,max in kN
         """
-        b_w = self.breadth
-        f_cd = self.f_cd_design
-        nu = find_nu_factor(self.concrete.f_ck)
-
-        V_Rd_c_max = 0.5 * b_w * d * nu * f_cd
-        return to_kn(V_Rd_c_max, ForceUnit.N)
+        return find_V_Rd_c_max_unreinforced(
+            b_w=self.breadth, d=d, f_ck=self.concrete.f_ck, f_cd=self.f_cd_design,
+        )
 
 
     def find_V_Rd_s(
@@ -980,6 +963,7 @@ class ShearCheck(BaseCodeCheck):
         """Perform check for single load case (internal)."""
         # TODO need to add force_cracked arg to this.
         # TODO support uncracked shear check
+        
         # Treat shear as magnitude (absolute value)
         # Negative shear from FEA sign conventions should not give negative utilization
         V_Ed = abs(V_Ed)

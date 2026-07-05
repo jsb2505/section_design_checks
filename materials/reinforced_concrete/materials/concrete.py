@@ -103,6 +103,22 @@ class AggregateType(StrEnum):
         return _AGGREGATE_FACTORS[self]
 
 
+def find_mean_flexural_tensile_strength(f_ctm: float, section_height: float) -> float:
+    """Mean flexural tensile strength of concrete (§3.1.8(1), Eq. 3.23).
+
+    f_ctm,fl = f_ctm · max(1.6 − h, 1.0)  where h is in metres.
+
+    Args:
+        f_ctm: Mean axial tensile strength (MPa)
+        section_height: Geometrical height of section (mm)
+
+    Returns:
+        f_ctm,fl in MPa
+    """
+    h = from_mm(section_height, LengthUnit.M)
+    return f_ctm * max(1.6 - h, 1.0)
+
+
 class ConcreteMaterial(BaseMaterial):
     """
     Concrete material properties per Eurocode 2.
@@ -295,8 +311,7 @@ class ConcreteMaterial(BaseMaterial):
         Returns:
             f_ctm,fl in MPa
         '''
-        h = from_mm(section_height, LengthUnit.M)
-        return self.f_ctm * max(1.6 - h/1000, 1)
+        return find_mean_flexural_tensile_strength(self.f_ctm, section_height)
 
     def __str__(self) -> str:
         return f"{self.grade} (f_ck={self.f_ck} MPa, f_cd={self.f_cd:.1f} MPa)"

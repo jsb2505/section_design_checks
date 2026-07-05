@@ -39,7 +39,8 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     find_alpha_cw,
     find_nu_1_factor,
     find_nu_1_factor_note_2,
-    find_nu_factor,
+    find_V_Rd_c_cracked,
+    find_V_Rd_c_max_unreinforced,
     sigma_cp_from_N_and_area,
     cap_sigma_cp_upper,
     clamp_cot_theta,
@@ -465,6 +466,31 @@ class CircularSectionCheck(BaseModel):
         b_w = min(b_wc, b_wt) if b_wc > 0 and b_wt > 0 else max(b_wc, b_wt)
         return b_w, b_wc, b_wt
 
+    def _find_rho_l(self, b_w: float, d: float) -> float:
+        """Longitudinal reinforcement ratio for EC2 §6.2.2.
+
+        Uses bars below the section centroid (tension side for sagging).
+        Capped at 0.02 per EC2 §6.2.2(1).
+
+        Args:
+            b_w: Equivalent web width (mm)
+            d: Effective depth (mm)
+
+        Returns:
+            rho_l, capped at 0.02
+        """
+        # TODO tension bars may be above the centroid, it depends on the moment sign
+        # additionally some bars may be in tension above the centroid
+        # need to update this
+        _, centroid_y = self.section.get_centroid()
+        A_sl = 0.0
+        for group in self.section.rebar_groups:
+            for pos in group.positions:
+                if pos.y < centroid_y:
+                    A_sl += group.rebar.area
+        if A_sl == 0 or b_w <= 0 or d <= 0:
+            return 0.0
+        return min(A_sl / (b_w * d), 0.02)
 
     def calculate_V_Rd_c_uncracked(self, sigma_cp: float) -> float:
         """
@@ -664,8 +690,9 @@ class CircularSectionCheck(BaseModel):
             V_Rd_c = self.calculate_V_Rd_c_uncracked(sigma_cp_capped)
             # Eq.6.5 upper bound on unreinforced shear resistance
             b_w_uc, _, _ = self.calculate_equivalent_web_width(d, z)
-            nu = find_nu_factor(self._concrete_uls.f_ck)
-            V_Rd_c_max = to_kn(0.5 * b_w_uc * d * nu * self._f_cd_design, ForceUnit.N)
+            V_Rd_c_max = find_V_Rd_c_max_unreinforced(
+                b_w=b_w_uc, d=d, f_ck=self._concrete_uls.f_ck, f_cd=self._f_cd_design,
+            )
             V_Rd_c = min(V_Rd_c, V_Rd_c_max)
             return self._build_check_result(
                 check_name="Circular shear (uncracked, Eq.17)",
@@ -684,29 +711,26 @@ class CircularSectionCheck(BaseModel):
                 ),
             )
 
-        # 5. Cracked but no reinforcement — Eq.17 as conservative lower bound
+        # 5. Cracked but no reinforcement — min of uncracked Eq.17 and cracked §6.2.2
         if self.shear_reinforcement is None:
-            # TODO the code in this whole conditional is potentially being needlessly be calculated twice
-            # - need to link with the check above with an OR statement, only details differ.
-            V_Rd_c = self.calculate_V_Rd_c_uncracked(sigma_cp_capped)
-            # Eq.6.5 upper bound on unreinforced shear resistance
+            V_Rd_c_uncracked = self.calculate_V_Rd_c_uncracked(sigma_cp_capped)
             b_w_cr, _, _ = self.calculate_equivalent_web_width(d, z)
-            nu_cr = find_nu_factor(self._concrete_uls.f_ck)
-            V_Rd_c_max = to_kn(0.5 * b_w_cr * d * nu_cr * self._f_cd_design, ForceUnit.N)
-            V_Rd_c = min(V_Rd_c, V_Rd_c_max)
+            rho_l = self._find_rho_l(b_w_cr, d)
+            V_Rd_c_cracked = find_V_Rd_c_cracked(
+                b_w=b_w_cr, d=d, rho_l=rho_l, sigma_cp=sigma_cp_capped,
+                f_ck=self._concrete_uls.f_ck, gamma_c=self._concrete_uls.gamma_c,
+            )
+            V_Rd_c_max = find_V_Rd_c_max_unreinforced(
+                b_w=b_w_cr, d=d, f_ck=self._concrete_uls.f_ck, f_cd=self._f_cd_design,
+            )
+            V_Rd_c = min(V_Rd_c_uncracked, V_Rd_c_cracked, V_Rd_c_max)
             return self._build_check_result(
                 check_name="Circular shear (cracked, no reinforcement)",
-                code_reference="Orr (2012) Eq.17 (conservative)",
+                code_reference="Orr (2012) Eq.17 + EC2 §6.2.2",
                 demand=V_Ed,
                 capacity=V_Rd_c,
                 units="kN",
                 warning_threshold=warning_threshold,
-                message=(
-                    "Section is cracked but has no shear reinforcement. "
-                    "Empirical V_Rd_c for cracked sections is not validated "
-                    "for circular sections (Orr 2012). Using uncracked Eq.17 "
-                    "as conservative lower bound."
-                ),
                 details=self._shear_details(
                     V_Ed=V_Ed, M_Ed=M_Ed, N_Ed=N_Ed, V_Rd=V_Rd_c,
                     d=d, z=z, sigma_cp=sigma_cp_capped,
@@ -832,7 +856,7 @@ class CircularSectionCheck(BaseModel):
             Tuple of (V_Rd_max kN, V_Rd_s kN, cot_theta, nu_1, used_note_2 bool)
         """
         assert self.shear_reinforcement is not None
-        # TODO need an assert not none for _concrete_uls here to remove f_ck pylance error
+        assert self._concrete_uls is not None
         f_ck = self._concrete_uls.f_ck
         f_cd = self._f_cd_design
         f_yk = self.shear_reinforcement.f_yk

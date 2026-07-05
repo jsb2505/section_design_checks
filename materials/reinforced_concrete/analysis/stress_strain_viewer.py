@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from materials.reinforced_concrete.analysis import MNInteractionDiagram
-from materials.core.units import ForceUnit, MomentUnit, to_kn, to_knm
+from materials.core.units import FORCE_TO_KN, ForceUnit, MomentUnit, to_kn, to_knm
 
 
 # ------------------------------------------
@@ -190,8 +190,9 @@ class StressStrainViewer:
         )
 
         # 5) Resultants (kN)
-        conc_forces = to_kn(forces_N[conc_mask], ForceUnit.N)
-        steel_forces = to_kn(forces_N[steel_mask], ForceUnit.N)
+        _N_to_kN = FORCE_TO_KN[ForceUnit.N]
+        conc_forces = forces_N[conc_mask] * _N_to_kN
+        steel_forces = forces_N[steel_mask] * _N_to_kN
 
         F_c_comp = float(np.sum(conc_forces[conc_forces > 0.0])) if conc_forces.size else 0.0
         F_c_tens = float(np.sum(conc_forces[conc_forces < 0.0])) if conc_forces.size else 0.0
@@ -378,7 +379,7 @@ class StressStrainViewer:
             sx = s.x[s.steel_mask].astype(float)
             sy = s.y[s.steel_mask].astype(float)
             ss = s.stresses[s.steel_mask].astype(float)
-            sf = to_kn(s.forces_N[s.steel_mask], ForceUnit.N).astype(float)
+            sf = (s.forces_N[s.steel_mask] * FORCE_TO_KN[ForceUnit.N]).astype(float)
             se = (s.strains[s.steel_mask] * 1000.0).astype(float)   # ‰
 
             s_color = np.where(ss < 0.0, "green", "darkorange")

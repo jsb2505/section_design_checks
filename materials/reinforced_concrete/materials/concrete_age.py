@@ -9,7 +9,9 @@ from math import exp, sqrt
 from pydantic import BaseModel, Field, ConfigDict
 
 from materials.reinforced_concrete.materials import ConcreteMaterial
-from materials.core.units import LengthUnit, from_mm
+from materials.reinforced_concrete.materials.concrete import (
+    find_mean_flexural_tensile_strength,
+)
 
 
 class CementClass(StrEnum):
@@ -145,8 +147,7 @@ class ConcreteAge(BaseModel):
         Returns:
             f_ctm,fl,t in MPa
         """
-        h = from_mm(section_height, LengthUnit.M)
-        return self.f_ctm_t * max(1.6 - h, 1.0)
+        return find_mean_flexural_tensile_strength(self.f_ctm_t, section_height)
 
     def __str__(self) -> str:
         return (

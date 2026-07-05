@@ -547,6 +547,61 @@ def cap_sigma_cp_upper(sigma_cp: float, f_cd: float) -> float:
     return min(sigma_cp, 0.2 * f_cd)
 
 
+def find_V_Rd_c_cracked(
+    b_w: float, d: float, rho_l: float, sigma_cp: float,
+    f_ck: float, gamma_c: float,
+) -> float:
+    """
+    Design shear resistance for cracked sections without shear reinforcement
+    (§6.2.2, Eq. 6.2a/b).
+
+    Returns max(Eq.6.2a, Eq.6.2b), floored at 0.
+
+    Args:
+        b_w: Minimum web width in the tensile area (mm)
+        d: Effective depth (mm)
+        rho_l: Longitudinal reinforcement ratio
+        sigma_cp: Compressive stress from axial force (MPa)
+        f_ck: Characteristic compressive strength (MPa)
+        gamma_c: Partial safety factor for concrete
+
+    Returns:
+        V_Rd,c in kN
+    """
+    c_rd_c_coeff = cast(float, get_ndp("c_rd_c_coefficient"))
+    C_Rd_c = c_rd_c_coeff / gamma_c
+    k = find_k_factor(d)
+    k_1 = cast(float, get_ndp("k_1_shear"))
+
+    # Main formula (Eq. 6.2a)
+    V_Rd_c = (C_Rd_c * k * ((100 * rho_l * f_ck) ** (1 / 3)) + k_1 * sigma_cp) * b_w * d
+
+    # Minimum value (Eq. 6.2b)
+    v_min = find_v_min(f_ck, k, d, gamma_c)
+    V_Rd_c_min = (v_min + k_1 * sigma_cp) * b_w * d
+
+    return max(to_kn(max(V_Rd_c, V_Rd_c_min), ForceUnit.N), 0)
+
+
+def find_V_Rd_c_max_unreinforced(b_w: float, d: float, f_ck: float, f_cd: float) -> float:
+    """
+    Maximum shear resistance for members without shear reinforcement (§6.2.2(6), Eq. 6.5).
+
+    V_Rd,c,max = 0.5 · b_w · d · ν · f_cd
+
+    Args:
+        b_w: Minimum web width in the tensile area (mm)
+        d: Effective depth (mm)
+        f_ck: Characteristic compressive strength (MPa)
+        f_cd: Design compressive strength (MPa)
+
+    Returns:
+        V_Rd,c,max in kN
+    """
+    nu = find_nu_factor(f_ck)
+    return to_kn(0.5 * b_w * d * nu * f_cd, ForceUnit.N)
+
+
 def find_minimum_ratio_of_shear_reinforcement(f_ck: float, f_yk: float, f_ctm: float) -> float:
     '''
     Calculates the minimum ratio of shear reinforcement.

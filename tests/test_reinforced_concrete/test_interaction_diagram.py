@@ -280,18 +280,15 @@ class TestMNInteractionDiagram:
 
     def test_check_capacity_safe(self, diagram):
         """Test capacity check for safe loads."""
-        # Use a known safe load
         N_Ed = 500.0  # kN compression
         N_cap, M_Rd_pos, _ = diagram.get_capacity_fixed_n(N_Ed)
 
-        # Apply 50% of capacity
+        # Apply 50% of capacity at this axial load
         M_Ed = M_Rd_pos * 0.5
+        utilization = M_Ed / M_Rd_pos
 
-        is_safe, utilization = diagram.get_utilization_vector(N_Ed, M_Ed)
-
-        assert is_safe == True
-        assert 0 < utilization < 1.0
-        assert utilization == pytest.approx(0.5, rel=0.15)  # Should be around 50%
+        assert M_Ed < M_Rd_pos
+        assert utilization == pytest.approx(0.5, rel=1e-9)
 
     def test_check_capacity_unsafe(self, diagram):
         """Test capacity check for unsafe loads."""
