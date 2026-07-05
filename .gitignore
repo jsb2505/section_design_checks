@@ -39,9 +39,6 @@ CODE_REVIEW.md
 code_review/
 tasks/
 
-# Local tool settings
-local tool settings
-
 # Temporary files
 *.tmp
 *.bak
