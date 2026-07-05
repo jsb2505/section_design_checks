@@ -13,7 +13,7 @@ from shapely.geometry import MultiLineString, Point
 from materials.utils.helpers import cot
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ShearRebar
-from materials.reinforced_concrete.ndp import get_ndp
+from materials.reinforced_concrete.ndp import get_ndp, get_ndp_callable
 from materials.core.units import LengthUnit, ForceUnit, from_mm, from_kn
 
 
@@ -397,8 +397,6 @@ def find_alpha_cw(f_cd: float, sigma_cp: float) -> float:
     Returns:
         Coefficient α_cw (dimensionless)
     """
-    from materials.reinforced_concrete.ndp import get_ndp_callable
-
     alpha_cw_fn = get_ndp_callable("alpha_cw")
     return alpha_cw_fn(f_cd, sigma_cp)
 
@@ -417,8 +415,6 @@ def find_nu_factor(f_ck: float) -> float:
     Returns:
         ν factor (dimensionless)
     """
-    from materials.reinforced_concrete.ndp import get_ndp_callable
-
     nu_fn = get_ndp_callable("nu_shear")
     return nu_fn(f_ck)
 
@@ -439,8 +435,6 @@ def find_nu_1_factor(f_ck: float, link_angle_degrees: float) -> float:
     Returns:
         ν₁ factor (dimensionless)
     """
-    from materials.reinforced_concrete.ndp import get_ndp_callable
-
     nu_1_fn = get_ndp_callable("nu_1")
     return nu_1_fn(f_ck, link_angle_degrees)
 
@@ -461,8 +455,6 @@ def find_nu_1_factor_note_2(f_ck: float, link_angle_degrees: float) -> float:
     Returns:
         ν₁ factor (dimensionless) - increased value for low-stress reinforcement
     """
-    from materials.reinforced_concrete.ndp import get_ndp_callable
-
     nu_1_fn = get_ndp_callable("nu_1_note_2")
     return nu_1_fn(f_ck, link_angle_degrees)
 
@@ -481,8 +473,6 @@ def find_nu_factor_torsion(f_ck: float) -> float:
     Returns:
         ν factor for torsion (dimensionless)
     """
-    from materials.reinforced_concrete.ndp import get_ndp_callable
-
     nu_fn = get_ndp_callable("nu_torsion")
     return nu_fn(f_ck)
 
@@ -510,7 +500,7 @@ def find_v_min(f_ck: float, k_factor: float, d: float, gamma_c: float) -> float:
 
     v_min = coeff·k^(3/2)·√f_ck
 
-    The coefficient is an NDP:
+    The coefficient is a NDP:
     - EU: 0.035 (constant)
     - German NA: varies with d and gamma_c
 
@@ -523,8 +513,6 @@ def find_v_min(f_ck: float, k_factor: float, d: float, gamma_c: float) -> float:
     Returns:
         v_min in MPa
     """
-    from materials.reinforced_concrete.ndp import get_ndp_callable
-
     coeff_fn = get_ndp_callable("v_min_coefficient")
     coeff = coeff_fn(d, gamma_c)
     return coeff * (k_factor ** 1.5) * sqrt(f_ck)
@@ -559,17 +547,22 @@ def cap_sigma_cp_upper(sigma_cp: float, f_cd: float) -> float:
     return min(sigma_cp, 0.2 * f_cd)
 
 
-# TODO this is an ndp
-def find_minimum_ratio_of_shear_reinforcement(f_ck: float, f_yk: float) -> float:
+def find_minimum_ratio_of_shear_reinforcement(f_ck: float, f_yk: float, f_ctm: float) -> float:
     '''
     Calculates the minimum ratio of shear reinforcement.
     Ref: EC2 §9.2.2(5) (9.5N)
 
+    This ratio is a NDP:
+    - EU: ρ_w_min = 0.08 * sqrt(f_ck) / f_yk
+    - German NA: ρ_w_min = 0.16 * f_ctm / f_yk
+
     Args:
         f_ck: Characteristic cylinder strength of concrete
         f_yk: Characteristic yield strength of rebar
+        f_ctm: Characteristic mean tensile strength of concrete
 
     Returns:
         ρ_w_min: the minimum ratio of shear reinforcement (dimensionless, empirical formula)
     '''
-    return 0.08 * sqrt(f_ck) / f_yk
+    rho_w_min_fn = get_ndp_callable("rho_w_min")
+    return rho_w_min_fn(f_ck, f_yk, f_ctm)

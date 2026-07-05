@@ -1244,6 +1244,6 @@ class ShearCheck(BaseCodeCheck):
             f_yk = self.shear_reinforcement.f_yk
             link_angle_deg = self.shear_reinforcement.angle
 
-        rho_w_min = find_minimum_ratio_of_shear_reinforcement(self.concrete.f_ck, f_yk)
+        rho_w_min = find_minimum_ratio_of_shear_reinforcement(self.concrete.f_ck, f_yk, self.concrete.f_ctm)
         reinforcement_angle_rads = radians(link_angle_deg)
         return rho_w_min * self.breadth * sin(reinforcement_angle_rads)

@@ -418,6 +418,7 @@ def find_area_of_steel_minimum(b: float, d: float, f_ctm: float, f_yk: float) ->
     Returns:
         A_s,min: The minimum amount of longitudinal reinforcement allowed
     '''
+    # TODO this is a NDP. German NA doesn't give a limit -> 0
     A_s_min = max(0.0013, 0.26 * (f_ctm / f_yk))
     return A_s_min * b * d
 
@@ -433,5 +434,8 @@ def find_area_of_steel_maximum(section_area: float) -> float:
     Returns:
         A_s,max: The maximum amount of longitudinal reinforcement allowed
     '''
+    # TODO this is a NDP. German NA gives 0.08 however this is for lapped areas
+    # The normal limit is for unlapped area which implicitly doubled to 0.08 at laps.
+    # So they are the same value.
     return 0.04 * section_area
 

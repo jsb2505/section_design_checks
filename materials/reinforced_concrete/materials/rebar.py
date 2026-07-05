@@ -68,7 +68,7 @@ class Rebar(ReinforcingSteel):
 class ShearRebar(Rebar):
     """Shear reinforcement (links/stirrups) with spacing and leg configuration."""
 
-    spacing: float = Field(..., description="Link spacing along member axis (mm)", gt=0)
+    spacing: float = Field(..., description="Link spacing along member axis (or pitch if spiral) (mm)", gt=0)
     n_legs: int = Field(default=2, description="Number of link legs crossing the shear plane", ge=1)
     angle: float = Field(default=90.0, description="Angle of links to member axis (degrees)", ge=45.0, le=90.0)
 
@@ -108,13 +108,14 @@ class ShearRebar(Rebar):
             cot_alpha = 0.0
         else:
             cot_alpha = cot(radians(self.angle))
-
+        # TODO this is an NDP. Germans differ
         return 0.75 * effective_depth * (1.0 + cot_alpha)
 
     def max_leg_spacing(self, effective_depth: float) -> float:
         """EC2 §9.2.2(8): s_t,max = min(600 mm, 0.75 d)."""
         if effective_depth <= 0:
             raise ValueError("effective_depth must be > 0")
+        # TODO this is an NDP. Germans differ
         return min(600.0, 0.75 * effective_depth)
 
     def __str__(self) -> str:

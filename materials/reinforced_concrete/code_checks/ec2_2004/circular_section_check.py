@@ -38,6 +38,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     find_cot_theta_for_V_Ed,
     find_alpha_cw,
     find_nu_1_factor,
+    find_nu_1_factor_note_2,
     find_nu_factor,
     sigma_cp_from_N_and_area,
     cap_sigma_cp_upper,
@@ -47,7 +48,7 @@ from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelM
 from materials.reinforced_concrete.geometry import RCSection
 from materials.reinforced_concrete.materials import ConcreteMaterial, ShearRebar
 from materials.reinforced_concrete.ndp import get_ndp
-from materials.core.units import ForceUnit, to_kn, from_kn
+from materials.core.units import ForceUnit, to_kn
 
 
 class CircularSectionCheck(BaseModel):
@@ -154,6 +155,16 @@ class CircularSectionCheck(BaseModel):
         description=(
             "If True, use the simplified λ1 = 0.85. "
             "If False (default), compute λ1 by numerical integration (Eq.6)."
+        ),
+    )
+
+    use_increased_nu_1: bool = Field(
+        default=False,
+        description=(
+            "Use increased ν₁ factor per EC2 §6.2.3(3) Note 2 when shear "
+            "reinforcement stress is below 80% of f_yk (σ_s < 0.8·f_yk). "
+            "This allows higher V_Rd,max capacity but requires iterative "
+            "calculation and reduces f_ywd to 0.8·f_ywk for V_Rd,s."
         ),
     )
 
@@ -705,33 +716,47 @@ class CircularSectionCheck(BaseModel):
         f_cd = self._f_cd_design
         f_ck = self._concrete_uls.f_ck
         alpha_cw = find_alpha_cw(f_cd, sigma_cp_capped)
-        nu_1 = find_nu_1_factor(
-            f_ck, 
-            link_angle_degrees=90.0,  # Always 90° for circular sections
-        )
-        # TODO need to support nu_1 iteration (note 2)
-        K = alpha_cw * b_w * z * nu_1 * f_cd  # in N
 
-        # Determine cot(θ)
+        used_note_2 = False
         if cot_theta_override is not None:
+            # User override — compute V_Rd_max/V_Rd_s directly (no iteration)
             cot_theta = clamp_cot_theta(cot_theta_override)
-        else:
-            cot_theta = find_cot_theta_for_V_Ed(
-                V_Ed=from_kn(V_Ed, ForceUnit.N),
-                K=K,
-                link_angle_degrees=90.0,  # Always 90° for circular sections
+            nu_1 = find_nu_1_factor(f_ck, link_angle_degrees=90.0)
+            K = alpha_cw * b_w * z * nu_1 * f_cd
+            tan_theta = 1 / cot_theta
+            V_Rd_max = to_kn(K / (cot_theta + tan_theta), ForceUnit.N)
+            f_ywd = self._f_ywd_design
+            A_sw_over_s = self.shear_reinforcement.area_per_unit_length
+            V_Rd_s = to_kn(
+                lambda_1 * lambda_2 * A_sw_over_s * z * f_ywd * cot_theta,
+                ForceUnit.N,
             )
-
-        # V_Rd_max (Eq.14 with circular b_w)
-        tan_theta = 1 / cot_theta  # cot_theta always in [1.0, 2.5]
-        V_Rd_max_N = K / (cot_theta + tan_theta)
-        V_Rd_max = to_kn(V_Rd_max_N, ForceUnit.N)
-
-        # V_Rd_s with λ1 and λ2 (Eq.7/8)
-        A_sw_over_s = self.shear_reinforcement.area_per_unit_length  # mm²/mm
-        f_ywd = self._f_ywd_design
-        V_Rd_s_N = lambda_1 * lambda_2 * A_sw_over_s * z * f_ywd * cot_theta
-        V_Rd_s = to_kn(V_Rd_s_N, ForceUnit.N)
+        elif self.use_increased_nu_1:
+            # Note 2 iteration: may increase ν₁ if σ_s < 0.8·f_yk
+            V_Rd_max, V_Rd_s, cot_theta, nu_1, used_note_2 = (
+                self._find_V_Rd_max_with_note_2_iteration(
+                    V_Ed, z, sigma_cp_capped, b_w, lambda_1, lambda_2,
+                )
+            )
+            K = alpha_cw * b_w * z * nu_1 * f_cd
+            f_ywd = 0.8 * self.shear_reinforcement.f_yk if used_note_2 else self._f_ywd_design
+        else:
+            # Standard Note 1
+            nu_1 = find_nu_1_factor(f_ck, link_angle_degrees=90.0)
+            K = alpha_cw * b_w * z * nu_1 * f_cd
+            cot_theta = find_cot_theta_for_V_Ed(
+                V_Ed=V_Ed,  # already in kN; function converts internally
+                K=K,
+                link_angle_degrees=90.0,
+            )
+            tan_theta = 1 / cot_theta
+            V_Rd_max = to_kn(K / (cot_theta + tan_theta), ForceUnit.N)
+            f_ywd = self._f_ywd_design
+            A_sw_over_s = self.shear_reinforcement.area_per_unit_length
+            V_Rd_s = to_kn(
+                lambda_1 * lambda_2 * A_sw_over_s * z * f_ywd * cot_theta,
+                ForceUnit.N,
+            )
 
         # Governing capacity
         V_Rd = min(V_Rd_s, V_Rd_max)
@@ -753,6 +778,7 @@ class CircularSectionCheck(BaseModel):
                 V_Rd_s=V_Rd_s, V_Rd_max=V_Rd_max,
                 alpha_cw=alpha_cw, nu_1=nu_1,
                 f_ywd=f_ywd, z_0=z_0,
+                used_note_2=used_note_2,
             ),
         )
 
@@ -760,6 +786,97 @@ class CircularSectionCheck(BaseModel):
     # ===========================
     # Internal helpers
     # ===========================
+
+    def _find_V_Rd_max_with_note_2_iteration(
+        self,
+        V_Ed: float,
+        z: float,
+        sigma_cp: float,
+        b_w: float,
+        lambda_1: float,
+        lambda_2: float,
+    ) -> tuple[float, float, float, float, bool]:
+        """
+        Calculate V_Rd_max and V_Rd_s with ν₁ Note 2 iteration per EC2 §6.2.3(3).
+
+        Iterates to check if σ_s < 0.8·f_yk, allowing increased ν₁ factor.
+        Detects oscillation and reverts to Note 1 if needed.
+
+        The circular V_Rd_s includes λ₁/λ₂ efficiency factors, so the stress
+        check accounts for the actual reinforcement contribution.
+
+        Args:
+            V_Ed: Design shear force in kN
+            z: Lever arm in mm
+            sigma_cp: Capped compressive stress in MPa
+            b_w: Circular equivalent web width in mm
+            lambda_1: Link efficiency factor (Orr Eq.6)
+            lambda_2: Spiral efficiency factor (Orr Eq.9)
+
+        Returns:
+            Tuple of (V_Rd_max kN, V_Rd_s kN, cot_theta, nu_1, used_note_2 bool)
+        """
+        assert self.shear_reinforcement is not None
+        # TODO need an assert not none for _concrete_uls here to remove f_ck pylance error
+        f_ck = self._concrete_uls.f_ck
+        f_cd = self._f_cd_design
+        f_yk = self.shear_reinforcement.f_yk
+        f_ywd = self._f_ywd_design
+        threshold = 0.8 * f_yk
+        alpha_cw = find_alpha_cw(f_cd, sigma_cp)
+        A_sw_over_s = self.shear_reinforcement.area_per_unit_length
+
+        # --- Iteration 1: Note 1 (standard ν₁) ---
+        nu_1_n1 = find_nu_1_factor(f_ck, link_angle_degrees=90.0)
+        K_n1 = alpha_cw * b_w * z * nu_1_n1 * f_cd
+
+        cot_theta_n1 = find_cot_theta_for_V_Ed(
+            V_Ed=V_Ed, K=K_n1, link_angle_degrees=90.0,
+        )
+        tan_theta_n1 = 1 / cot_theta_n1
+        V_Rd_max_n1 = to_kn(K_n1 / (cot_theta_n1 + tan_theta_n1), ForceUnit.N)
+        V_Rd_s_n1 = to_kn(
+            lambda_1 * lambda_2 * A_sw_over_s * z * f_ywd * cot_theta_n1,
+            ForceUnit.N,
+        )
+
+        # Stress in reinforcement: σ_s = f_ywd · (V_Ed / V_Rd_s)
+        sigma_s_1 = f_ywd * (V_Ed / V_Rd_s_n1) if V_Rd_s_n1 > 0 else f_yk
+
+        if sigma_s_1 >= threshold:
+            # Stress too high — Note 2 not applicable
+            return V_Rd_max_n1, V_Rd_s_n1, cot_theta_n1, nu_1_n1, False
+
+        # --- Iteration 2: Note 2 (increased ν₁, reduced f_ywd) ---
+        nu_1_n2 = find_nu_1_factor_note_2(f_ck, link_angle_degrees=90.0)
+        K_n2 = alpha_cw * b_w * z * nu_1_n2 * f_cd
+        f_ywd_n2 = 0.8 * f_yk  # Reduced per Note 2
+
+        cot_theta_n2 = find_cot_theta_for_V_Ed(
+            V_Ed=V_Ed, K=K_n2, link_angle_degrees=90.0,
+        )
+        tan_theta_n2 = 1 / cot_theta_n2
+        V_Rd_max_n2 = to_kn(K_n2 / (cot_theta_n2 + tan_theta_n2), ForceUnit.N)
+        V_Rd_s_n2 = to_kn(
+            lambda_1 * lambda_2 * A_sw_over_s * z * f_ywd_n2 * cot_theta_n2,
+            ForceUnit.N,
+        )
+
+        sigma_s_2 = f_ywd_n2 * (V_Ed / V_Rd_s_n2) if V_Rd_s_n2 > 0 else f_yk
+
+        if sigma_s_2 >= threshold:
+            # Oscillation — revert to Note 1
+            warnings.warn(
+                f"EC2 §6.2.3(3) Note 2: Oscillation detected. "
+                f"Note 1: σ_s={sigma_s_1:.1f} MPa < {threshold:.1f} MPa, "
+                f"Note 2: σ_s={sigma_s_2:.1f} MPa >= {threshold:.1f} MPa. "
+                f"Reverting to Note 1 (conservative).",
+                stacklevel=3,
+            )
+            return V_Rd_max_n1, V_Rd_s_n1, cot_theta_n1, nu_1_n1, False
+
+        # Converged with Note 2
+        return V_Rd_max_n2, V_Rd_s_n2, cot_theta_n2, nu_1_n2, True
 
     def _compute_cot_theta_for_tension_shift(
         self, M_Ed: float, N_Ed: float, V_Ed: float
@@ -788,7 +905,7 @@ class CircularSectionCheck(BaseModel):
         K = alpha_cw * b_w * z * nu_1 * f_cd
 
         return find_cot_theta_for_V_Ed(
-            V_Ed=from_kn(abs(V_Ed), ForceUnit.N),
+            V_Ed=abs(V_Ed),  # already in kN; function converts internally
             K=K,
             link_angle_degrees=90.0,
         )
@@ -857,6 +974,7 @@ class CircularSectionCheck(BaseModel):
         nu_1: Optional[float] = None,
         f_ywd: Optional[float] = None,
         z_0: Optional[float] = None,
+        used_note_2: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Assemble details dict for shear check results."""
         details: Dict[str, Any] = {
@@ -895,4 +1013,6 @@ class CircularSectionCheck(BaseModel):
             details["f_ywd_MPa"] = f_ywd
         if z_0 is not None:
             details["z_0_mm"] = z_0
+        if used_note_2 is not None:
+            details["used_note_2"] = used_note_2
         return details

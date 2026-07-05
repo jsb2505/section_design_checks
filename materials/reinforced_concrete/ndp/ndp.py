@@ -131,6 +131,10 @@ _NDP_METADATA = {
         "description": "Upper limit for max crack spacing",
         "ref": "7.3.4(3)",
     },
+    "rho_w_min": {
+        "description": "Minimum shear reinforcement ratio",
+        "ref": "9.2.2(5) (9.5N)",
+    },
 }
 
 
@@ -180,6 +184,7 @@ EN1992_1_1_2004 = {
         "k_3_crack": 3.4,
         "k_4_crack": 0.425,
         "s_r_max_lim": None,  # No additional limit in base EC2
+        "rho_w_min": lambda f_ck, f_yk, f_ctm: 0.08 * sqrt(f_ck) / f_yk,
     },
 
     # -------------------------------------------------------------------------
@@ -233,6 +238,7 @@ EN1992_1_1_2004 = {
         "k_3_crack": 0.0,
         "k_4_crack": 1.0 / 3.6,
         "s_r_max_lim": lambda sigma_s, diameter, f_ct_eff: (sigma_s * diameter) / (3.6 * f_ct_eff),
+        "rho_w_min": lambda f_ck, f_yk, f_ctm: 0.16 * f_ctm / f_yk,  # (9.5aDE)
     },
 }
 
