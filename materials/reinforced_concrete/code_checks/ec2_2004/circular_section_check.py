@@ -35,7 +35,8 @@ from materials.reinforced_concrete.code_checks.ec2_2004.cracking_check import (
     LoadDuration,
 )
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
-    find_cot_theta_for_V_Ed,
+    find_cot_theta_for_V_Ed_fromV_Rd_max,
+    find_cot_theta_for_V_Ed_from_V_Rd_s,
     find_alpha_cw,
     find_nu_1_factor,
     find_nu_1_factor_note_2,
@@ -599,6 +600,7 @@ class CircularSectionCheck(BaseModel):
         M_cap: Optional[float] = None,
         shear_reinforcement: Optional[ShearRebar] = None,
         cot_theta_override: Optional[float] = None,
+        use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         iterate_z: bool = True,
@@ -619,6 +621,9 @@ class CircularSectionCheck(BaseModel):
             M_cap: Moment capacity cap (kN·m) from envelope analysis
             shear_reinforcement: Override for shear reinforcement (defaults to self)
             cot_theta_override: User-supplied cot(θ) for tension shift
+            use_v_rd_s_for_cot_theta: If True, determine cot(θ) from rearranged
+                EC2 Eq. 6.13 (V_Rd,s = V_Ed). If False (default), determine cot(θ)
+                from rearranged EC2 Eq. 6.14 / V_Rd,max.
             warning_threshold: Utilization threshold for warnings
             ignore_compression_steel: If True, ignore compression reinforcement
             iterate_z: If True, iteratively recalculate z (default True for circular)
@@ -642,7 +647,10 @@ class CircularSectionCheck(BaseModel):
             and shear_reinf is not None
         ):
             effective_cot_theta = self._compute_cot_theta_for_tension_shift(
-                M_Ed=M_Ed, N_Ed=N_Ed, V_Ed=V_Ed
+                M_Ed=M_Ed,
+                N_Ed=N_Ed,
+                V_Ed=V_Ed,
+                use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
             )
 
         assert self._bending_check is not None
@@ -653,6 +661,7 @@ class CircularSectionCheck(BaseModel):
             M_cap=M_cap,
             shear_reinforcement=shear_reinf,
             cot_theta_override=effective_cot_theta,
+            use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
             warning_threshold=warning_threshold,
             ignore_compression_steel=ignore_compression_steel,
             iterate_z=iterate_z,
@@ -699,6 +708,7 @@ class CircularSectionCheck(BaseModel):
         *,
         load_case: ShearLoadCase,
         cot_theta_override: Optional[float] = None,
+        use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float = 0.95,
         force_cracked: bool = False,
     ) -> CheckResult:
@@ -715,6 +725,9 @@ class CircularSectionCheck(BaseModel):
             load_case: ShearLoadCase with V_Ed, M_Ed, N_Ed
             cot_theta_override: User-supplied cot(θ). If None, computed from
                 V_Rd_max equation with circular b_w.
+            use_v_rd_s_for_cot_theta: If True, solve cot(θ) from rearranged EC2
+                Eq. 6.13 (V_Rd,s = V_Ed). If False (default), solve from
+                rearranged EC2 Eq. 6.14 / V_Rd,max.
             warning_threshold: Utilization threshold for warnings
             force_cracked: If True, skip the cracking moment check and go
                 straight to the reinforced shear check
@@ -845,6 +858,7 @@ class CircularSectionCheck(BaseModel):
             V_Rd_max, V_Rd_s, cot_theta, nu_1, used_note_2 = (
                 self._find_V_Rd_max_with_note_2_iteration(
                     V_Ed, z, sigma_cp_capped, b_w, lambda_1, lambda_2,
+                    use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
                 )
             )
             K = alpha_cw * b_w * z * nu_1 * f_cd
@@ -853,11 +867,21 @@ class CircularSectionCheck(BaseModel):
             # Standard Note 1
             nu_1 = find_nu_1_factor(f_ck, link_angle_degrees=90.0)
             K = alpha_cw * b_w * z * nu_1 * f_cd
-            cot_theta = find_cot_theta_for_V_Ed(
-                V_Ed=V_Ed,  # already in kN; function converts internally
-                K=K,
-                link_angle_degrees=90.0,
-            )
+            if use_v_rd_s_for_cot_theta:
+                A_sw_over_s_eff = lambda_1 * lambda_2 * self.shear_reinforcement.area_per_unit_length
+                cot_theta = find_cot_theta_for_V_Ed_from_V_Rd_s(
+                    V_Ed=V_Ed,
+                    A_sw_over_s=A_sw_over_s_eff,
+                    z=z,
+                    f_ywd=self._f_ywd_design,
+                    link_angle_degrees=90.0,
+                )
+            else:
+                cot_theta = find_cot_theta_for_V_Ed_fromV_Rd_max(
+                    V_Ed=V_Ed,  # already in kN; function converts internally
+                    K=K,
+                    link_angle_degrees=90.0,
+                )
             tan_theta = 1 / cot_theta
             V_Rd_max = to_kn(K / (cot_theta + tan_theta), ForceUnit.N)
             f_ywd = self._f_ywd_design
@@ -889,6 +913,7 @@ class CircularSectionCheck(BaseModel):
                 b_w=b_w, b_wc=b_wc, b_wt=b_wt,
                 alpha_cw=alpha_cw, nu_1=nu_1, K=K,
                 f_ywd=f_ywd, used_note_2=used_note_2,
+                cot_theta_from_v_rd_s=use_v_rd_s_for_cot_theta,
                 lambda_1=lambda_1, lambda_2=lambda_2, z_0=z_0,
             ),
         )
@@ -906,6 +931,7 @@ class CircularSectionCheck(BaseModel):
         b_w: float,
         lambda_1: float,
         lambda_2: float,
+        use_v_rd_s_for_cot_theta: bool = False,
     ) -> tuple[float, float, float, float, bool]:
         """
         Calculate V_Rd_max and V_Rd_s with ν₁ Note 2 iteration per EC2 §6.2.3(3).
@@ -923,6 +949,9 @@ class CircularSectionCheck(BaseModel):
             b_w: Circular equivalent web width in mm
             lambda_1: Link efficiency factor (Orr Eq.6)
             lambda_2: Spiral efficiency factor (Orr Eq.9)
+            use_v_rd_s_for_cot_theta: If True, determine cot(θ) from
+                rearranged Eq. 6.13 (V_Rd,s = V_Ed). If False, use rearranged
+                Eq. 6.14 / V_Rd,max.
 
         Returns:
             Tuple of (V_Rd_max kN, V_Rd_s kN, cot_theta, nu_1, used_note_2 bool)
@@ -941,9 +970,19 @@ class CircularSectionCheck(BaseModel):
         nu_1_n1 = find_nu_1_factor(f_ck, link_angle_degrees=90.0)
         K_n1 = alpha_cw * b_w * z * nu_1_n1 * f_cd
 
-        cot_theta_n1 = find_cot_theta_for_V_Ed(
-            V_Ed=V_Ed, K=K_n1, link_angle_degrees=90.0,
-        )
+        if use_v_rd_s_for_cot_theta:
+            A_sw_over_s_eff = lambda_1 * lambda_2 * A_sw_over_s
+            cot_theta_n1 = find_cot_theta_for_V_Ed_from_V_Rd_s(
+                V_Ed=V_Ed,
+                A_sw_over_s=A_sw_over_s_eff,
+                z=z,
+                f_ywd=f_ywd,
+                link_angle_degrees=90.0,
+            )
+        else:
+            cot_theta_n1 = find_cot_theta_for_V_Ed_fromV_Rd_max(
+                V_Ed=V_Ed, K=K_n1, link_angle_degrees=90.0,
+            )
         tan_theta_n1 = 1 / cot_theta_n1
         V_Rd_max_n1 = to_kn(K_n1 / (cot_theta_n1 + tan_theta_n1), ForceUnit.N)
         V_Rd_s_n1 = to_kn(
@@ -963,9 +1002,19 @@ class CircularSectionCheck(BaseModel):
         K_n2 = alpha_cw * b_w * z * nu_1_n2 * f_cd
         f_ywd_n2 = 0.8 * f_yk  # Reduced per Note under expression (6.8)
 
-        cot_theta_n2 = find_cot_theta_for_V_Ed(
-            V_Ed=V_Ed, K=K_n2, link_angle_degrees=90.0,
-        )
+        if use_v_rd_s_for_cot_theta:
+            A_sw_over_s_eff = lambda_1 * lambda_2 * A_sw_over_s
+            cot_theta_n2 = find_cot_theta_for_V_Ed_from_V_Rd_s(
+                V_Ed=V_Ed,
+                A_sw_over_s=A_sw_over_s_eff,
+                z=z,
+                f_ywd=f_ywd_n2,
+                link_angle_degrees=90.0,
+            )
+        else:
+            cot_theta_n2 = find_cot_theta_for_V_Ed_fromV_Rd_max(
+                V_Ed=V_Ed, K=K_n2, link_angle_degrees=90.0,
+            )
         tan_theta_n2 = 1 / cot_theta_n2
         V_Rd_max_n2 = to_kn(K_n2 / (cot_theta_n2 + tan_theta_n2), ForceUnit.N)
         V_Rd_s_n2 = to_kn(
@@ -990,11 +1039,19 @@ class CircularSectionCheck(BaseModel):
         return V_Rd_max_n2, V_Rd_s_n2, cot_theta_n2, nu_1_n2, True
 
     def _compute_cot_theta_for_tension_shift(
-        self, M_Ed: float, N_Ed: float, V_Ed: float
+        self,
+        M_Ed: float,
+        N_Ed: float,
+        V_Ed: float,
+        use_v_rd_s_for_cot_theta: bool = False,
     ) -> float:
         """
         Compute cot(θ) from circular equivalent web width for use in
         the BendingCheck tension shift rule.
+
+        If use_v_rd_s_for_cot_theta=True, cot(θ) is determined from
+        rearranged Eq. 6.13 (V_Rd,s = V_Ed). Otherwise Eq. 6.14 / V_Rd,max
+        is used.
         """
         assert self._shear_check is not None
         assert self._concrete_uls is not None
@@ -1015,7 +1072,16 @@ class CircularSectionCheck(BaseModel):
         nu_1 = find_nu_1_factor(f_ck, 90.0)
         K = alpha_cw * b_w * z * nu_1 * f_cd
 
-        return find_cot_theta_for_V_Ed(
+        if use_v_rd_s_for_cot_theta and self.shear_reinforcement is not None:
+            return find_cot_theta_for_V_Ed_from_V_Rd_s(
+                V_Ed=abs(V_Ed),
+                A_sw_over_s=self.shear_reinforcement.area_per_unit_length,
+                z=z,
+                f_ywd=self._f_ywd_design,
+                link_angle_degrees=90.0,
+            )
+
+        return find_cot_theta_for_V_Ed_fromV_Rd_max(
             V_Ed=abs(V_Ed),  # already in kN; function converts internally
             K=K,
             link_angle_degrees=90.0,
@@ -1090,6 +1156,7 @@ class CircularSectionCheck(BaseModel):
         K: Optional[float] = None,
         f_ywd: Optional[float] = None,
         used_note_2: Optional[bool] = None,
+        cot_theta_from_v_rd_s: Optional[bool] = None,
         lambda_1: Optional[float] = None,
         lambda_2: Optional[float] = None,
         z_0: Optional[float] = None,
@@ -1123,6 +1190,7 @@ class CircularSectionCheck(BaseModel):
             "K": K,
             "f_ywd": f_ywd,
             "used_note_2": used_note_2,
+            "cot_theta_from_v_rd_s": cot_theta_from_v_rd_s,
         }
         # Circular-specific fields
         details["is_cracked"] = is_cracked

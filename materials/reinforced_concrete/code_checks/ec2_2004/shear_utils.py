@@ -5,7 +5,7 @@ Docstring for materials.reinforced_concrete.code_checks.ec2.shear_utils
 Utility functions for shear design checks according to Eurocode 2 (EC2).
 '''
 from dataclasses import dataclass
-from math import sqrt, isfinite, radians, copysign, tan
+from math import sqrt, isfinite, radians, copysign, tan, sin
 from typing import Optional, cast
 
 from shapely.geometry import MultiLineString, Point
@@ -62,6 +62,7 @@ def calculate_tension_shift(
     sigma_cp: float = 0.0,
     shear_reinforcement: Optional[ShearRebar] = None,
     cot_theta_override: Optional[float] = None,
+    use_v_rd_s_for_cot_theta: bool = False,
 ) -> TensionShiftResult:
     """
     Apply EC2 §9.2.1.3 tension shift rule to a bending moment.
@@ -102,6 +103,9 @@ def calculate_tension_shift(
                            shear_reinforcement, this value is used directly instead
                            of calculating cot(θ) from V_Ed and V_Rd,max. Is clamped
                            to be in the valid EC2 range [1.0, 2.5].
+        use_v_rd_s_for_cot_theta: If True, determine cot(θ) from rearranged EC2
+                            Eq. 6.13 (V_Rd,s = V_Ed). If False (default), determine
+                            cot(θ) from rearranged EC2 Eq. 6.14 / V_Rd,max.
 
     Returns:
         TensionShiftResult with shifted moment and calculation details.
@@ -158,17 +162,26 @@ def calculate_tension_shift(
             assert f_ck is not None
             assert b_w is not None
 
-            # Variable strut angle method (EC2 §6.2.3)
-            # K = α_cw · b_w · z · ν · f_cd
-            alpha_cw = find_alpha_cw(f_cd=f_cd, sigma_cp=sigma_cp)
-            nu = find_nu_factor(f_ck=f_ck)
-            K = alpha_cw * b_w * z * nu * f_cd  # in N
+            if use_v_rd_s_for_cot_theta:
+                cot_theta = find_cot_theta_for_V_Ed_from_V_Rd_s(
+                    V_Ed=V_Ed,
+                    A_sw_over_s=shear_reinforcement.area_per_unit_length,
+                    z=z,
+                    f_ywd=shear_reinforcement.f_yd,
+                    link_angle_degrees=shear_reinforcement.angle,
+                )
+            else:
+                # Variable strut angle method (EC2 §6.2.3)
+                # K = α_cw · b_w · z · ν · f_cd
+                alpha_cw = find_alpha_cw(f_cd=f_cd, sigma_cp=sigma_cp)
+                nu = find_nu_factor(f_ck=f_ck)
+                K = alpha_cw * b_w * z * nu * f_cd  # in N
 
-            cot_theta = find_cot_theta_for_V_Ed(
-                V_Ed=V_Ed,
-                K=K,
-                link_angle_degrees=shear_reinforcement.angle,
-            )
+                cot_theta = find_cot_theta_for_V_Ed_fromV_Rd_max(
+                    V_Ed=V_Ed,
+                    K=K,
+                    link_angle_degrees=shear_reinforcement.angle,
+                )
         # EC2 §9.2.1.3: a_l = z(cot θ - cot α)/2
         # where α is the stirrup angle (90° for vertical, typically 45° for inclined)
         alpha_rad = radians(float(shear_reinforcement.angle))
@@ -278,7 +291,7 @@ def calculate_section_breadth(
     return min_width
 
 
-def find_cot_theta_for_V_Ed(
+def find_cot_theta_for_V_Ed_fromV_Rd_max(
     V_Ed: float,
     K: float,  # product of: alpha_cw * b_w * z * nu_1 * f_cd
     link_angle_degrees: float = 90.0,
@@ -354,6 +367,56 @@ def find_cot_theta_for_V_Ed(
     cot_theta = clamp_cot_theta(cot_theta_calc, cot_min=cot_min, cot_max=cot_max)
 
     return cot_theta
+
+
+def find_cot_theta_for_V_Ed_from_V_Rd_s(
+    V_Ed: float,
+    A_sw_over_s: float,
+    z: float,
+    f_ywd: float,
+    link_angle_degrees: float = 90.0,
+    cot_min: float = 1.0,
+    cot_max: float = 2.5,
+) -> float:
+    """
+    Find cot(θ) from rearranged EC2 Eq. 6.13 using V_Rd,s = V_Ed.
+
+    Eq. 6.13:
+        V_Rd,s = (A_sw/s) * z * f_ywd * (cot(θ) + cot(α)) * sin(α)
+
+    Rearranged:
+        cot(θ) = V_Ed / [(A_sw/s) * z * f_ywd * sin(α)] - cot(α)
+
+    Args:
+        V_Ed: Design shear force in kN
+        A_sw_over_s: Shear reinforcement area per spacing (mm²/mm)
+        z: Lever arm in mm
+        f_ywd: Design yield strength of shear reinforcement in MPa
+        link_angle_degrees: Shear reinforcement angle α in degrees
+        cot_min: lower bound cotangent of angle of strut (default = 1.0)
+        cot_max: upper bound cotangent of angle of strut (default = 2.5)
+
+    Returns:
+        cot(θ) clamped to [cot_min, cot_max]
+    """
+    V_Ed_N = from_kn(abs(float(V_Ed)), ForceUnit.N)
+    A_sw_over_s = float(A_sw_over_s)
+    z = float(z)
+    f_ywd = float(f_ywd)
+
+    alpha_rad = radians(float(link_angle_degrees))
+    sin_alpha = 1.0 if abs(link_angle_degrees - 90.0) < 1e-9 else sin(alpha_rad)
+    cot_alpha = 0.0 if abs(link_angle_degrees - 90.0) < 1e-9 else cot(alpha_rad)
+
+    denominator = A_sw_over_s * z * f_ywd * sin_alpha
+    if denominator <= 0.0 or V_Ed_N <= 1e-9 or not isfinite(denominator):
+        return float(cot_min)
+
+    cot_theta_calc = (V_Ed_N / denominator) - cot_alpha
+    if not isfinite(cot_theta_calc):
+        return float(cot_min)
+
+    return clamp_cot_theta(cot_theta_calc, cot_min=cot_min, cot_max=cot_max)
 
 
 def clamp_cot_theta(

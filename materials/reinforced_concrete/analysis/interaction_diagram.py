@@ -2050,6 +2050,7 @@ class MNInteractionDiagram:
         M_cap: Optional[float] = None,
         shear_reinforcement: Optional["ShearRebar"] = None,
         cot_theta_override: Optional[float] = None,
+        use_v_rd_s_for_cot_theta: bool = False,
         iterate_z: bool = False,
         prefer_rigorous: bool = False,
         cap_to_09d: bool = True,
@@ -2074,6 +2075,9 @@ class MNInteractionDiagram:
                 with shear_reinforcement, this value is used directly instead of
                 calculating cot(θ) from V_Ed and V_Rd,max. Must be in the valid
                 EC2 range [1.0, 2.5]. Clamped if outside range.
+            use_v_rd_s_for_cot_theta: If True, determine cot(θ) from rearranged
+                EC2 Eq. 6.13 (V_Rd,s = V_Ed). If False (default), determine cot(θ)
+                from rearranged EC2 Eq. 6.14 / V_Rd,max.
             iterate_z: If True, iteratively recalculate z based on M_design until
                       convergence (0.5% tolerance, max 5 iterations). Only has an
                       effect when BOTH shear_reinforcement is provided (so a_l depends
@@ -2146,6 +2150,7 @@ class MNInteractionDiagram:
             sigma_cp=sigma_cp,
             shear_reinforcement=shear_reinforcement,
             cot_theta_override=cot_theta_override,
+            use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
         )
 
         # Iterate z if requested, shear reinforcement is provided, AND prefer_rigorous=True
@@ -2184,6 +2189,7 @@ class MNInteractionDiagram:
                             sigma_cp=sigma_cp,
                             shear_reinforcement=shear_reinforcement,
                             cot_theta_override=cot_theta_override,
+                            use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
                         )
                         break
 
@@ -2202,6 +2208,7 @@ class MNInteractionDiagram:
                     sigma_cp=sigma_cp,
                     shear_reinforcement=shear_reinforcement,
                     cot_theta_override=cot_theta_override,
+                    use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
                 )
 
         return shift_result

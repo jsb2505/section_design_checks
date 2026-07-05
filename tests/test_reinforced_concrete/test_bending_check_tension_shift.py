@@ -61,7 +61,18 @@ class DummyDiagram:
     def get_capacity_vector(self, *, N_Ed, M_Ed, return_details=False):
         return self.capacity
 
-    def apply_tension_shift(self, *, M_Ed, V_Ed, N_Ed, M_cap, shear_reinforcement, iterate_z=False, cot_theta_override=None):
+    def apply_tension_shift(
+        self,
+        *,
+        M_Ed,
+        V_Ed,
+        N_Ed,
+        M_cap,
+        shear_reinforcement,
+        iterate_z=False,
+        cot_theta_override=None,
+        use_v_rd_s_for_cot_theta=False,
+    ):
         """Stub for MNInteractionDiagram.apply_tension_shift."""
         from math import copysign
         from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
@@ -183,7 +194,11 @@ def patch_shear_utils(monkeypatch):
     monkeypatch.setattr(shear_utils, "calculate_section_breadth", lambda *, section: 300.0)
 
     # Default cot(theta)=2.0, can override per-test by monkeypatching again
-    monkeypatch.setattr(shear_utils, "find_cot_theta_for_V_Ed", lambda *, V_Ed, K, link_angle_degrees: 2.0)
+    monkeypatch.setattr(
+        shear_utils,
+        "find_cot_theta_for_V_Ed_fromV_Rd_max",
+        lambda *, V_Ed, K, link_angle_degrees: 2.0,
+    )
 
     return shear_utils
 

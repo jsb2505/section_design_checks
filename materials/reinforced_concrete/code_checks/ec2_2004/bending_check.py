@@ -190,6 +190,7 @@ class BendingCheck(BaseCodeCheck):
         M_cap: Optional[float] = None,
         shear_reinforcement: Optional[ShearRebar] = None,
         cot_theta_override: Optional[float] = None,
+        use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float = 0.95,
         ignore_compression_steel: bool = False,
         iterate_z: bool = False,
@@ -229,6 +230,9 @@ class BendingCheck(BaseCodeCheck):
             cot_theta_override: Optional user-supplied cot(θ) value. When provided
                 with shear_reinforcement, used directly instead of calculating from
                 V_Ed and V_Rd,max. Clamped to EC2 range [1.0, 2.5].
+            use_v_rd_s_for_cot_theta: If True, determine cot(θ) from rearranged
+                EC2 Eq. 6.13 (V_Rd,s = V_Ed). If False (default), determine cot(θ)
+                from rearranged EC2 Eq. 6.14 / V_Rd,max.
             warning_threshold: Utilization threshold for warnings (default 0.95)
             ignore_compression_steel: If True, steel in compression contributes zero force.
                                      This is a conservative option used by some commercial software.
@@ -252,6 +256,7 @@ class BendingCheck(BaseCodeCheck):
             M_cap=M_cap,
             shear_reinforcement=shear_reinforcement,
             cot_theta_override=cot_theta_override,
+            use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
             warning_threshold=warning_threshold,
             ignore_compression_steel=ignore_compression_steel,
             iterate_z=iterate_z,
@@ -267,6 +272,7 @@ class BendingCheck(BaseCodeCheck):
         M_cap: Optional[float],
         shear_reinforcement: Optional[ShearRebar],
         cot_theta_override: Optional[float] = None,
+        use_v_rd_s_for_cot_theta: bool = False,
         warning_threshold: float,
         ignore_compression_steel: bool = False,
         iterate_z: bool = False,
@@ -286,6 +292,7 @@ class BendingCheck(BaseCodeCheck):
                 M_cap=float(M_cap),
                 shear_reinforcement=shear_reinforcement,
                 cot_theta_override=cot_theta_override,
+                use_v_rd_s_for_cot_theta=use_v_rd_s_for_cot_theta,
                 iterate_z=iterate_z,
             )
             M_design = shift_result.M_design

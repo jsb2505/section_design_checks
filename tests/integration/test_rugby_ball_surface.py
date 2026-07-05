@@ -2,6 +2,8 @@
 Demonstrate the corrected biaxial M-M-N surface with proper rugby ball shape.
 """
 
+from pathlib import Path
+
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -179,7 +181,13 @@ plt.suptitle('Biaxial M-M-N Interaction Surface - Square Column 400x400, 4x20mm,
              'Generated using constant-N contour method',
              fontsize=13, fontweight='bold', y=0.995)
 plt.tight_layout()
-plt.savefig('rugby_ball_surface_final.png', dpi=150, bbox_inches='tight')
+
+project_root = Path(__file__).resolve().parents[2]
+output_dir = project_root / "output"
+output_dir.mkdir(parents=True, exist_ok=True)
+output_path = output_dir / "rugby_ball_surface_final.png"
+
+plt.savefig(output_path, dpi=150, bbox_inches='tight')
 plt.show()
 
 print("=" * 80)
@@ -192,4 +200,4 @@ print("  ✓ Nested elliptical contours at constant N")
 print("  ✓ Smooth variation of moments with load angle")
 print("  ✓ Symmetric for square section")
 print()
-print(f"Plot saved to: rugby_ball_surface_final.png")
+print(f"Plot saved to: {output_path}")
