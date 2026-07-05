@@ -185,6 +185,177 @@ class TestConcreteStressStrainParabolaRectangle:
         assert model_c30_design.get_yield_stress() == concrete_c30.f_cd
 
 
+class TestEC2ConfinedConcrete:
+    """Tests for EC2 §3.1.9 confined concrete in parabola-rectangle model."""
+
+    @pytest.fixture
+    def concrete_c30(self):
+        """C30/37 concrete material for confinement tests."""
+        from materials.reinforced_concrete.materials.concrete import ConcreteMaterial
+        return ConcreteMaterial(grade="C30/37")
+
+    def test_unconfined_default(self, concrete_c30):
+        """Test that model is unconfined by default."""
+        model = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30)
+        assert model.sigma_2 is None
+        assert model.is_ec2_confined is False
+
+    def test_sigma_2_zero_not_confined(self, concrete_c30):
+        """Test that sigma_2=0 is treated as unconfined."""
+        model = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, sigma_2=0.0)
+        assert model.is_ec2_confined is False
+        assert model.f_ck_c == concrete_c30.f_ck
+
+    def test_confined_strength_low_confinement(self, concrete_c30):
+        """Test confined strength for σ₂ ≤ 0.05·fck (Eq. 3.24)."""
+        # σ₂ = 1.0 MPa, which is < 0.05 * 30 = 1.5 MPa
+        sigma_2 = 1.0
+        model = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, sigma_2=sigma_2)
+
+        assert model.is_ec2_confined is True
+
+        # fck,c = fck(1.000 + 5.0·σ₂/fck) = 30 * (1 + 5*1/30) = 30 * 1.167 = 35.0
+        expected_f_ck_c = 30.0 * (1.0 + 5.0 * sigma_2 / 30.0)
+        assert model.f_ck_c == pytest.approx(expected_f_ck_c, rel=1e-6)
+
+    def test_confined_strength_high_confinement(self, concrete_c30):
+        """Test confined strength for σ₂ > 0.05·fck (Eq. 3.25)."""
+        # σ₂ = 3.0 MPa, which is > 0.05 * 30 = 1.5 MPa
+        sigma_2 = 3.0
+        model = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, sigma_2=sigma_2)
+
+        # fck,c = fck(1.125 + 2.5·σ₂/fck) = 30 * (1.125 + 2.5*3/30) = 30 * 1.375 = 41.25
+        expected_f_ck_c = 30.0 * (1.125 + 2.5 * sigma_2 / 30.0)
+        assert model.f_ck_c == pytest.approx(expected_f_ck_c, rel=1e-6)
+
+    def test_confined_strain_at_peak(self, concrete_c30):
+        """Test confined strain at peak per EC2 Eq. 3.26."""
+        sigma_2 = 2.0
+        model = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, sigma_2=sigma_2)
+
+        # εc2,c = εc2·(fck,c/fck)²
+        f_ck_c = model.f_ck_c
+        strength_ratio = f_ck_c / concrete_c30.f_ck
+        expected_eps_c2_c = concrete_c30.epsilon_c2 * (strength_ratio ** 2)
+        assert model.epsilon_c2_c == pytest.approx(expected_eps_c2_c, rel=1e-6)
+
+    def test_confined_ultimate_strain(self, concrete_c30):
+        """Test confined ultimate strain per EC2 Eq. 3.27."""
+        sigma_2 = 2.0
+        model = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, sigma_2=sigma_2)
+
+        # εcu2,c = εcu2 + 0.2·σ₂/fck
+        expected_eps_cu2_c = concrete_c30.epsilon_cu2 + 0.2 * sigma_2 / concrete_c30.f_ck
+        assert model.epsilon_cu2_c == pytest.approx(expected_eps_cu2_c, rel=1e-6)
+
+    def test_confined_design_strength(self, concrete_c30):
+        """Test that confined design strength uses design reduction factor."""
+        sigma_2 = 2.0
+        model = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, sigma_2=sigma_2)
+
+        # f_c = f_ck_c * alpha_cc / gamma_c
+        design_factor = concrete_c30.alpha_cc / concrete_c30.gamma_c
+        expected_f_c = model.f_ck_c * design_factor
+        assert model.f_c == pytest.approx(expected_f_c, rel=1e-6)
+
+    def test_confined_stress_higher_than_unconfined(self, concrete_c30):
+        """Test that confined concrete gives higher peak stress (f_c)."""
+        model_unconfined = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30)
+        model_confined = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, sigma_2=2.0)
+
+        # Confined concrete should have higher peak stress
+        assert model_confined.f_c > model_unconfined.f_c
+
+        # At their respective peak strains, both should reach their peak stress
+        stress_unconfined = model_unconfined.get_stress(model_unconfined.epsilon_c2_eff)
+        stress_confined = model_confined.get_stress(model_confined.epsilon_c2_eff)
+
+        assert stress_confined == pytest.approx(model_confined.f_c, rel=1e-6)
+        assert stress_unconfined == pytest.approx(model_unconfined.f_c, rel=1e-6)
+        assert stress_confined > stress_unconfined
+
+    def test_confined_ultimate_strain_higher(self, concrete_c30):
+        """Test that confined concrete has higher ultimate strain."""
+        model_unconfined = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30)
+        model_confined = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, sigma_2=2.0)
+
+        assert model_confined.get_ultimate_strain() > model_unconfined.get_ultimate_strain()
+
+    def test_effective_strain_properties(self, concrete_c30):
+        """Test that effective strain properties work correctly."""
+        sigma_2 = 2.0
+        model = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, sigma_2=sigma_2)
+
+        # Effective properties should equal confined values
+        assert model.epsilon_c2_eff == model.epsilon_c2_c
+        assert model.epsilon_cu2_eff == model.epsilon_cu2_c
+
+        # Unconfined model should use base values
+        model_unconf = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30)
+        assert model_unconf.epsilon_c2_eff == concrete_c30.epsilon_c2
+        assert model_unconf.epsilon_cu2_eff == concrete_c30.epsilon_cu2
+
+    def test_stress_array_confined(self, concrete_c30):
+        """Test vectorized stress calculation with confinement."""
+        model = ConcreteStressStrainParabolaRectangle(concrete=concrete_c30, sigma_2=2.0)
+
+        strains = np.linspace(0, model.epsilon_cu2_eff * 1.2, 50)
+        stresses = model.get_stress_array(strains)
+
+        # Basic sanity checks
+        assert stresses[0] == 0.0  # Zero strain
+        assert stresses[-1] == 0.0  # Beyond ultimate
+
+        # Max stress should be at or near f_c
+        assert np.max(stresses) == pytest.approx(model.f_c, rel=0.01)
+
+    def test_confined_with_use_characteristic(self, concrete_c30):
+        """Test that use_characteristic=True returns f_ck_c without reduction."""
+        sigma_2 = 2.0
+        model = ConcreteStressStrainParabolaRectangle(
+            concrete=concrete_c30, sigma_2=sigma_2, use_characteristic=True
+        )
+
+        # f_c should equal f_ck_c (no alpha_cc/gamma_c reduction)
+        assert model.f_c == pytest.approx(model.f_ck_c, rel=1e-6)
+        assert model.f_c > concrete_c30.f_ck  # Confined > unconfined
+
+    def test_confined_with_use_accidental(self, concrete_c30):
+        """Test that use_accidental=True uses gamma_c_accidental."""
+        sigma_2 = 2.0
+        model = ConcreteStressStrainParabolaRectangle(
+            concrete=concrete_c30, sigma_2=sigma_2, use_accidental=True
+        )
+
+        # f_c = f_ck_c * alpha_cc / gamma_c_accidental
+        accidental_factor = concrete_c30.alpha_cc / concrete_c30.gamma_c_accidental
+        expected_f_c = model.f_ck_c * accidental_factor
+        assert model.f_c == pytest.approx(expected_f_c, rel=1e-6)
+
+        # Accidental should be higher than normal design (lower gamma_c)
+        model_design = ConcreteStressStrainParabolaRectangle(
+            concrete=concrete_c30, sigma_2=sigma_2
+        )
+        assert model.f_c > model_design.f_c
+
+    def test_confined_strength_ordering(self, concrete_c30):
+        """Test that characteristic > accidental > design for confined concrete."""
+        sigma_2 = 2.0
+
+        model_char = ConcreteStressStrainParabolaRectangle(
+            concrete=concrete_c30, sigma_2=sigma_2, use_characteristic=True
+        )
+        model_acc = ConcreteStressStrainParabolaRectangle(
+            concrete=concrete_c30, sigma_2=sigma_2, use_accidental=True
+        )
+        model_des = ConcreteStressStrainParabolaRectangle(
+            concrete=concrete_c30, sigma_2=sigma_2
+        )
+
+        # Characteristic > Accidental > Design
+        assert model_char.f_c > model_acc.f_c > model_des.f_c
+
+
 class TestConcreteStressStrainBilinear:
     """Tests for ConcreteStressStrainBilinear class."""
 

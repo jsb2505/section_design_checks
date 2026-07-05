@@ -482,24 +482,36 @@ class StressStrainViewer:
     def _add_stress_subplot(self, fig: Any, go: Any, s: _StressStrainPlotState) -> None:
         # Concrete stress profile polygon + hover markers
         if np.any(s.conc_mask):
-            y_conc = s.y_mm[s.conc_mask]
-            idx = np.argsort(y_conc)
-            conc_y_sorted = y_conc[idx]
-            conc_stress_sorted = s.stresses_MPa[s.conc_mask][idx]
-            conc_strain_sorted = s.strains[s.conc_mask][idx]
+            # Use interpolated profile for smooth stress block visualization
+            # This gives much better resolution in compression zones which are typically
+            # only 20-30% of section depth but contain the important stress block shape
+            interp_y, interp_strains, interp_stresses = self._interpolate_concrete_stress_profile(s, n_points=100)
 
-            stress_polygon_x = np.concatenate([[0.0], conc_stress_sorted, [0.0]])
-            stress_polygon_y = np.concatenate([[conc_y_sorted[0]], conc_y_sorted, [conc_y_sorted[-1]]])
+            # Build polygon: start at zero, trace up the stress curve, back to zero
+            stress_polygon_x = np.concatenate([[0.0], interp_stresses, [0.0]])
+            stress_polygon_y = np.concatenate([[interp_y[0]], interp_y, [interp_y[-1]]])
+
+            # Use red/pink when section fails, gray otherwise
+            if s.section_failed:
+                stress_line_color = "darkred"
+                stress_fill_color = "rgba(255, 100, 100, 0.3)"
+                stress_marker_color = "darkred"
+                stress_name = "Concrete σ (FAILED)"
+            else:
+                stress_line_color = "gray"
+                stress_fill_color = "rgba(128, 128, 128, 0.3)"
+                stress_marker_color = "gray"
+                stress_name = "Concrete σ"
 
             fig.add_trace(
                 go.Scatter(
                     x=stress_polygon_x,
                     y=stress_polygon_y,
                     mode="lines",
-                    line=dict(color="gray", width=2),
+                    line=dict(color=stress_line_color, width=2),
                     fill="toself",
-                    fillcolor="rgba(128, 128, 128, 0.3)",
-                    name="Concrete σ",
+                    fillcolor=stress_fill_color,
+                    name=stress_name,
                     hoverinfo="skip",
                     legendgroup="concrete_stress",
                 ),
@@ -507,19 +519,20 @@ class StressStrainViewer:
                 col=3,
             )
 
+            # Add hover markers using interpolated points for smooth hover experience
             hover_texts = [
-                f"σ: {conc_stress_sorted[i]:.2f} MPa<br>"
-                f"ε: {conc_strain_sorted[i]*1000:.3f} ‰<br>"
-                f"y: {conc_y_sorted[i]:.1f} mm"
-                for i in range(len(conc_stress_sorted))
+                f"σ: {interp_stresses[i]:.2f} MPa<br>"
+                f"ε: {interp_strains[i]*1000:.3f} ‰<br>"
+                f"y: {interp_y[i]:.1f} mm"
+                for i in range(len(interp_stresses))
             ]
 
             fig.add_trace(
                 go.Scatter(
-                    x=conc_stress_sorted,
-                    y=conc_y_sorted,
+                    x=interp_stresses,
+                    y=interp_y,
                     mode="markers",
-                    marker=dict(size=4, color="gray", opacity=0.5),
+                    marker=dict(size=3, color=stress_marker_color, opacity=0.3),
                     text=hover_texts,
                     hovertemplate="%{text}<extra>Concrete</extra>",
                     showlegend=False,
@@ -530,10 +543,10 @@ class StressStrainViewer:
             )
 
         # Resultant arrows
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F_c,comp", F_kN=s.F_c_comp, y=s.y_c_comp, force_scale=s.force_scale, line_color="red", tip_symbol="triangle-right", extra="Concrete Compression")
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F_c,tens", F_kN=s.F_c_tens, y=s.y_c_tens, force_scale=s.force_scale, line_color="blue", tip_symbol="triangle-left", extra="Concrete Tension")
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F_s,comp", F_kN=s.F_s_comp, y=s.y_s_comp, force_scale=s.force_scale, line_color="darkorange", tip_symbol="triangle-right", extra="Steel Compression")
-        self._add_resultant_arrow(fig, go, row=1, col=3, name="F_s,tens", F_kN=s.F_s_tens, y=s.y_s_tens, force_scale=s.force_scale, line_color="green", tip_symbol="triangle-left", extra="Steel Tension")
+        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>cc</sub>", F_kN=s.F_c_comp, y=s.y_c_comp, force_scale=s.force_scale, line_color="red", tip_symbol="triangle-right", extra="Concrete Compression")
+        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>ct</sub>", F_kN=s.F_c_tens, y=s.y_c_tens, force_scale=s.force_scale, line_color="blue", tip_symbol="triangle-left", extra="Concrete Tension")
+        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>sc</sub>", F_kN=s.F_s_comp, y=s.y_s_comp, force_scale=s.force_scale, line_color="darkorange", tip_symbol="triangle-right", extra="Steel Compression")
+        self._add_resultant_arrow(fig, go, row=1, col=3, name="F<sub>st</sub>", F_kN=s.F_s_tens, y=s.y_s_tens, force_scale=s.force_scale, line_color="green", tip_symbol="triangle-left", extra="Steel Tension")
 
         # Zero stress line
         fig.add_trace(
@@ -651,20 +664,26 @@ class StressStrainViewer:
         height: int,
     ) -> None:
         if title is None:
-            title = f"Stress-Strain Distribution: M_Ed = {s.M_Ed:.1f} kN·m, N_Ed = {s.N_Ed:.1f} kN"
+            title = f"Stress-Strain Distribution: M<sub>Ed</sub> = {s.M_Ed:.1f} kN·m, N<sub>Ed</sub> = {s.N_Ed:.1f} kN"
             if s.section_failed:
                 title += " <span style='color:red'>(SECTION FAILS)</span>"
+
+        # Adjust annotation position based on whether we have failure warning text
+        annotation_y = -0.38 if s.section_failed else -0.30
 
         fig.add_annotation(
             xref="paper",
             yref="paper",
             x=0.5,
-            y=-0.25,
+            y=annotation_y,
             text=self._build_annotation_text(s),
             showarrow=False,
             font=dict(size=10),
             align="center",
         )
+
+        # Increase bottom margin when section fails to accommodate warning text
+        bottom_margin = 240 if s.section_failed else 200
 
         fig.update_layout(
             title=dict(text=title, x=0.5),
@@ -672,7 +691,7 @@ class StressStrainViewer:
             height=height,
             showlegend=True,
             legend=dict(x=1.02, y=1),
-            margin=dict(l=60, r=120, t=80, b=180),
+            margin=dict(l=60, r=120, t=80, b=bottom_margin),
         )
 
         # ---- y-axes: match scale across all three ----
@@ -877,6 +896,42 @@ class StressStrainViewer:
         na_in_section = (y_bottom <= y_na <= y_top)
         return float(y_na), bool(na_in_section)
 
+    def _interpolate_concrete_stress_profile(
+        self,
+        s: _StressStrainPlotState,
+        n_points: int = 100,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Generate a smooth concrete stress profile by interpolating across section height.
+
+        The fibre mesh may have sparse points in the compression zone (e.g., only 6-9 points
+        if compression is 20-30% of section depth with 30 fibres total). This method generates
+        a dense set of points for smoother visualization.
+
+        Args:
+            s: Plot state containing strain endpoints and section geometry
+            n_points: Number of interpolation points across section height
+
+        Returns:
+            (y_coords, strains, stresses): Arrays of y-coordinates, strains, and stresses (MPa)
+        """
+        # Generate dense y-coordinates across section height
+        y_coords = np.linspace(s.y_bottom, s.y_top, n_points)
+
+        # Compute strain at each y using linear interpolation
+        # strain(y) = eps_bottom + (eps_top - eps_bottom) * (y - y_bottom) / h
+        h = s.h
+        if h > 0:
+            strains = s.eps_bottom + (s.eps_top - s.eps_bottom) * (y_coords - s.y_bottom) / h
+        else:
+            strains = np.full_like(y_coords, s.eps_bottom)
+
+        # Compute stress using the concrete model
+        # Note: concrete model expects compression-positive strains
+        stresses = self.diagram.concrete_model.get_stress_array(strains)
+
+        return y_coords, strains, stresses
+
     def _get_outline_xy(self) -> Tuple[list[float], list[float]]:
         """
         Return section outline x/y suitable for Plotly.
@@ -991,8 +1046,8 @@ class StressStrainViewer:
             )
 
         txt += (
-            f"<b>Load Case:</b> M = {s.M_Ed:.1f} kN·m, N = {s.N_Ed:.1f} kN<br>"
-            f"<b>Strains:</b> ε_top = {s.eps_top*1000:.3f}‰, ε_bot = {s.eps_bottom*1000:.3f}‰<br>"
+            f"<b>Load Case:</b> M<sub>Ed</sub> = {s.M_Ed:.1f} kN·m, N<sub>Ed</sub> = {s.N_Ed:.1f} kN<br>"
+            f"<b>Strains:</b> ε<sub>top</sub> = {s.eps_top*1000:.3f}‰, ε<sub>bot</sub> = {s.eps_bottom*1000:.3f}‰<br>"
         )
         if s.y_na is not None:
             txt += f"<b>Neutral Axis:</b> y = {s.y_na:.1f} mm"
@@ -1004,18 +1059,18 @@ class StressStrainViewer:
 
         parts = []
         if abs(s.F_c_comp) > 0.001:
-            parts.append(f"F_c,comp = {s.F_c_comp:.1f} kN")
+            parts.append(f"F<sub>cc</sub> = {s.F_c_comp:.1f} kN")
         if abs(s.F_c_tens) > 0.001:
-            parts.append(f"F_c,tens = {s.F_c_tens:.1f} kN")
+            parts.append(f"F<sub>ct</sub> = {s.F_c_tens:.1f} kN")
         if abs(s.F_s_comp) > 0.001:
-            parts.append(f"F_s,comp = {s.F_s_comp:.1f} kN")
+            parts.append(f"F<sub>sc</sub> = {s.F_s_comp:.1f} kN")
         if abs(s.F_s_tens) > 0.001:
-            parts.append(f"F_s,tens = {s.F_s_tens:.1f} kN")
+            parts.append(f"F<sub>st</sub> = {s.F_s_tens:.1f} kN")
 
         txt += "<b>Resultants:</b> " + (", ".join(parts) if parts else "No forces")
 
         F_total = s.F_c_comp + s.F_c_tens + s.F_s_comp + s.F_s_tens
-        txt += f"<br><b>ΣF = {F_total:.1f} kN</b> (≈ N_Ed = {s.N_Ed:.1f} kN)"
+        txt += f"<br><b>ΣF = {F_total:.1f} kN</b> (≈ N<sub>Ed</sub> = {s.N_Ed:.1f} kN)"
 
         # Show equilibrium error if section failed
         if s.section_failed:

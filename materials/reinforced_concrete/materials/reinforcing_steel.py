@@ -17,7 +17,7 @@ DuctilityClass = Literal["A", "B", "C"]
 # Steel grades according to EC2 §C.1 (single source of truth)
 class ReinforcingSteelGrade(StrEnum):
     '''
-    Reinforcing steel grades supported as per ECC2.
+    Reinforcing steel grades supported as per EC2.
 
     Attributes:
         B500A

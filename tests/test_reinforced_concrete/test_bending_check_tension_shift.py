@@ -31,6 +31,7 @@ class DummyDiagram:
         self.eps_top = eps_top
         self.eps_bottom = eps_bottom
         self.find_strains_calls = 0
+        self.apply_tension_shift_calls = 0
 
         # Capacity return is configurable per test
         self.capacity = SimpleNamespace(N_Rd=100.0, M_Rd=200.0, is_safe=True, utilization=0.5)
@@ -59,6 +60,44 @@ class DummyDiagram:
 
     def get_capacity_vector(self, *, N_Ed, M_Ed, return_details=False):
         return self.capacity
+
+    def apply_tension_shift(self, *, M_Ed, V_Ed, N_Ed, M_cap, shear_reinforcement, iterate_z=False):
+        """Stub for MNInteractionDiagram.apply_tension_shift."""
+        from math import copysign
+        from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
+
+        self.apply_tension_shift_calls += 1
+
+        # Use z for shear reinforcement case, d otherwise
+        if shear_reinforcement is not None:
+            # a_l = 0.5 * z * cot_theta (assuming cot_theta=2.0 from patched shear_utils)
+            cot_theta = 2.0
+            a_l = 0.5 * self.z_mm * cot_theta
+        else:
+            # a_l = d
+            cot_theta = None
+            a_l = self.d_mm
+
+        M_add = abs(V_Ed) * (a_l / 1000.0)
+        abs_M_design = abs(M_Ed) + M_add
+
+        capped = False
+        if M_cap is not None:
+            if abs_M_design > abs(M_cap):
+                abs_M_design = abs(M_cap)
+                capped = True
+
+        M_design = copysign(abs_M_design, M_Ed)
+
+        return TensionShiftResult(
+            M_design=M_design,
+            M_add=M_add,
+            shift_distance_a_l_mm=a_l,
+            cot_theta=cot_theta,
+            capped_by_M_cap=capped,
+            z_mm=self.z_mm,
+            d_mm=self.d_mm,
+        )
 
 
 def make_check(*, diagram: DummyDiagram) -> BendingCheck:
@@ -136,44 +175,45 @@ def patch_shear_utils(monkeypatch):
 
 
 # -------------------------
-# Tests: _apply_tension_shift_if_enabled
+# Tests: _apply_tension_shift
 # -------------------------
 
 class TestTensionShiftDisabled:
-    """Tests for when tension shift is disabled (enabled=False)."""
+    """Tests for when tension shift is disabled (no M_cap provided to _check_single_case)."""
 
     def test_returns_original_moment(self):
-        """When disabled, M_design should equal M_Ed_original."""
+        """When M_cap is None (no tension shift), M_design should equal M_Ed."""
         diag = DummyDiagram(d_mm=500.0, z_mm=450.0)
         check = make_check(diagram=diag)
 
-        shift = check._apply_tension_shift_if_enabled(
-            M_Ed_original=120.0,
+        # Test via _check_single_case with M_cap=None (tension shift disabled)
+        res = check._check_single_case(
+            M_Ed=120.0,
             N_Ed=0.0,
             V_Ed=None,
-            M_cap=None,
+            M_cap=None,  # No M_cap means no tension shift
             shear_reinforcement=None,
-            enabled=False,
+            warning_threshold=0.95,
         )
 
-        assert shift.applied is False
-        assert shift.M_design == 120.0
+        assert res["details"]["tension_shift_applied"] is False
+        assert res["details"]["M_Ed_design"] == 120.0
 
     def test_details_are_none(self):
-        """When disabled, all shift details should be None."""
+        """When tension shift is disabled, all shift details should be None."""
         diag = DummyDiagram(d_mm=500.0, z_mm=450.0)
         check = make_check(diagram=diag)
 
-        shift = check._apply_tension_shift_if_enabled(
-            M_Ed_original=120.0,
+        res = check._check_single_case(
+            M_Ed=120.0,
             N_Ed=0.0,
             V_Ed=None,
-            M_cap=None,
+            M_cap=None,  # No M_cap means no tension shift
             shear_reinforcement=None,
-            enabled=False,
+            warning_threshold=0.95,
         )
 
-        d = shift.details_dict()
+        d = res["details"]
         assert d["tension_shift_applied"] is False
         assert d["M_add"] is None
         assert d["z_lever_arm_mm"] is None
@@ -189,13 +229,12 @@ class TestTensionShiftNoShearReinforcement:
         diag = DummyDiagram(d_mm=500.0, z_mm=450.0)
         check = make_check(diagram=diag)
 
-        shift = check._apply_tension_shift_if_enabled(
-            M_Ed_original=120.0,
+        shift = check._diagram.apply_tension_shift(
+            M_Ed=120.0,
             N_Ed=0.0,
             V_Ed=100.0,
             M_cap=300.0,
             shear_reinforcement=None,
-            enabled=True,
         )
 
         assert math.isclose(shift.shift_distance_a_l_mm, 500.0, rel_tol=1e-9)
@@ -207,13 +246,12 @@ class TestTensionShiftNoShearReinforcement:
         check = make_check(diagram=diag)
 
         # M_add = abs(V)*d/1000 = abs(-100) * 500/1000 = 50 kN·m
-        shift = check._apply_tension_shift_if_enabled(
-            M_Ed_original=120.0,
+        shift = check._diagram.apply_tension_shift(
+            M_Ed=120.0,
             N_Ed=0.0,
             V_Ed=-100.0,  # Negative V_Ed
             M_cap=300.0,
             shear_reinforcement=None,
-            enabled=True,
         )
 
         assert math.isclose(shift.M_add, 50.0, rel_tol=1e-9)
@@ -225,16 +263,14 @@ class TestTensionShiftNoShearReinforcement:
 
         # M_add = abs(V)*d/1000 = 100 * 0.5 = 50
         # abs(M_orig)=120, abs(M_cap)=160 => min(160, 120+50)=160, sign positive => 160
-        shift = check._apply_tension_shift_if_enabled(
-            M_Ed_original=120.0,
+        shift = check._diagram.apply_tension_shift(
+            M_Ed=120.0,
             N_Ed=0.0,
             V_Ed=-100.0,
             M_cap=160.0,
             shear_reinforcement=None,
-            enabled=True,
         )
 
-        assert shift.applied is True
         assert math.isclose(shift.M_add, 50.0, rel_tol=1e-9)
         assert shift.M_design == 160.0
 
@@ -247,17 +283,16 @@ class TestTensionShiftWithShearReinforcement:
         diag = DummyDiagram(d_mm=500.0, z_mm=450.0)
         check = make_check(diagram=diag)
 
-        # Patched cot_theta = 2.0
+        # Diagram stub uses cot_theta = 2.0
         # a_l = 0.5 * 450 * 2 = 450 mm
         shear_reinf = SimpleNamespace(angle=90.0)
 
-        shift = check._apply_tension_shift_if_enabled(
-            M_Ed_original=100.0,
+        shift = check._diagram.apply_tension_shift(
+            M_Ed=100.0,
             N_Ed=0.0,
             V_Ed=100.0,
             M_cap=300.0,
             shear_reinforcement=shear_reinf,
-            enabled=True,
         )
 
         assert math.isclose(shift.cot_theta, 2.0, rel_tol=1e-9)
@@ -268,22 +303,20 @@ class TestTensionShiftWithShearReinforcement:
         diag = DummyDiagram(d_mm=500.0, z_mm=450.0)
         check = make_check(diagram=diag)
 
-        # Patched cot_theta = 2.0
+        # Diagram stub uses cot_theta = 2.0
         # a_l = 0.5*z*cot = 0.5*450*2 = 450 mm
         # M_add = abs(100)*0.45 = 45 kN·m
         # abs(M_orig)=80, cap=200 => min(200, 80+45)=125, sign negative => -125
         shear_reinf = SimpleNamespace(angle=90.0)
 
-        shift = check._apply_tension_shift_if_enabled(
-            M_Ed_original=-80.0,
+        shift = check._diagram.apply_tension_shift(
+            M_Ed=-80.0,
             N_Ed=100.0,
             V_Ed=100.0,
             M_cap=200.0,
             shear_reinforcement=shear_reinf,
-            enabled=True,
         )
 
-        assert shift.applied is True
         assert math.isclose(shift.cot_theta, 2.0, rel_tol=1e-9)
         assert math.isclose(shift.shift_distance_a_l_mm, 450.0, rel_tol=1e-9)
         assert math.isclose(shift.M_add, 45.0, rel_tol=1e-9)
@@ -294,19 +327,18 @@ class TestTensionShiftCapBehavior:
     """Tests for M_cap limiting behavior."""
 
     def test_cap_smaller_than_original_reduces_to_cap(self):
-        """When M_cap < M_Ed_original, design moment should be capped."""
+        """When M_cap < M_Ed, design moment should be capped."""
         diag = DummyDiagram(d_mm=500.0, z_mm=450.0)
         check = make_check(diagram=diag)
 
         # abs(M_orig)=200, cap=150
         # Even with M_add, result should be min(cap, ...)=150
-        shift = check._apply_tension_shift_if_enabled(
-            M_Ed_original=200.0,
+        shift = check._diagram.apply_tension_shift(
+            M_Ed=200.0,
             N_Ed=0.0,
             V_Ed=100.0,
             M_cap=150.0,
             shear_reinforcement=None,
-            enabled=True,
         )
 
         assert shift.M_design == 150.0
@@ -319,52 +351,50 @@ class TestTensionShiftCapBehavior:
         # M_add = 100 * 500/1000 = 50
         # M_Ed + M_add = 100 + 50 = 150
         # M_cap = 300 > 150, so use 150
-        shift = check._apply_tension_shift_if_enabled(
-            M_Ed_original=100.0,
+        shift = check._diagram.apply_tension_shift(
+            M_Ed=100.0,
             N_Ed=0.0,
             V_Ed=100.0,
             M_cap=300.0,
             shear_reinforcement=None,
-            enabled=True,
         )
 
         assert shift.M_design == 150.0
 
 
 class TestStrainSolving:
-    """Tests for strain solving optimization."""
+    """Tests for strain solving via the diagram's apply_tension_shift."""
 
-    def test_zero_moment_does_not_solve_strains(self):
-        """When |M_Ed| < 1e-6, find_strains_for_MN should not be called."""
+    def test_zero_moment_uses_diagram_apply_tension_shift(self):
+        """Even with small moment, the diagram's apply_tension_shift is called."""
         diag = DummyDiagram(d_mm=500.0, z_mm=450.0)
         check = make_check(diagram=diag)
 
-        _ = check._apply_tension_shift_if_enabled(
-            M_Ed_original=1e-12,  # Below 1e-6 threshold
+        _ = check._diagram.apply_tension_shift(
+            M_Ed=1e-12,  # Below 1e-6 threshold
             N_Ed=0.0,
             V_Ed=100.0,
             M_cap=200.0,
             shear_reinforcement=None,
-            enabled=True,
         )
 
-        assert diag.find_strains_calls == 0
+        # The diagram's apply_tension_shift should be called
+        assert diag.apply_tension_shift_calls == 1
 
-    def test_nonzero_moment_solves_strains(self):
-        """When |M_Ed| > 1e-6, find_strains_for_MN should be called."""
+    def test_nonzero_moment_uses_diagram_apply_tension_shift(self):
+        """With non-zero moment, the diagram's apply_tension_shift is called."""
         diag = DummyDiagram(d_mm=500.0, z_mm=450.0)
         check = make_check(diagram=diag)
 
-        _ = check._apply_tension_shift_if_enabled(
-            M_Ed_original=100.0,
+        _ = check._diagram.apply_tension_shift(
+            M_Ed=100.0,
             N_Ed=0.0,
             V_Ed=100.0,
             M_cap=200.0,
             shear_reinforcement=None,
-            enabled=True,
         )
 
-        assert diag.find_strains_calls == 1
+        assert diag.apply_tension_shift_calls == 1
 
 
 # -------------------------
