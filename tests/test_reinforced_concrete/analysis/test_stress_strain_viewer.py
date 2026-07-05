@@ -71,6 +71,14 @@ class _FakeDiagram:
         return _CapacityResult(M_Rd=120.0, N_Rd=N_Ed, utilization=0.8)
 
 
+class _FakeDiagramWithConcreteOptions(_FakeDiagram):
+    def _concrete_stress_with_options(self, strains: np.ndarray) -> np.ndarray:
+        # Deliberately different from concrete_model.get_stress_array to verify
+        # viewer uses option-aware path.
+        arr = np.asarray(strains, dtype=float)
+        return np.where(arr < 0.0, 0.0, 2000.0 * arr)
+
+
 class _FakeFigure:
     def __init__(self):
         self.traces = []
@@ -346,6 +354,13 @@ class TestStressStrainViewerHelpers:
         _, strains2, _ = viewer._interpolate_concrete_stress_profile(s_zero_h, n_points=3)
         assert np.all(strains2 == pytest.approx(0.001, rel=1e-12))
 
+    def test_interpolate_concrete_stress_profile_prefers_option_aware_path(self):
+        """Interpolation should use diagram option-aware concrete stress when available."""
+        viewer = StressStrainViewer(_FakeDiagramWithConcreteOptions())
+        s = _make_state()
+        _, strains, stresses = viewer._interpolate_concrete_stress_profile(s, n_points=5)
+        assert np.allclose(stresses, np.where(strains < 0.0, 0.0, 2000.0 * strains))
+
     def test_outline_and_section_horizontal_segments(self):
         """Test outline and section horizontal segments."""
         viewer = StressStrainViewer(_FakeDiagram())
@@ -445,6 +460,19 @@ class TestStressStrainViewerHelpers:
         s_bad_bbox = _make_state(bbox=(0.0, 0.0, 0.0, 500.0))
         viewer._add_concrete_filled_field(fig4, _FakeGo, s_bad_bbox, row=1, col=1)
         assert len(fig4.traces) == 0
+
+    def test_add_concrete_filled_field_uses_option_aware_concrete_stress(self):
+        """Filled field should use diagram option-aware concrete stress when available."""
+        viewer = StressStrainViewer(_FakeDiagramWithConcreteOptions())
+        fig = _FakeFigure()
+        s = _make_state()
+        viewer._add_concrete_filled_field(fig, _FakeGo, s, row=1, col=1)
+        assert len(fig.traces) == 1
+        contour = fig.traces[0][0]
+        z = np.asarray(contour["z"], dtype=float)
+        finite = np.isfinite(z)
+        assert np.any(finite)
+        assert np.all(z[finite] >= 0.0)
 
     def test_add_subplots_and_layout_methods(self):
         """Test add subplots and layout methods."""

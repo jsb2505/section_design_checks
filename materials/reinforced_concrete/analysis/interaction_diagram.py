@@ -60,6 +60,7 @@ from materials.utils.helpers import as_float
 from materials.reinforced_concrete.constitutive import (
     create_concrete_stress_strain,
     create_steel_stress_strain,
+    ConcreteStressStrainLinearElastic,
     SteelModelType,
     ConcreteModelType,
 )
@@ -185,6 +186,7 @@ class MNInteractionDiagram:
         ignore_compression_steel: bool = False,
         elastic_modulus: Optional[float] = None,
         include_tension: bool = False,
+        crack_to_neutral_axis_on_first_tension_failure: bool = False,
         concrete_model_override: Optional[Any] = None,
         steel_models_override: Optional[List[Any]] = None,
     ):
@@ -197,6 +199,9 @@ class MNInteractionDiagram:
         self.confinement_rho_s = confinement_rho_s
         self.elastic_modulus = elastic_modulus
         self.include_tension = include_tension
+        self.crack_to_neutral_axis_on_first_tension_failure = (
+            crack_to_neutral_axis_on_first_tension_failure
+        )
 
         # IMPORTANT: treat confinement_f_yh as CHARACTERISTIC if provided.
         # If None, default to the first longitudinal group's characteristic yield strength.
@@ -301,7 +306,7 @@ class MNInteractionDiagram:
         self._dense_diagram_n: int = 0
         self._diagram_points_cache: dict[int, tuple[InteractionPoint, ...]] = {}
 
-        # Strain-solve result cache keyed by (M_target, N_target, strict).
+        # Strain-solve result cache keyed by (M_target, N_target, strict, state signature).
         # Naturally invalidated when this diagram instance is rebuilt (new object created).
         # Not keyed on tol/initial_guess — tol is always the default in practice,
         # and initial_guess is an optimizer hint that should not alter the final result.
@@ -439,6 +444,15 @@ class MNInteractionDiagram:
                 )
                 concrete_stresses[ten_mask] = sigma_t
 
+        # ---------------------------------------------------------------
+        # Optional policy: once extreme tension fibre cracks, force the
+        # full tension zone (strain < 0) to carry zero concrete stress.
+        # ---------------------------------------------------------------
+        if self._should_force_cracked_tension_zone(concrete_strains):
+            strains_real = np.real(concrete_strains)
+            ten_mask = strains_real < 0.0
+            concrete_stresses[ten_mask] = 0.0
+
         return concrete_stresses
 
     def _concrete_tangent_modulus_with_options(
@@ -495,10 +509,46 @@ class MNInteractionDiagram:
                 )
                 E_t[ten_mask] = E_t_tension
 
+        # Keep tangent-modulus logic consistent with the forward stress model for the
+        # optional "crack to NA on first tension failure" policy.
+        if self._should_force_cracked_tension_zone(concrete_strains):
+            strains_real = np.real(concrete_strains)
+            ten_mask = strains_real < 0.0
+            E_t[ten_mask] = 0.0
+
         # Note: Confined concrete tangent modulus would go here if implemented
         # For now, confined concrete uses numerical Jacobian (see Jacobian selection logic)
 
         return E_t
+
+    def _should_force_cracked_tension_zone(
+        self,
+        concrete_strains: npt.NDArray[np.float64],
+    ) -> bool:
+        """
+        Return True when the optional "crack to NA" rule should be applied.
+
+        Rule:
+        - Only for LINEAR_ELASTIC concrete with include_tension=True
+        - Only when tension_stiffening is disabled
+        - Triggered when any tensile concrete fibre exceeds the cracking strain
+        """
+        if not self.crack_to_neutral_axis_on_first_tension_failure:
+            return False
+        if self.tension_stiffening:
+            return False
+        if not isinstance(self.concrete_model, ConcreteStressStrainLinearElastic):
+            return False
+        if not bool(getattr(self.concrete_model, "include_tension", False)):
+            return False
+
+        strains_real = np.real(concrete_strains)
+        ten_mask = strains_real < 0.0
+        if not np.any(ten_mask):
+            return False
+
+        cracking_strain = float(self.concrete_model.cracking_strain)
+        return bool(np.min(strains_real[ten_mask]) < cracking_strain)
 
 
     def _strain_field_from_end_strains(
@@ -954,6 +1004,23 @@ class MNInteractionDiagram:
         eps_y_max = max(float(sm.epsilon_y) for sm in self.steel_models)
         return float(max(10.0 * eps_y_max, 0.01))
 
+    def _strain_cache_state_key(self) -> tuple[Any, ...]:
+        """
+        State signature for inverse-solver cache validity.
+
+        If these values change on an existing diagram instance (for example in a
+        notebook session), cached strain solutions must not be reused.
+        """
+        return (
+            id(self.concrete_model),
+            tuple(id(sm) for sm in self.steel_models),
+            bool(self.tension_stiffening),
+            bool(self.confined_concrete),
+            bool(self.ignore_compression_steel),
+            bool(getattr(self.concrete_model, "include_tension", False)),
+            bool(self.crack_to_neutral_axis_on_first_tension_failure),
+        )
+
 
     # -----------------------------------------
     # Inverse solver (M, N) → (ε_top, ε_bottom)
@@ -998,8 +1065,9 @@ class MNInteractionDiagram:
             - Typical solve time: 10-50ms per unique (M,N) point
             - Hard points (e.g. near cracking transitions) may run extra fallback
               attempts with alternative starting points and Jacobians
-            - Results are cached by (M_target, N_target, strict) per diagram instance.
-              Repeated calls with the same load case return immediately from cache.
+            - Results are cached by (M_target, N_target, strict, state signature)
+              per diagram instance. Repeated calls with the same load case and
+              state return immediately from cache.
 
         Examples:
             >>> diagram = MNInteractionDiagram(section, concrete)
@@ -1008,7 +1076,7 @@ class MNInteractionDiagram:
             >>> assert abs(point.M - 50.0) < 1e-3
             >>> assert abs(point.N - 100.0) < 1e-3
         """
-        _cache_key = (M_target, N_target, strict)
+        _cache_key = (M_target, N_target, strict, self._strain_cache_state_key())
         _cached = self._strain_cache.get(_cache_key)
         if _cached is not None:
             return _cached
@@ -1038,11 +1106,20 @@ class MNInteractionDiagram:
         # Tension stiffening: NOW SUPPORTED via _concrete_tangent_modulus_with_options
         # Confined concrete: NOT SUPPORTED - requires complex Mander derivative
         #                    (see docs/ANALYTICAL_JACOBIAN_ENHANCEMENTS.md)
+        # crack_to_NA + linear-elastic tension: NOT SUPPORTED - the global predicate
+        #   _should_force_cracked_tension_zone couples all tension fibres; the per-fibre
+        #   analytical Jacobian cannot represent this (one fibre crossing the cracking
+        #   strain changes the stress at every tension fibre simultaneously).
+        _crack_to_na_active = (
+            self.crack_to_neutral_axis_on_first_tension_failure
+            and isinstance(self.concrete_model, ConcreteStressStrainLinearElastic)
+            and bool(getattr(self.concrete_model, "include_tension", False))
+        )
+
         jac_method: Union[Callable[[npt.NDArray], npt.NDArray], str]
-        if self.confined_concrete:
-            # Use numerical Jacobian for confined concrete (Mander model derivative not implemented)
+        if self.confined_concrete or _crack_to_na_active:
             jac_method = '2-point'
-            max_iterations = 200  # May need more iterations with numerical gradients
+            max_iterations = 200
         else:
             # Use analytical Jacobian for plain concrete + tension stiffening (3-10x faster)
             def analytical_jacobian(eps_pair: npt.NDArray) -> npt.NDArray:
@@ -1082,9 +1159,11 @@ class MNInteractionDiagram:
         def solve_from_guess(
             guess: Tuple[float, float],
             jac: Union[Callable[[npt.NDArray], npt.NDArray], str],
+            max_nfev: Optional[int] = None,
         ) -> Any:
             # Analytical Jacobian: exact derivatives, 5-10 iterations typical
             # Numerical Jacobian: finite difference, 30-50 iterations typical
+            _max = max_nfev if max_nfev is not None else max_iterations
             x0 = np.asarray(clamp_guess(guess), dtype=float)
             try:
                 return least_squares(
@@ -1095,7 +1174,7 @@ class MNInteractionDiagram:
                     ftol=tol,
                     xtol=tol,
                     gtol=tol,
-                    max_nfev=max_iterations,
+                    max_nfev=_max,
                 )
             except ValueError as exc:
                 # SciPy/Numpy compatibility issue observed under coverage:
@@ -1109,7 +1188,7 @@ class MNInteractionDiagram:
                     x0=x0,
                     Dfun=jacobian,
                     full_output=True,
-                    maxfev=max_iterations,
+                    maxfev=_max,
                 )
                 x_clamped = np.clip(np.asarray(x_out, dtype=float), lower_bounds, upper_bounds)
                 fun = np.asarray(residual(x_clamped), dtype=float)
@@ -1125,6 +1204,69 @@ class MNInteractionDiagram:
         # Build a compact set of branch-diverse candidate guesses. Keep the
         # existing heuristic as first choice, then add conservative alternatives.
         candidate_guesses: List[Tuple[float, float]] = [initial_guess]
+
+        # Near-origin seeds are valuable for small load cases where the true solution
+        # is close to zero curvature/strain and for linear-elastic concrete with
+        # tension enabled (to avoid converging to a cracked local branch).
+        is_small_load_case = abs(M_target) <= 1.0 and abs(N_target) <= 10.0
+        is_linear_elastic_with_tension = (
+            isinstance(self.concrete_model, ConcreteStressStrainLinearElastic)
+            and bool(getattr(self.concrete_model, "include_tension", False))
+        )
+
+        near_zero_guesses: List[Tuple[float, float]] = []
+        if is_small_load_case or is_linear_elastic_with_tension:
+            eps_ref = max(min(float(abs(eps_cu)), float(abs(eps_t)), float(abs(eps_y))), 1e-9)
+            eps_tiny = max(1e-9, eps_ref * 1e-3)
+            eps_small = max(1e-8, eps_ref * 1e-2)
+            near_zero_guesses = [
+                (0.0, 0.0),
+                (+eps_tiny, -eps_tiny),
+                (-eps_tiny, +eps_tiny),
+                (+eps_small, -eps_small),
+                (-eps_small, +eps_small),
+            ]
+
+        # For linear-elastic concrete with tension enabled, add cracking-strain-
+        # scaled seeds.  SLS strains are typically 1-10x the cracking strain
+        # (eps_cr ≈ f_ctm/E_cm ≈ 88 microstrain for C30/37), which is ~100x
+        # smaller than the eps_y-scaled seeds that work for ULS.
+        elastic_bending_guesses: List[Tuple[float, float]] = []
+        if is_linear_elastic_with_tension and isinstance(
+            self.concrete_model, ConcreteStressStrainLinearElastic
+        ):
+            eps_cr = abs(float(self.concrete_model.cracking_strain))
+            if M_target > 0.0:
+                elastic_bending_guesses = [
+                    (+0.5 * eps_cr, -0.5 * eps_cr),   # sub-cracking
+                    (+1.0 * eps_cr, -1.0 * eps_cr),   # at cracking
+                    (+1.5 * eps_cr, -2.0 * eps_cr),   # just past cracking
+                    (+2.0 * eps_cr, -3.0 * eps_cr),   # partially cracked
+                    (+3.0 * eps_cr, -5.0 * eps_cr),   # well past cracking
+                ]
+            elif M_target < 0.0:
+                elastic_bending_guesses = [
+                    (-0.5 * eps_cr, +0.5 * eps_cr),
+                    (-1.0 * eps_cr, +1.0 * eps_cr),
+                    (-2.0 * eps_cr, +1.5 * eps_cr),
+                    (-3.0 * eps_cr, +2.0 * eps_cr),
+                    (-5.0 * eps_cr, +3.0 * eps_cr),
+                ]
+            if N_target > 0 and abs(M_target) > 0:
+                elastic_bending_guesses.extend([
+                    (+2.0 * eps_cr, +0.5 * eps_cr),
+                    (+3.0 * eps_cr, +0.2 * eps_cr),
+                ])
+
+        if is_linear_elastic_with_tension:
+            # For linear-elastic + concrete tension, prefer near-origin seeds first
+            # regardless of load magnitude.
+            candidate_guesses = near_zero_guesses + elastic_bending_guesses + candidate_guesses
+        elif near_zero_guesses:
+            # For generally small load cases, still try the usual heuristic first,
+            # but always include near-origin candidates in pass-1 fallbacks.
+            candidate_guesses.extend(near_zero_guesses)
+
         if abs(M_target) < 1e-9:
             if N_target > 0:
                 candidate_guesses.extend([
@@ -1205,9 +1347,15 @@ class MNInteractionDiagram:
             return _result
 
         # Near cracking transitions, retry all guesses with numerical Jacobian.
-        if self.tension_stiffening and not self.confined_concrete:
+        # Covers: tension_stiffening (post-cracking softening kinks) and
+        # linear-elastic+tension (brittle f_ctm cutoff discontinuity).
+        _needs_numerical_fallback = (
+            (self.tension_stiffening or is_linear_elastic_with_tension)
+            and not self.confined_concrete
+        )
+        if _needs_numerical_fallback:
             for i, guess in enumerate(deduped_guesses):
-                attempts.append((solve_from_guess(guess, "2-point"), f"pass2_guess{i}", guess))
+                attempts.append((solve_from_guess(guess, "2-point", max_nfev=200), f"pass2_guess{i}", guess))
 
             best_result, _, _ = min(
                 attempts,
@@ -2362,17 +2510,48 @@ def create_interaction_diagram(
         n_fibres_height: Number of fibres to split height of section
         tension_stiffening:
             Concrete in tension contributes post-cracking using a simplified
-            EC2-style average tension stress-strain relationship
-        use_characteristic: Enables characteristic strength limits for materials
-        use_accidental: Enables accidental limit state factors for design strengths of materials
-        confined_concrete: Enables a Mander-style confined concrete response is applied in compression
-        confinement_rho_s: Must be provided when confined_concrete=True
-        confinement_f_yh: Characteristic transverse steel yield strength for confinement
-        ignore_compression_steel: If True, steel in compression (positive strain) contributes
-            zero force.
+            EC2-style average tension stress-strain relationship.
+            (defaults to False)
+        use_characteristic:
+            Enables characteristic strength limits for materials. 
+            (defaults to False)
+        use_accidental:
+            Enables accidental limit state factors for design strengths of materials. 
+            (defaults to False)
+        confined_concrete:
+            Enables a Mander-style confined concrete response is applied in compression
+        confinement_rho_s:
+            Must be provided when confined_concrete=True
+        confinement_f_yh:
+            Characteristic transverse steel yield strength for confinement
+        ignore_compression_steel:
+            If True, steel in compression (positive strain) contributes zero force. 
+            (defaults to False)
+        elastic_modulus: 
+            Used only when the concrete_model_type is linear-elastic.
+            The elastic modulus can be set explicitly (e.g. E_cm_eff for long-term
+            creep-reduced analysis) or defaults to E_cm from the concrete material.
+            (defaults to None)
+        include_tension:
+            Used only when the concrete_model_type is linear-elastic.
+            If True, model concrete tension up to f_ctm (brittle cut-off)
+            (defaults to False)
+        crack_to_neutral_axis_on_first_tension_failure:
+            Used only when the concrete_model_type is linear-elastic and
+            include_tension=True. If True, once any tensile concrete fibre exceeds
+            cracking strain, all concrete with strain < 0 is set to zero stress
+            (fully cracked tension zone to NA) for that load case.
+            (defaults to False)
+        concrete_model_override:
+            Used when a custom concrete model instance is provided directly (bypassing concrete_model_type). 
+            (defaults to None)
+        steel_models_override:
+            Used when custom steel model instances are provided directly (bypassing steel_model_type). 
+            (defaults to None)
         **kwargs: Additional arguments passed to MNInteractionDiagram
 
     Returns:
         MNInteractionDiagram instance
     """
     return MNInteractionDiagram(section=section, concrete=concrete, **kwargs)
+

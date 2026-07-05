@@ -13,6 +13,11 @@ from materials.reinforced_concrete.analysis.interaction_diagram import (
     MNInteractionDiagram,
     _ray_segment_intersection_alpha,
 )
+from materials.reinforced_concrete.constitutive import ConcreteModelType, SteelModelType
+from materials.reinforced_concrete.geometry import (
+    create_rectangular_section,
+    create_linear_rebar_layer,
+)
 from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import TensionShiftResult
 
 
@@ -456,6 +461,172 @@ def test_find_strains_negative_moment_high_eccentricity_branch(
     )
     out = diagram.find_strains_for_MN(M_target=-500.0, N_target=100.0)
     assert out == pytest.approx((-0.001, 0.001))
+
+
+def test_find_strains_cache_invalidates_when_crack_policy_changes(
+    rectangular_beam_with_rebars, concrete_c30, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Changing crack-to-NA policy on same diagram should not reuse stale strains."""
+    diag = MNInteractionDiagram(
+        section=rectangular_beam_with_rebars,
+        concrete=concrete_c30,
+        concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
+        include_tension=True,
+        crack_to_neutral_axis_on_first_tension_failure=True,
+    )
+    calls = {"n": 0}
+
+    def _fake_least_squares(fun, x0, jac, **_kwargs):
+        calls["n"] += 1
+        x0 = np.asarray(x0, dtype=float)
+        _ = fun(x0)
+        if callable(jac):
+            _ = jac(x0)
+        return SimpleNamespace(x=np.array([0.0005, -0.0004]), fun=np.array([0.0, 0.0]), success=True)
+
+    monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
+
+    _ = diag.find_strains_for_MN(M_target=50.0, N_target=0.0, strict=False)
+    assert calls["n"] == 1
+
+    # Same state -> should hit cache
+    _ = diag.find_strains_for_MN(M_target=50.0, N_target=0.0, strict=False)
+    assert calls["n"] == 1
+
+    # Mutated state -> must re-solve (no stale cache hit)
+    diag.crack_to_neutral_axis_on_first_tension_failure = False
+    _ = diag.find_strains_for_MN(M_target=50.0, N_target=0.0, strict=False)
+    assert calls["n"] == 2
+
+
+def test_find_strains_small_loadcase_tries_near_zero_guesses(
+    diagram: MNInteractionDiagram, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Small load cases should include near-origin fallback guesses."""
+    x0_seen: list[np.ndarray] = []
+    near_solution = np.array([2e-7, -2e-7], dtype=float)
+    fallback_solution = np.array([0.001, -0.001], dtype=float)
+
+    monkeypatch.setattr(diagram, "_estimate_initial_strains", lambda *_: (0.002, -0.002))
+
+    def _fake_least_squares(fun, x0, bounds, jac, **_kwargs):
+        x0 = np.asarray(x0, dtype=float)
+        x0_seen.append(x0.copy())
+        _ = fun(x0)
+        if callable(jac):
+            _ = jac(x0)
+        if np.max(np.abs(x0)) < 1e-5:
+            return SimpleNamespace(x=near_solution, fun=np.array([0.0, 0.0]), success=True)
+        return SimpleNamespace(x=fallback_solution, fun=np.array([5.0, 5.0]), success=False)
+
+    monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
+
+    out = diagram.find_strains_for_MN(M_target=0.1, N_target=0.0, strict=False)
+    assert out == pytest.approx(tuple(near_solution))
+    assert any(np.max(np.abs(x0)) < 1e-5 for x0 in x0_seen)
+
+
+def test_find_strains_linear_elastic_tension_prioritises_near_zero_guess(
+    rectangular_beam_with_rebars, concrete_c30, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LINEAR_ELASTIC + include_tension should try near-origin guesses first."""
+    diag = MNInteractionDiagram(
+        section=rectangular_beam_with_rebars,
+        concrete=concrete_c30,
+        concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
+        include_tension=True,
+    )
+    x0_seen: list[np.ndarray] = []
+
+    monkeypatch.setattr(diag, "_estimate_initial_strains", lambda *_: (0.003, -0.003))
+
+    def _fake_least_squares(fun, x0, jac, **_kwargs):
+        x0 = np.asarray(x0, dtype=float)
+        x0_seen.append(x0.copy())
+        _ = fun(x0)
+        if callable(jac):
+            _ = jac(x0)
+        return SimpleNamespace(x=np.array([0.001, -0.001]), fun=np.array([0.0, 0.0]), success=True)
+
+    monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
+
+    _ = diag.find_strains_for_MN(M_target=200.0, N_target=50.0, strict=False)
+    assert x0_seen
+    assert np.max(np.abs(x0_seen[0])) < 1e-4
+
+
+def test_find_strains_linear_elastic_tension_includes_moderate_bending_guesses(
+    rectangular_beam_with_rebars, concrete_c30, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Linear-elastic+tension should try cracking-strain-scaled bending seeds."""
+    diag = MNInteractionDiagram(
+        section=rectangular_beam_with_rebars,
+        concrete=concrete_c30,
+        concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
+        include_tension=True,
+    )
+    eps_cr = abs(float(diag.concrete_model.cracking_strain))
+    # One of the SLS-scaled guesses: (+1.5*eps_cr, -2.0*eps_cr)
+    target_guess = np.array([1.5 * eps_cr, -2.0 * eps_cr], dtype=float)
+    x0_seen: list[np.ndarray] = []
+
+    monkeypatch.setattr(diag, "_estimate_initial_strains", lambda *_: (0.003, -0.003))
+
+    def _fake_least_squares(fun, x0, jac, **_kwargs):
+        x0 = np.asarray(x0, dtype=float)
+        x0_seen.append(x0.copy())
+        _ = fun(x0)
+        if callable(jac):
+            _ = jac(x0)
+        if np.allclose(x0, target_guess, rtol=0.0, atol=1e-12):
+            return SimpleNamespace(x=target_guess, fun=np.array([0.0, 0.0]), success=True)
+        return SimpleNamespace(x=np.array([0.001, -0.001]), fun=np.array([5.0, 5.0]), success=False)
+
+    monkeypatch.setattr(interaction_diagram, "least_squares", _fake_least_squares)
+
+    out = diag.find_strains_for_MN(M_target=160.0, N_target=0.0, strict=False)
+    assert out == pytest.approx(tuple(target_guess))
+    assert any(np.allclose(x, target_guess, rtol=0.0, atol=1e-12) for x in x0_seen)
+
+
+def test_linear_elastic_tension_default_allows_local_uncracked_zone(
+    rectangular_beam_with_rebars, concrete_c30
+) -> None:
+    """Default linear-elastic tension keeps local stresses where |eps| <= eps_cr."""
+    diag = MNInteractionDiagram(
+        section=rectangular_beam_with_rebars,
+        concrete=concrete_c30,
+        concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
+        include_tension=True,
+    )
+    eps_cr = float(diag.concrete_model.cracking_strain)
+    strains = np.array([0.0001, 0.5 * eps_cr, 1.2 * eps_cr], dtype=float)
+    stresses = diag._concrete_stress_with_options(strains)
+
+    assert stresses[1] < 0.0
+    assert stresses[2] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_linear_elastic_tension_can_force_cracked_to_neutral_axis(
+    rectangular_beam_with_rebars, concrete_c30
+) -> None:
+    """Optional crack policy zeros all tension stress/tangent after first breach."""
+    diag = MNInteractionDiagram(
+        section=rectangular_beam_with_rebars,
+        concrete=concrete_c30,
+        concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
+        include_tension=True,
+        crack_to_neutral_axis_on_first_tension_failure=True,
+    )
+    eps_cr = float(diag.concrete_model.cracking_strain)
+    strains = np.array([0.0001, 0.5 * eps_cr, 1.2 * eps_cr], dtype=float)
+
+    stresses = diag._concrete_stress_with_options(strains)
+    tangents = diag._concrete_tangent_modulus_with_options(strains)
+    tension_mask = strains < 0.0
+
+    assert np.allclose(stresses[tension_mask], 0.0)
+    assert np.allclose(tangents[tension_mask], 0.0)
 
 
 def test_compute_analytical_jacobian_returns_finite_matrix(diagram: MNInteractionDiagram) -> None:
@@ -945,3 +1116,113 @@ def test_apply_tension_shift_iterative_with_shear_reinforcement(
     assert calls[0]["b_w"] == pytest.approx(250.0)
     assert calls[0]["sigma_cp"] == pytest.approx(1.0)
     assert result.z == pytest.approx(331.0)
+
+
+# ---------------------------------------------------------------------------
+# Linear-elastic + include_tension solver convergence
+# ---------------------------------------------------------------------------
+
+
+class TestLinearElasticTensionConvergence:
+    """Verify find_strains_for_MN converges correctly for SLS linear-elastic
+    concrete with include_tension=True, for moments near and past M_cr."""
+
+    @pytest.fixture
+    def beam_top_and_bottom(self, rebar_20):
+        """300x500 with 3T20 top + 3T20 bottom (matches user's notebook section)."""
+        section = create_rectangular_section(300, 500)
+        for y in (50, 450):
+            layer = create_linear_rebar_layer(
+                rebar=rebar_20,
+                n_bars=3,
+                start_point=(50, y),
+                end_point=(250, y),
+            )
+            section.add_rebar_group(layer)
+        return section
+
+    def _make_diagram(self, section, concrete, crack_to_na=False):
+        return MNInteractionDiagram(
+            section=section,
+            concrete=concrete,
+            concrete_model_type=ConcreteModelType.LINEAR_ELASTIC,
+            steel_model_type=SteelModelType.INCLINED,
+            include_tension=True,
+            crack_to_neutral_axis_on_first_tension_failure=crack_to_na,
+        )
+
+    def test_partially_cracked_crack_to_na_false(self, beam_top_and_bottom, concrete_c30):
+        """M=45 kN.m, N=0, crack_to_NA=False: solver should converge with
+        a moderate NA position (not near the compression face)."""
+        diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=False)
+        eps_top, eps_bottom = diag.find_strains_for_MN(M_target=45.0, N_target=0.0)
+        point = diag.calculate_point_from_end_strains(eps_top, eps_bottom)
+
+        assert abs(point.M - 45.0) < 0.5, f"M residual too large: {point.M}"
+        assert abs(point.N) < 0.5, f"N residual too large: {point.N}"
+
+        # NA should NOT be near the compression face
+        h = 500.0
+        assert eps_top > 0 and eps_bottom < 0, "Expected sagging: top compression, bottom tension"
+        na_from_top = eps_top / (eps_top - eps_bottom) * h
+        assert 50 < na_from_top < 350, f"NA at {na_from_top:.1f}mm from top is unreasonable"
+
+    def test_partially_cracked_crack_to_na_true(self, beam_top_and_bottom, concrete_c30):
+        """M=45 kN.m, N=0, crack_to_NA=True: solver should converge (fully cracked)."""
+        diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=True)
+        eps_top, eps_bottom = diag.find_strains_for_MN(M_target=45.0, N_target=0.0)
+        point = diag.calculate_point_from_end_strains(eps_top, eps_bottom)
+
+        assert abs(point.M - 45.0) < 0.5, f"M residual too large: {point.M}"
+        assert abs(point.N) < 0.5, f"N residual too large: {point.N}"
+
+    def test_sub_cracking_moment(self, beam_top_and_bottom, concrete_c30):
+        """M=20 kN.m (below M_cr ~36): section should remain fully elastic."""
+        diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=False)
+        eps_top, eps_bottom = diag.find_strains_for_MN(M_target=20.0, N_target=0.0)
+        point = diag.calculate_point_from_end_strains(eps_top, eps_bottom)
+
+        assert abs(point.M - 20.0) < 0.5
+        assert abs(point.N) < 0.5
+
+        # All concrete strains should be within cracking strain (no cracking)
+        eps_cr = float(diag.concrete_model.cracking_strain)
+        assert eps_bottom > eps_cr, (
+            f"Bottom strain {eps_bottom:.6f} exceeds cracking strain {eps_cr:.6f}"
+        )
+
+    def test_both_policies_same_below_cracking(self, beam_top_and_bottom, concrete_c30):
+        """Below M_cr, crack_to_NA flag should not affect the result."""
+        diag_off = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=False)
+        diag_on = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=True)
+
+        et_off, eb_off = diag_off.find_strains_for_MN(M_target=20.0, N_target=0.0)
+        et_on, eb_on = diag_on.find_strains_for_MN(M_target=20.0, N_target=0.0)
+
+        assert et_off == pytest.approx(et_on, rel=1e-3)
+        assert eb_off == pytest.approx(eb_on, rel=1e-3)
+
+    def test_moderate_moment_with_compression(self, beam_top_and_bottom, concrete_c30):
+        """M=30, N=200 (compression + bending): should converge for both policies."""
+        for crack_to_na in (False, True):
+            diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=crack_to_na)
+            eps_top, eps_bottom = diag.find_strains_for_MN(M_target=30.0, N_target=200.0)
+            point = diag.calculate_point_from_end_strains(eps_top, eps_bottom)
+
+            assert abs(point.M - 30.0) < 0.5, f"M residual: {point.M} (crack_to_na={crack_to_na})"
+            assert abs(point.N - 200.0) < 0.5, f"N residual: {point.N} (crack_to_na={crack_to_na})"
+
+    def test_viewer_equilibrium_round_trip(self, beam_top_and_bottom, concrete_c30):
+        """Verify that the viewer's stress output matches equilibrium for the solved strains."""
+        from materials.reinforced_concrete.analysis.stress_strain_viewer import StressStrainViewer
+
+        diag = self._make_diagram(beam_top_and_bottom, concrete_c30, crack_to_na=False)
+        viewer = StressStrainViewer(diag)
+        state = viewer._build_stress_strain_plot_state(M_Ed=45.0, N_Ed=0.0)
+
+        assert abs(state.M_Ed - 45.0) < 1e-6
+        # The achieved N from the stress integration should be near zero
+        forces = state.forces_N
+        from materials.reinforced_concrete.analysis.interaction_diagram import to_kn, ForceUnit
+        achieved_N = to_kn(float(np.sum(forces)), ForceUnit.N)
+        assert abs(achieved_N) < 0.5, f"Viewer equilibrium N error: {achieved_N:.3f} kN"

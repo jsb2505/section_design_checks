@@ -900,9 +900,7 @@ class StressStrainViewer:
         else:
             row_strains = np.full_like(y_centres, s.eps_bottom, dtype=float)
 
-        row_stresses = np.asarray(
-            self.diagram.concrete_model.get_stress_array(row_strains), dtype=float
-        )
+        row_stresses = self._get_concrete_stress_for_plot(row_strains)
 
         # Clip each horizontal band to the exact section intersection at that y.
         for j, y_mid in enumerate(y_centres):
@@ -1063,11 +1061,23 @@ class StressStrainViewer:
         else:
             strains = np.full_like(y_coords, s.eps_bottom)
 
-        # Compute stress using the concrete model
-        # Note: concrete model expects compression-positive strains
-        stresses = self.diagram.concrete_model.get_stress_array(strains)
+        # Compute concrete stress using the same option-aware path as the solver.
+        stresses = self._get_concrete_stress_for_plot(strains)
 
         return y_coords, strains, stresses
+
+    def _get_concrete_stress_for_plot(self, strains: np.ndarray) -> np.ndarray:
+        """
+        Concrete stress for plotting, aligned with diagram analysis options.
+
+        Uses the diagram's option-aware concrete stress path when available
+        (e.g. tension stiffening, crack-to-NA policies). Falls back to the
+        constitutive model directly for lightweight test doubles.
+        """
+        stress_fn = getattr(self.diagram, "_concrete_stress_with_options", None)
+        if callable(stress_fn):
+            return np.asarray(stress_fn(strains), dtype=float)
+        return np.asarray(self.diagram.concrete_model.get_stress_array(strains), dtype=float)
 
     def _get_outline_xy(self) -> Tuple[list[float], list[float]]:
         """

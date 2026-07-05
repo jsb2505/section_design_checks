@@ -41,6 +41,7 @@ class ConcreteModelType(StrEnum):
         SCHEMATIC: for structural analysis
         PARABOLA_RECTANGLE: for design of cross-sections
         BILINEAR: for (simplified) design of cross-sections
+        LINEAR_ELASTIC: for SLS analysis
     '''
     SCHEMATIC = "schematic"
     PARABOLA_RECTANGLE = "parabola-rectangle"
