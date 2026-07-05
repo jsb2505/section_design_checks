@@ -5,7 +5,7 @@ This is a FIRST PRINCIPLES check based on strain compatibility and force equilib
 Uses the fiber-based M-N interaction diagram infrastructure.
 """
 
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import Field
 
 from materials.reinforced_concrete.code_checks.base_check import (
@@ -52,7 +52,7 @@ class BendingCheck(BaseCodeCheck):
         >>> concrete = ConcreteMaterial(grade="C30/37")
         >>> check = BendingCheck(section=section, concrete=concrete)
         >>>
-        >>> # Perform check for applied loads
+        >>> # Perform check for applied loads (all parameters must be keyword arguments)
         >>> result = check.perform_check(M_Ed=150, N_Ed=500)  # kN·m, kN
         >>> print(result)
         >>> # Bending check (EC2 §6.1): PASS (utilization: 68.5%)
@@ -90,9 +90,11 @@ class BendingCheck(BaseCodeCheck):
 
     def perform_check(
         self,
+        *,
         M_Ed: float,
         N_Ed: float = 0.0,
         warning_threshold: float = 0.95,
+        **kwargs,
     ) -> CheckResult:
         """
         Check section capacity against applied bending moment and axial force.
@@ -127,7 +129,14 @@ class BendingCheck(BaseCodeCheck):
         M_Rd_pos, M_Rd_neg = diagram.get_capacity_fixed_n(N_Ed=N_Ed)
 
         # Determine which capacity is relevant based on sign of M_Ed
-        M_Rd = M_Rd_pos if M_Ed >= 0 else abs(M_Rd_neg)
+        # Handle case where N_Ed is outside interaction diagram bounds
+        if M_Rd_pos is None and M_Rd_neg is None:
+            # N_Ed is outside the interaction diagram - section has no capacity
+            M_Rd = 0.0
+        elif M_Ed >= 0:
+            M_Rd = M_Rd_pos if M_Rd_pos is not None else 0.0
+        else:
+            M_Rd = abs(M_Rd_neg) if M_Rd_neg is not None else 0.0
 
         # Create detailed message
         if is_safe:
@@ -162,7 +171,7 @@ class BendingCheck(BaseCodeCheck):
             details=details,
         )
 
-    def get_moment_capacity(self, N_Ed: float = 0.0) -> tuple[float, float]:
+    def get_moment_capacity(self, N_Ed: float = 0.0) -> tuple[Optional[float], Optional[float]]:
         """
         Get moment capacity at specified axial force.
 
@@ -171,6 +180,7 @@ class BendingCheck(BaseCodeCheck):
 
         Returns:
             Tuple of (M_Rd_positive, M_Rd_negative) in kN·m
+            Returns (None, None) if N_Ed is outside the interaction diagram bounds.
         """
         diagram = create_interaction_diagram(
             section=self.section,

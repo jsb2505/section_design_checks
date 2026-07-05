@@ -6,7 +6,7 @@ rather than first principles. Implements §6.2 Variable Strut Inclination Method
 """
 
 from typing import Optional
-from math import sqrt, radians, cos, atan, degrees
+from math import sqrt, atan, degrees
 from pydantic import Field, computed_field
 
 from materials.reinforced_concrete.code_checks.base_check import (
@@ -93,12 +93,13 @@ class ShearCheck(BaseCodeCheck):
         if self.d is not None:
             return self.d
         else:
-            return self.section.get_effective_depth(face="top")
+            return self.section.get_effective_depth(reference="top")
 
     @computed_field
     @property
     def breadth(self) -> float:
         """Web breadth in mm."""
+        # TODO FOR WEB BEAMS FIND THE BREADTH USED FOR SHEAR AREA
         # For simple sections, use width. For T-beams, would use web width
         # This is a simplification - could be enhanced
         return self.section.outline.bounds[2] - self.section.outline.bounds[0]
@@ -161,7 +162,7 @@ class ShearCheck(BaseCodeCheck):
             ρ_l (dimensionless)
         """
         # Get tension reinforcement area
-        A_sl = self.section.get_total_rebar_area()  # mm²
+        A_sl = self.section.total_steel_area  # mm²
 
         if A_sl == 0:
             return 0.0
@@ -234,9 +235,7 @@ class ShearCheck(BaseCodeCheck):
             return 0.0
 
         # Shear reinforcement ratio (mm²/mm)
-        A_sw = self.shear_reinforcement.area  # mm²
-        s = self.shear_reinforcement.spacing  # mm
-        A_sw_over_s = A_sw / s
+        A_sw_over_s = self.shear_reinforcement.area_per_unit_length  # mm
 
         # Lever arm (simplified as 0.9d per §6.2.3)
         z = 0.9 * self.effective_depth
@@ -297,9 +296,11 @@ class ShearCheck(BaseCodeCheck):
 
     def perform_check(
         self,
+        *,
         V_Ed: float,
         cot_theta: float = 2.5,
         warning_threshold: float = 0.95,
+        **kwargs,
     ) -> CheckResult:
         """
         Perform shear check per EC2 §6.2.

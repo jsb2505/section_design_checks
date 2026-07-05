@@ -231,6 +231,14 @@ class MNInteractionDiagram:
 
         # Apply confined concrete model if enabled (Mander model)
         if self.confined_concrete:
+            # Type narrowing: confined_concrete=True guarantees these are not None (validated in __init__)
+            assert self.confinement_rho_s is not None
+            assert self.confinement_f_yh is not None
+
+            # Store in local variables for type clarity and to avoid repeated property access
+            rho_s = self.confinement_rho_s
+            f_yh = self.confinement_f_yh
+
             # Mander confined concrete model for compression
             # Enhances strength and ductility based on transverse reinforcement
             compression_mask = concrete_strains > 0  # Positive strain = compression
@@ -244,7 +252,7 @@ class MNInteractionDiagram:
                 k_e = 0.75  # Conservative for rectangular sections
 
                 # Effective lateral confining pressure
-                f_l = 0.5 * k_e * self.confinement_rho_s * self.confinement_f_yh
+                f_l = 0.5 * k_e * rho_s * f_yh
 
                 # Confined strength (Mander model)
                 # f_cc = f_co * (1 + 5 * (f_cc/f_co - 1))
@@ -259,7 +267,7 @@ class MNInteractionDiagram:
                 )
 
                 # Ultimate confined strain (Mander)
-                epsilon_cu_confined = 0.004 + 0.14 * self.confinement_rho_s * self.confinement_f_yh / f_co
+                epsilon_cu_confined = 0.004 + 0.14 * rho_s * f_yh / f_co
 
                 # Mander stress-strain relationship for confined concrete
                 compression_strains = concrete_strains[compression_mask]
@@ -385,18 +393,29 @@ class MNInteractionDiagram:
         # For a proper convex M-N diagram, only include points where there IS a compression zone
         # Pure tension points (NA < 0) create concave regions and are not part of ULS envelope
 
+        # Symmetric sampling around peak moment region + dense sampling at poles
+        # Peak M typically occurs around NA depth ~0.25h to 0.35h (balanced failure, N ~ 30% of N_max)
+        # Need equal point density above and below peak for symmetric M-N curve
+        # ALSO need dense sampling at poles (pure compression/tension) where curves join with sharp curvature change
+
+        # For poles: use LOGARITHMIC spacing in NA depth to get better distribution in N
+        # (since N vs NA depth is asymptotic near poles)
         na_depths_top = np.concatenate([
-            # Very deep compression (pure compression)
-            np.linspace(self.section_height * 10, self.section_height * 2, max(3, points_per_curve // 8)),
-            # Deep compression (approaching section)
-            np.linspace(self.section_height * 2, self.section_height * 1.5, max(5, points_per_curve // 8)),
-            # Compression controlled (high curvature)
-            np.linspace(self.section_height * 1.5, self.section_height * 0.5, max(10, points_per_curve // 4)),
-            # Balanced region (very high curvature - needs dense sampling)
-            np.linspace(self.section_height * 0.5, self.section_height * 0.05, max(20, points_per_curve // 2)),
-            # Tension controlled - stop at NA just inside section
-            # The limit is where steel reaches yield and concrete is at edge
-            np.linspace(self.section_height * 0.05, self.section_height * 0.001, max(5, points_per_curve // 8)),
+            # AT pure compression pole - logarithmic spacing for uniform N distribution
+            np.logspace(np.log10(self.section_height * 50), np.log10(self.section_height * 3), num=max(15, points_per_curve // 4)),
+            # Deep compression (moment increasing, approaching peak from above)
+            np.linspace(self.section_height * 3, self.section_height * 0.8, num=max(10, points_per_curve // 6)),
+            # Upper balanced region (high curvature, approaching peak M from compression side)
+            np.linspace(self.section_height * 0.8, self.section_height * 0.25, num=max(16, points_per_curve // 4)),
+            # Core balanced region (peak moment zone - highest curvature)
+            np.linspace(self.section_height * 0.25, self.section_height * 0.12, num=max(20, points_per_curve // 3)),
+            # Lower balanced region (high curvature, leaving peak M toward tension side)
+            np.linspace(self.section_height * 0.12, self.section_height * 0.04, num=max(16, points_per_curve // 4)),
+            # Tension controlled (moment decreasing, mirroring deep compression)
+            np.linspace(self.section_height * 0.04, self.section_height * 0.01, num=max(10, points_per_curve // 6)),
+            # AT pure tension pole - logarithmic spacing for uniform N distribution
+            # Need many points here to bridge to pure tension smoothly
+            np.logspace(np.log10(self.section_height * 0.01), np.log10(self.section_height * 0.00001), num=max(20, points_per_curve // 3)),
         ])
 
         for na_depth in na_depths_top:
@@ -495,8 +514,9 @@ class MNInteractionDiagram:
             )
             points.append(pure_tension_point)
 
-        # Compute the convex hull to get the true capacity envelope
-        # This eliminates any concave regions or interior points
+        # Use convex hull to get the true capacity envelope
+        # This filters out interior points and handles the curve junction at poles correctly
+        # The convex hull ensures a smooth rugby ball shape by removing crossing/interior points
 
         from scipy.spatial import ConvexHull
 
@@ -543,13 +563,22 @@ class MNInteractionDiagram:
             # Split into the two curves
             n_curve_points = len(na_depths_top)
             curve_positive_m = points[:n_curve_points]
-            curve_negative_m = points[n_curve_points:]
+            curve_negative_m = points[n_curve_points:n_curve_points * 2]
 
             # Simple ordering fallback
             points_sorted = curve_positive_m + list(reversed(curve_negative_m))
+
+            # Close the loop
+            if len(points_sorted) > 0:
+                points_sorted.append(points_sorted[0])
+
             return points_sorted
 
-    def get_capacity_fixed_n(self, N_Ed: float) -> Tuple[Optional[float], Optional[float]]:
+    def get_capacity_fixed_n(
+        self,
+        N_Ed: float,
+        n_points: int = 100
+    ) -> Tuple[Optional[float], Optional[float]]:
         """
         Get moment capacity for given axial force using fixed-N method.
 
@@ -562,6 +591,7 @@ class MNInteractionDiagram:
 
         Args:
             N_Ed: Applied axial force in kN (positive = compression)
+            n_points: Number of points to form the M-N curve from
 
         Returns:
             Tuple of (M_Rd_pos, M_Rd_neg) - moment capacity in kN·m
@@ -571,7 +601,7 @@ class MNInteractionDiagram:
             Returns (None, None) if N_Ed is outside the interaction diagram bounds.
         """
         # Generate diagram (returns closed convex hull boundary)
-        diagram = self.generate_diagram(n_points=100)
+        diagram = self.generate_diagram(n_points=n_points)
 
         # Extract N and M values
         N_values = np.array([p.N for p in diagram])
@@ -648,12 +678,14 @@ class MNInteractionDiagram:
         M_Rd_pos = interpolate_capacity(pos_M_indices, N_Ed)
         M_Rd_neg = interpolate_capacity(neg_M_indices, N_Ed)
 
-        return (M_Rd_pos, M_Rd_neg)
+        # Convert numpy scalars to Python float for type consistency
+        return (float(M_Rd_pos), float(M_Rd_neg))
 
     def get_utilization_vector(
         self,
         N_Ed: float,
         M_Ed: float,
+        n_points: int = 100
     ) -> Tuple[bool, float]:
         """
         Check capacity using vector projection method (load ratio approach).
@@ -674,6 +706,7 @@ class MNInteractionDiagram:
         Args:
             N_Ed: Applied axial force in kN (positive = compression)
             M_Ed: Applied moment in kN·m
+            n_points: Number of points to form the M-N curve from
 
         Returns:
             Tuple of (is_safe, utilization)
@@ -682,7 +715,7 @@ class MNInteractionDiagram:
                           the intersection point on the boundary
         """
         # Generate diagram (returns closed convex hull boundary)
-        diagram = self.generate_diagram(n_points=100)
+        diagram = self.generate_diagram(n_points=n_points)
 
         # Extract N and M values
         N_values = np.array([p.N for p in diagram])

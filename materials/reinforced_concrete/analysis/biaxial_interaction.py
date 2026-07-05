@@ -185,7 +185,10 @@ class BiaxialMNInteractionSurface:
             # Use Brent's method for root finding
             with warnings.catch_warnings():
                 warnings.filterwarnings('ignore', category=OptimizeWarning)
-                na_depth = brentq(objective, depth_min, depth_max, xtol=tol)
+                # brentq returns a scalar (not tuple) when full_output=False (default)
+                result: float = brentq(objective, depth_min, depth_max, xtol=tol)  # type: ignore[assignment]
+                # Convert to Python float (brentq returns numpy scalar)
+                na_depth = float(result)
 
             return na_depth
 
@@ -489,6 +492,147 @@ class BiaxialMNInteractionSurface:
             max_concrete_strain=0.0,
             max_steel_strain=max_steel_strain,
         )
+
+    def get_utilization_vector(
+        self,
+        N_Ed: float,
+        My_Ed: float,
+        Mz_Ed: float,
+        surface_points: Optional[List] = None,
+        n_angles: int = 72,
+        n_axial_levels: int = 30,
+    ) -> Tuple[bool, float]:
+        """
+        Check capacity using vector projection method for biaxial bending.
+
+        Projects a vector from the origin through the applied load point (N_Ed, My_Ed, Mz_Ed)
+        in 3D space and finds where it intersects the M-M-N interaction surface. The
+        utilization ratio is the ratio of the distance to the applied load vs. distance
+        to the capacity boundary.
+
+        This is the geometrically correct method for biaxial M-M-N interaction checking
+        as it properly accounts for the interaction between axial force and both moments.
+
+        Method: Projects a ray from origin through (N_Ed, My_Ed, Mz_Ed) to find the
+        intersection with the surface boundary (N_Rd, My_Rd, Mz_Rd).
+
+        Args:
+            N_Ed: Applied axial force in kN (positive = compression)
+            My_Ed: Applied moment about y-axis (major axis) in kN·m
+            Mz_Ed: Applied moment about z-axis (minor axis) in kN·m
+            surface_points: Pre-generated surface points (optional). If provided, uses these
+                           instead of regenerating the surface. Pass the result from
+                           generate_surface() to avoid recomputation when checking multiple
+                           load cases. If None, generates surface with n_angles and n_axial_levels.
+            n_angles: Number of angles for surface generation (default: 72, ignored if surface_points provided)
+            n_axial_levels: Number of N levels for surface generation (default: 30, ignored if surface_points provided)
+
+        Returns:
+            Tuple of (is_safe, utilization)
+            - is_safe: True if utilization <= 1.0
+            - utilization: ||(N_Ed, My_Ed, Mz_Ed)|| / ||(N_Rd, My_Rd, Mz_Rd)||
+                          where (N_Rd, My_Rd, Mz_Rd) is the intersection point
+
+        Example:
+            >>> # Single load case (surface generated automatically)
+            >>> surface = create_biaxial_interaction_surface(section, concrete)
+            >>> is_safe, util = surface.get_utilization_vector(
+            ...     N_Ed=1500,  # kN
+            ...     My_Ed=100,  # kN·m
+            ...     Mz_Ed=50    # kN·m
+            ... )
+            >>> print(f"Safe: {is_safe}, Utilization: {util:.1%}")
+
+            >>> # Multiple load cases (reuse surface for efficiency)
+            >>> surface_pts = surface.generate_surface(n_angles=72, n_axial_levels=30)
+            >>> for load_case in load_cases:
+            ...     is_safe, util = surface.get_utilization_vector(
+            ...         N_Ed=load_case.N,
+            ...         My_Ed=load_case.My,
+            ...         Mz_Ed=load_case.Mz,
+            ...         surface_points=surface_pts  # Reuse pre-generated surface
+            ...     )
+        """
+        # Special case: origin point (no load)
+        if abs(N_Ed) < 1e-6 and abs(My_Ed) < 1e-6 and abs(Mz_Ed) < 1e-6:
+            return (True, 0.0)
+
+        # Use provided surface or generate new one
+        if surface_points is None:
+            points = self.generate_surface(
+                n_angles=n_angles,
+                n_axial_levels=n_axial_levels,
+                include_tension=True,
+            )
+        else:
+            points = surface_points
+
+        # Extract coordinates
+        N_values = np.array([p.N for p in points])
+        My_values = np.array([p.My for p in points])
+        Mz_values = np.array([p.Mz for p in points])
+
+        # Direction vector of the applied load
+        load_direction = np.array([N_Ed, My_Ed, Mz_Ed])
+        load_magnitude = np.linalg.norm(load_direction)
+
+        if load_magnitude < 1e-10:
+            return (True, 0.0)
+
+        load_direction_unit = load_direction / load_magnitude
+
+        # Find the maximum scaling factor alpha such that
+        # alpha * (N_Ed, My_Ed, Mz_Ed) is still on the boundary surface
+        #
+        # We check all points on the surface and find which ones are roughly
+        # aligned with the load direction, then find the maximum alpha
+
+        max_alpha = 0.0
+
+        # For each point on the surface, check if it's aligned with load direction
+        for i in range(len(points)):
+            surface_point = np.array([N_values[i], My_values[i], Mz_values[i]])
+            surface_magnitude = np.linalg.norm(surface_point)
+
+            if surface_magnitude < 1e-10:
+                continue
+
+            surface_direction_unit = surface_point / surface_magnitude
+
+            # Check if directions are aligned (dot product close to 1)
+            dot_product = np.dot(load_direction_unit, surface_direction_unit)
+
+            # If aligned (within tolerance), calculate scaling factor
+            if dot_product > 0.999:  # ~2.5 degree tolerance
+                # Calculate alpha: surface_point = alpha * load_direction
+                # alpha = ||surface_point|| / ||load_direction||
+                alpha = surface_magnitude / load_magnitude
+                max_alpha = max(max_alpha, alpha)
+
+        # If we didn't find any aligned points, use a more robust search
+        # by checking the nearest neighbor approach
+        if max_alpha < 1e-10:
+            # Project all surface points onto the load direction
+            # and find the one with maximum projection
+            projections = (
+                N_values * N_Ed + My_values * My_Ed + Mz_values * Mz_Ed
+            ) / (load_magnitude ** 2)
+
+            # Filter to positive projections (same direction as load)
+            positive_mask = projections > 0
+            if np.any(positive_mask):
+                max_alpha = np.max(projections[positive_mask])
+
+        # If still no intersection found, point is likely outside
+        if max_alpha < 1e-10:
+            return (False, float('inf'))
+
+        # Utilization ratio
+        utilization = 1.0 / max_alpha
+        is_safe = utilization <= 1.0
+
+        # Convert to Python types (numpy operations may return numpy scalars)
+        return (bool(is_safe), float(utilization))
 
 
     def export_to_json(

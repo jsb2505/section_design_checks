@@ -226,7 +226,7 @@ class ReinforcingSteel(BaseMaterial):
         Returns:
             Ductility class (A, B, or C)
         """
-        classes = {
+        classes: dict[ReinforcingSteelGrade, Literal["A", "B", "C"]] = {
             "B500A": "A",
             "B500B": "B",
             "B500C": "C",
