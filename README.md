@@ -1,4 +1,4 @@
-# Materials - Structural Engineering Library
+# Section Design Checks - Structural Engineering Library
 
 **API-ready library for structural materials and code-checked section design**
 
@@ -42,8 +42,8 @@ A modern Python library for structural engineering with full Pydantic validation
 ```bash
 # Clone repository
 cd c:\Users\user\Repo\Scripts
-git clone <your-repo-url> materials
-cd materials
+git clone <your-repo-url> section_design_checks
+cd section_design_checks
 
 # Install dependencies
 pip install -r requirements.txt
@@ -57,7 +57,7 @@ pip install -e .
 ### Defining Materials
 
 ```python
-from materials.reinforced_concrete.materials import ConcreteMaterial, Rebar
+from section_design_checks.reinforced_concrete.materials import ConcreteMaterial, Rebar
 
 # Create concrete material
 concrete = ConcreteMaterial(
@@ -83,11 +83,11 @@ print(bar.f_yd)  # 434.8 MPa
 ### Creating RC Sections
 
 ```python
-from materials.reinforced_concrete.geometry import (
+from section_design_checks.reinforced_concrete.geometry import (
     create_rectangular_section,
     create_linear_rebar_layer,
 )
-from materials.core.geometry import Point2D
+from section_design_checks.core.geometry import Point2D
 
 # Create 300×500 mm beam section
 section = create_rectangular_section(
@@ -117,7 +117,7 @@ print(f"Reinforcement ratio: {section.reinforcement_ratio:.3f}")
 ### Stress-Strain Models
 
 ```python
-from materials.reinforced_concrete.constitutive import (
+from section_design_checks.reinforced_concrete.constitutive import (
     create_concrete_stress_strain,
     create_steel_stress_strain,
 )
@@ -146,7 +146,7 @@ print(f"Steel stress at ε=0.01: {stress:.1f} MPa")
 ### M-N Interaction Diagrams
 
 ```python
-from materials.reinforced_concrete.analysis import create_interaction_diagram
+from section_design_checks.reinforced_concrete.analysis import create_interaction_diagram
 
 # Create M-N interaction diagram
 diagram = create_interaction_diagram(
@@ -180,7 +180,7 @@ print(f"M_Rd at N=1000 kN: ±{M_Rd_pos:.1f} kN·m")
 ### Fiber Mesh for Custom Analysis
 
 ```python
-from materials.reinforced_concrete.geometry import FiberMesh
+from section_design_checks.reinforced_concrete.geometry import FiberMesh
 
 # Generate fiber mesh for custom strain compatibility analysis
 mesh = FiberMesh(
@@ -201,7 +201,7 @@ x, y, area, material_type, material_index = mesh.get_fiber_arrays()
 
 ```python
 from shapely.geometry import Polygon
-from materials.reinforced_concrete.geometry import RCSection, create_circular_perimeter_rebars
+from section_design_checks.reinforced_concrete.geometry import RCSection, create_circular_perimeter_rebars
 
 # T-beam section using custom polygon
 t_beam_coords = [
@@ -221,7 +221,7 @@ t_beam = RCSection(
 )
 
 # Circular column with perimeter reinforcement
-from materials.reinforced_concrete.geometry import create_circular_section
+from section_design_checks.reinforced_concrete.geometry import create_circular_section
 
 column = create_circular_section(diameter=400, section_name="Column C1")
 
@@ -239,7 +239,7 @@ column.add_rebar_group(perimeter_bars)
 ## Project Structure
 
 ```
-materials/
+section_design_checks/
 ├── materials/                      # Main package
 │   ├── core/                       # Base abstractions
 │   │   ├── base_material.py
@@ -299,8 +299,8 @@ Complex 2D sections handled with industry-standard Shapely library:
 ```python
 # Pseudocode for FEA integration
 import json
-from materials.reinforced_concrete.geometry import create_rectangular_section
-from materials.reinforced_concrete.code_checks.ec2 import BendingCheck
+from section_design_checks.reinforced_concrete.geometry import create_rectangular_section
+from section_design_checks.reinforced_concrete.code_checks.ec2 import BendingCheck
 
 # 1. Load FEA results (JSON from post-processing)
 with open("fea_results.json") as f:

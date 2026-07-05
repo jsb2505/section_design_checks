@@ -165,6 +165,7 @@ class MNInteractionDiagram:
         self,
         neutral_axis_depth: float,
         max_concrete_strain: Optional[float] = None,
+        compression_from_bottom: bool = False,
     ) -> InteractionPoint:
         """
         Calculate single point on interaction diagram.
@@ -172,14 +173,16 @@ class MNInteractionDiagram:
         Uses strain compatibility:
         - Plane sections remain plane
         - Strain varies linearly from neutral axis
-        - Concrete strain at top = max_concrete_strain (typically ε_cu2)
+        - Maximum concrete strain at compression face
 
         Args:
-            neutral_axis_depth: Depth from section top to neutral axis (mm)
+            neutral_axis_depth: Depth from compression face to neutral axis (mm)
                                 Positive = NA inside section
-                                Negative = NA above section (pure tension)
-                                Very large = NA below section (pure compression)
+                                Negative = NA beyond section (opposite side in tension)
+                                Very large = NA beyond section (pure compression)
             max_concrete_strain: Maximum concrete compressive strain (default: ε_cu2)
+            compression_from_bottom: If True, compression is applied from bottom (creates negative moments)
+                                     If False, compression is applied from top (creates positive moments)
 
         Returns:
             InteractionPoint with N, M, and strain information
@@ -191,20 +194,31 @@ class MNInteractionDiagram:
         x, y, area, material_type, material_index = self.mesh.get_fiber_arrays()
 
         # Calculate strain at each fiber using plane sections remain plane
-        # ε = ε_top * (NA_depth - y_fiber) / NA_depth
-        # where y is measured from section top
+        # ε = ε_max * (NA_depth - distance_from_compression_face) / NA_depth
 
-        # Distance from top of section to each fiber
-        y_from_top = self.section_top - y
+        if compression_from_bottom:
+            # Compression applied from BOTTOM (creates negative moments)
+            # Distance from bottom of section to each fiber
+            distance_from_compression_face = y - self.section_bottom
+        else:
+            # Compression applied from TOP (creates positive moments)
+            # Distance from top of section to each fiber
+            distance_from_compression_face = self.section_top - y
 
         # Strain distribution (compression positive)
         if neutral_axis_depth > 0:
-            # NA inside or below section
-            strains = max_concrete_strain * (neutral_axis_depth - y_from_top) / neutral_axis_depth
+            # NA inside or beyond section on tension side
+            strains = max_concrete_strain * (neutral_axis_depth - distance_from_compression_face) / neutral_axis_depth
         else:
-            # NA above section (tension throughout)
-            # Use similar triangles with NA above section
-            strains = -max_concrete_strain * y_from_top / abs(neutral_axis_depth)
+            # NA beyond section on compression side (entire section in tension)
+            # Use similar triangles with NA beyond compression face
+            # Avoid division by zero when NA is at section boundary
+            na_abs = abs(neutral_axis_depth)
+            if na_abs < 1e-6:
+                # NA at boundary: assume uniform tension strain
+                strains = np.full_like(distance_from_compression_face, -max_concrete_strain)
+            else:
+                strains = -max_concrete_strain * distance_from_compression_face / na_abs
 
         # Calculate stresses from constitutive models
         stresses = np.zeros_like(strains)
@@ -322,74 +336,203 @@ class MNInteractionDiagram:
 
     def generate_diagram(
         self,
-        n_points: int = 50,
+        n_points: int = 100,
         include_tension: bool = True,
     ) -> List[InteractionPoint]:
         """
         Generate complete M-N interaction diagram.
 
-        Creates points covering:
-        1. Pure compression (NA at infinity)
-        2. Compression with small eccentricity
-        3. Balanced failure
-        4. Tension with compression block
-        5. Pure tension (NA above section)
+        Creates TWO curves and combines them:
+        1. Compression from TOP (positive moments) - top in compression, bottom in tension
+        2. Compression from BOTTOM (negative moments) - bottom in compression, top in tension
+
+        This ensures the full M-N envelope is captured for asymmetric sections.
 
         Args:
-            n_points: Number of points on diagram
+            n_points: Number of points on diagram (divided between both curves)
             include_tension: Include pure tension branch
 
         Returns:
-            List of InteractionPoint ordered from pure compression to pure tension
+            List of InteractionPoint ordered by N (descending) for continuous plotting
         """
         points: List[InteractionPoint] = []
 
-        # Define neutral axis depth range
-        # From deep in compression to tension zone
+        # Use half the points for each curve direction
+        points_per_curve = n_points // 2
 
-        # 1. Pure compression point (NA very deep)
-        na_pure_compression = self.section_height * 10  # NA well below section
-        points.append(self.calculate_point(na_pure_compression))
+        # =======================================================================
+        # CURVE 1: Compression from TOP (creates positive moments)
+        # =======================================================================
 
-        # 2. Compression-controlled points (NA from deep to shallow)
-        # Range from 2×height down to just below section bottom
-        na_compression = np.linspace(
-            self.section_height * 2,
-            self.section_height * 0.1,
-            n_points // 2
+        # Use denser, more uniform sampling for smoother curves
+        # NA sweep from deep compression through to tension
+
+        # For a proper convex M-N diagram, only include points where there IS a compression zone
+        # Pure tension points (NA < 0) create concave regions and are not part of ULS envelope
+
+        na_depths_top = np.concatenate([
+            # Very deep compression (pure compression)
+            np.linspace(self.section_height * 10, self.section_height * 2, max(3, points_per_curve // 8)),
+            # Deep compression (approaching section)
+            np.linspace(self.section_height * 2, self.section_height * 1.5, max(5, points_per_curve // 8)),
+            # Compression controlled (high curvature)
+            np.linspace(self.section_height * 1.5, self.section_height * 0.5, max(10, points_per_curve // 4)),
+            # Balanced region (very high curvature - needs dense sampling)
+            np.linspace(self.section_height * 0.5, self.section_height * 0.05, max(20, points_per_curve // 2)),
+            # Tension controlled - stop at NA just inside section
+            # The limit is where steel reaches yield and concrete is at edge
+            np.linspace(self.section_height * 0.05, self.section_height * 0.001, max(5, points_per_curve // 8)),
+        ])
+
+        for na_depth in na_depths_top:
+            points.append(self.calculate_point(na_depth, compression_from_bottom=False))
+
+        # =======================================================================
+        # CURVE 2: Compression from BOTTOM (creates negative moments)
+        # =======================================================================
+
+        # Use same NA depths but compression from bottom
+        for na_depth in na_depths_top:
+            points.append(self.calculate_point(na_depth, compression_from_bottom=True))
+
+        # Add pure compression point to close the diagram at the top
+        # Pure compression: entire section at ultimate concrete strain
+        # For asymmetric reinforcement, this creates a moment due to steel eccentricity
+        # Similar to pure tension, calculate N and M from concrete + steel contributions
+
+        section_cx, section_cy = self.section.get_centroid()
+
+        # Concrete contribution (uniform compression at design/mean strength over entire area)
+        concrete_area = self.section.outline.area  # mm²
+        f_c = self.concrete_model.get_yield_stress()  # Design or mean strength depending on model
+        N_concrete = concrete_area * f_c / 1000.0  # kN
+        M_concrete = 0.0  # Symmetric concrete stress creates no moment about centroid
+
+        # Steel contribution (all steel at yield in compression)
+        N_steel = 0.0
+        M_steel = 0.0
+        for group in self.section.rebar_groups:
+            A_s = group.rebar.area  # Area per bar
+            f_yd = self.steel_model.f_y  # Yield stress
+
+            for pos in group.positions:
+                # Compression force (positive)
+                bar_force = A_s * f_yd / 1000.0  # kN (positive for compression)
+                N_steel += bar_force
+
+                # Moment about section centroid
+                y_offset = pos.y - section_cy
+                M_steel += bar_force * y_offset / 1000.0  # kN⋅m
+
+        pure_compression_N = N_concrete + N_steel
+        pure_compression_M = M_concrete + M_steel
+
+        pure_compression_point = InteractionPoint(
+            N=pure_compression_N,
+            M=pure_compression_M,
+            neutral_axis_depth=self.section_height * 1000,  # NA very deep
+            max_concrete_strain=self.concrete_model.get_ultimate_strain(),
+            max_steel_strain=self.steel_model.epsilon_y,
         )
-        for na_depth in na_compression:
-            points.append(self.calculate_point(na_depth))
+        points.append(pure_compression_point)
 
-        # 3. Transition zone (NA through section)
-        # This captures balanced failure and transition region
-        na_transition = np.linspace(
-            self.section_height * 0.1,
-            -self.section_height * 0.1,
-            n_points // 4
-        )
-        for na_depth in na_transition:
-            points.append(self.calculate_point(na_depth))
-
+        # Add pure tension point to close the diagram at the bottom
+        # This represents all steel in tension (yielding), concrete cracked throughout
         if include_tension:
-            # 4. Tension-controlled points (NA above section)
-            na_tension = np.linspace(
-                -self.section_height * 0.1,
-                -self.section_height * 2,
-                n_points // 4
-            )
-            for na_depth in na_tension:
-                points.append(self.calculate_point(na_depth))
+            # Calculate pure tension capacity: all steel at yield stress in tension
+            # N = -Σ(A_s × f_yd)
+            # M = Σ(A_s × f_yd × y_offset) where y_offset is distance from section centroid
 
-        return points
+            section_cx, section_cy = self.section.get_centroid()
+            pure_tension_N = 0.0
+            pure_tension_M = 0.0
+
+            for group in self.section.rebar_groups:
+                n_bars = len(group.positions)
+                A_s = group.rebar.area  # Area per bar
+                f_yd = self.steel_model.f_y  # Yield stress
+
+                # Each bar contributes to N and M
+                for pos in group.positions:
+                    # Tension force (negative)
+                    bar_force = -A_s * f_yd / 1000.0  # kN (negative for tension)
+                    pure_tension_N += bar_force
+
+                    # Moment about section centroid
+                    y_offset = pos.y - section_cy
+                    pure_tension_M += bar_force * y_offset / 1000.0  # kN⋅m
+
+            # Create pure tension point
+            pure_tension_point = InteractionPoint(
+                N=pure_tension_N,
+                M=pure_tension_M,
+                neutral_axis_depth=-self.section_height * 10,  # NA far above section
+                max_concrete_strain=0.0,
+                max_steel_strain=self.steel_model.epsilon_y,
+            )
+            points.append(pure_tension_point)
+
+        # Compute the convex hull to get the true capacity envelope
+        # This eliminates any concave regions or interior points
+
+        from scipy.spatial import ConvexHull
+
+        # Convert points to array for convex hull calculation
+        points_array = np.array([[p.M, p.N] for p in points])
+
+        # Compute convex hull
+        try:
+            hull = ConvexHull(points_array)
+
+            # Extract points on the hull in order
+            hull_indices = hull.vertices
+
+            # Sort hull vertices to trace around the perimeter
+            # Start from point with maximum N (pure compression)
+            max_n_idx = np.argmax([points[i].N for i in hull_indices])
+            start_idx = hull_indices[max_n_idx]
+
+            # Reorder hull_indices to start from max N and go counterclockwise
+            # This traces: compression → +M → tension → -M → back to compression
+            start_pos = np.where(hull_indices == start_idx)[0][0]
+            hull_indices_ordered = np.roll(hull_indices, -start_pos)
+
+            # Build ordered list of hull points
+            hull_points = [points[i] for i in hull_indices_ordered]
+
+            # Ensure we trace the correct direction (should go through positive M first)
+            # Check if second point has positive or negative M
+            if len(hull_points) > 1 and hull_points[1].M < 0:
+                # Reverse the order (we're going the wrong way)
+                hull_points = [hull_points[0]] + hull_points[1:][::-1]
+
+            # Add the first point at the end to explicitly close the loop
+            # This ensures matplotlib draws a complete closed curve
+            if len(hull_points) > 0:
+                hull_points.append(hull_points[0])
+
+            return hull_points
+
+        except Exception as e:
+            # If convex hull fails (e.g., collinear points), fall back to simple ordering
+            print(f"Warning: Convex hull computation failed ({e}), using simple ordering")
+
+            # Split into the two curves
+            n_curve_points = len(na_depths_top)
+            curve_positive_m = points[:n_curve_points]
+            curve_negative_m = points[n_curve_points:]
+
+            # Simple ordering fallback
+            points_sorted = curve_positive_m + list(reversed(curve_negative_m))
+            return points_sorted
 
     def get_capacity(self, N_Ed: float) -> Tuple[float, float]:
         """
         Get moment capacity for given axial force.
 
         Finds the maximum moment capacity on the interaction diagram
-        corresponding to the applied axial force. Handles both symmetric
-        and non-symmetric sections correctly.
+        corresponding to the applied axial force by interpolating along
+        the boundary curve.
 
         Args:
             N_Ed: Applied axial force in kN (positive = compression)
@@ -399,39 +542,79 @@ class MNInteractionDiagram:
             M_Rd_pos: Maximum positive moment capacity
             M_Rd_neg: Maximum negative moment capacity (negative value)
         """
-        # Generate diagram with fine resolution
+        # Generate diagram (returns closed convex hull boundary)
         diagram = self.generate_diagram(n_points=100)
 
         # Extract N and M values
         N_values = np.array([p.N for p in diagram])
         M_values = np.array([p.M for p in diagram])
 
-        # Find points close to target N (within 5% tolerance or nearest neighbors)
-        # M-N diagram is not monotonic, so we can't use simple interpolation
-        N_tolerance = max(abs(N_Ed) * 0.05, 10.0)  # 5% or 10 kN minimum
+        # Split the curve into positive M and negative M sides
+        # The curve is ordered as a closed loop, so we need to separate the two sides
 
-        # Find indices where N is close to N_Ed
-        close_mask = np.abs(N_values - N_Ed) <= N_tolerance
+        # Find indices for positive and negative M regions
+        pos_M_indices = []
+        neg_M_indices = []
 
-        if np.any(close_mask):
-            # Get M values for points close to target N
-            M_close = M_values[close_mask]
+        for i, M in enumerate(M_values):
+            if M >= 0:
+                pos_M_indices.append(i)
+            else:
+                neg_M_indices.append(i)
 
-            # Find maximum positive and negative moments separately
-            positive_moments = M_close[M_close >= 0]
-            negative_moments = M_close[M_close < 0]
+        # Helper function to interpolate M for given N on a curve segment
+        def interpolate_capacity(indices, N_target):
+            if len(indices) == 0:
+                return 0.0
 
-            M_Rd_pos = np.max(positive_moments) if len(positive_moments) > 0 else 0.0
-            M_Rd_neg = np.min(negative_moments) if len(negative_moments) > 0 else 0.0
-        else:
-            # If no close points, find nearest neighbor
-            nearest_idx = np.argmin(np.abs(N_values - N_Ed))
-            M_nearest = M_values[nearest_idx]
+            N_seg = N_values[indices]
+            M_seg = M_values[indices]
 
-            # For non-symmetric sections, we need to check both sides
-            # Use the nearest point's M and assume symmetric as fallback
-            M_Rd_pos = abs(M_nearest)
-            M_Rd_neg = -abs(M_nearest)
+            # Check if N_target is within the range of this segment
+            N_min, N_max = np.min(N_seg), np.max(N_seg)
+
+            if N_target < N_min or N_target > N_max:
+                # N_target is outside this segment's range
+                # Return 0 or nearest value
+                if len(M_seg) == 0:
+                    return 0.0
+                # Find nearest point
+                nearest_idx = np.argmin(np.abs(N_seg - N_target))
+                return M_seg[nearest_idx]
+
+            # Find the two points that bracket N_target
+            # Sort by N to enable bracketing search
+            sorted_indices = np.argsort(N_seg)
+            N_sorted = N_seg[sorted_indices]
+            M_sorted = M_seg[sorted_indices]
+
+            # Find bracketing indices
+            # searchsorted finds where to insert N_target to maintain order
+            insert_idx = np.searchsorted(N_sorted, N_target)
+
+            if insert_idx == 0:
+                # N_target is at or below minimum
+                return M_sorted[0]
+            elif insert_idx >= len(N_sorted):
+                # N_target is at or above maximum
+                return M_sorted[-1]
+            else:
+                # Interpolate between points
+                N1, N2 = N_sorted[insert_idx - 1], N_sorted[insert_idx]
+                M1, M2 = M_sorted[insert_idx - 1], M_sorted[insert_idx]
+
+                if abs(N2 - N1) < 1e-6:
+                    # Avoid division by zero
+                    return (M1 + M2) / 2.0
+
+                # Linear interpolation
+                alpha = (N_target - N1) / (N2 - N1)
+                M_interp = M1 + alpha * (M2 - M1)
+                return M_interp
+
+        # Interpolate capacity on both sides
+        M_Rd_pos = interpolate_capacity(pos_M_indices, N_Ed)
+        M_Rd_neg = interpolate_capacity(neg_M_indices, N_Ed)
 
         return (M_Rd_pos, M_Rd_neg)
 
@@ -441,19 +624,87 @@ class MNInteractionDiagram:
         M_Ed: float,
     ) -> Tuple[bool, float]:
         """
-        Check if applied loads are within capacity.
+        Check if applied loads are within capacity using vector projection method.
+
+        Projects a vector from the origin through the applied load point (M_Ed, N_Ed)
+        and finds where it intersects the M-N boundary curve. The utilization ratio
+        is the ratio of the distance to the applied load vs. distance to the boundary.
+
+        This is the geometrically correct method for M-N interaction diagrams.
 
         Args:
-            N_Ed: Applied axial force in kN
+            N_Ed: Applied axial force in kN (positive = compression)
             M_Ed: Applied moment in kN·m
 
         Returns:
             Tuple of (is_safe, utilization)
-            where utilization = demand/capacity
+            where utilization = ||(M_Ed, N_Ed)|| / ||(M_Rd, N_Rd)||
         """
-        M_Rd, _ = self.get_capacity(N_Ed)
+        # Generate diagram (returns closed convex hull boundary)
+        diagram = self.generate_diagram(n_points=100)
 
-        utilization = abs(M_Ed) / M_Rd if M_Rd > 0 else float('inf')
+        # Extract N and M values
+        N_values = np.array([p.N for p in diagram])
+        M_values = np.array([p.M for p in diagram])
+
+        # Special case: origin point (no load)
+        if abs(M_Ed) < 1e-6 and abs(N_Ed) < 1e-6:
+            return (True, 0.0)
+
+        # Vector from origin to applied load point
+        demand_vector = np.array([M_Ed, N_Ed])
+        demand_magnitude = np.linalg.norm(demand_vector)
+
+        # Direction unit vector
+        direction = demand_vector / demand_magnitude
+
+        # Find intersection of ray from origin in direction of (M_Ed, N_Ed) with boundary
+        # We need to find where the line M = M_Ed * t, N = N_Ed * t intersects the boundary
+
+        max_alpha = 0.0  # Maximum scaling factor where boundary is intersected
+
+        # Check intersection with each edge of the boundary polygon
+        n_points = len(M_values)
+        for i in range(n_points):
+            # Edge from point i to point (i+1) % n_points
+            M1, N1 = M_values[i], N_values[i]
+            M2, N2 = M_values[(i + 1) % n_points], N_values[(i + 1) % n_points]
+
+            # Parametric form of boundary edge: (M, N) = (M1, N1) + s * ((M2, N2) - (M1, N1))
+            # Parametric form of ray: (M, N) = alpha * (M_Ed, N_Ed)
+            #
+            # Solve: alpha * M_Ed = M1 + s * (M2 - M1)
+            #        alpha * N_Ed = N1 + s * (N2 - N1)
+
+            dM = M2 - M1
+            dN = N2 - N1
+
+            # Matrix form: [M_Ed, -dM] [alpha] = [M1]
+            #              [N_Ed, -dN] [s    ]   [N1]
+
+            det = M_Ed * (-dN) - N_Ed * (-dM)
+
+            if abs(det) < 1e-10:
+                # Lines are parallel or nearly parallel
+                continue
+
+            # Solve using Cramer's rule
+            alpha = (M1 * (-dN) - N1 * (-dM)) / det
+            s = (M_Ed * N1 - N_Ed * M1) / det
+
+            # Check if intersection is valid:
+            # - alpha > 0 (intersection is in the direction of the applied load)
+            # - 0 <= s <= 1 (intersection is on this edge segment)
+            if alpha > 1e-10 and 0 <= s <= 1:
+                max_alpha = max(max_alpha, alpha)
+
+        # If no intersection found, the point might be outside or there's a numerical issue
+        if max_alpha < 1e-10:
+            # Likely outside the boundary - use large utilization
+            return (False, float('inf'))
+
+        # Utilization ratio
+        utilization = 1.0 / max_alpha
         is_safe = utilization <= 1.0
 
         return (is_safe, utilization)
@@ -567,7 +818,7 @@ class MNInteractionDiagram:
 
     def get_diagram_arrays(
         self,
-        n_points: int = 50,
+        n_points: int = 100,
     ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """
         Get M-N diagram as numpy arrays for plotting.
