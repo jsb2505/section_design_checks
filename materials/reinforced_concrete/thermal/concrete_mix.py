@@ -1,15 +1,15 @@
 """Concrete mix model for thermal analysis."""
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ConfigDict
 
-from .binder import Binder
+from materials.reinforced_concrete.thermal.binder import Binder
 
 
 class ConcreteMix(BaseModel):
     """Defines concrete mix composition and thermal properties.
 
     Used for early-age thermal analysis including heat generation and temperature
-    prediction. Mix properties affect adiabatic temperature rise and in-situ behavior.
+    prediction. Mix properties affect adiabatic temperature rise and in-situ behaviour.
 
     Attributes:
         cement_content: Total cement content including substitutes (kg/m³)
@@ -37,6 +37,7 @@ class ConcreteMix(BaseModel):
         ...     binder=Binder(substitute_type="ggbs", substitute_percent=30)
         ... )
     """
+    model_config = ConfigDict(validate_assignment=True)
 
     cement_content: float = Field(
         ...,
@@ -80,16 +81,6 @@ class ConcreteMix(BaseModel):
         gt=0.0,
         description="Linear scaling factor for heat generation",
     )
-
-    @classmethod
-    def is_valid_cement_content(cls, cement_content: float) -> bool:
-        """Check if cement content is within valid range (50, 1000] kg/m³."""
-        return 50.0 < cement_content <= 1000.0
-
-    @classmethod
-    def is_valid_concrete_placing_temp(cls, concrete_placing_temp: float) -> bool:
-        """Check if placing temperature is within valid range [5, 50] °C."""
-        return 5.0 <= concrete_placing_temp <= 50.0
 
     def __repr__(self) -> str:
         return (

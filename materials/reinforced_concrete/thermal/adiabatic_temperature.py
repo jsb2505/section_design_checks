@@ -4,12 +4,13 @@ Based on CIRIA C766 methods for predicting heat generation and temperature
 development in early-age concrete under adiabatic conditions.
 """
 
-from typing import Dict, List, Callable, Optional
-from math import exp, sqrt
-from pydantic import BaseModel, Field, field_validator, computed_field
+from typing import Dict, List, Callable
+from math import exp
+from pydantic import BaseModel, Field, computed_field, ConfigDict
 import numpy as np
 
-from .concrete_mix import ConcreteMix
+from materials.reinforced_concrete.thermal.concrete_mix import ConcreteMix
+from materials.reinforced_concrete.thermal.binder import BinderSubstituteType
 
 
 class AdiabaticTemperature(BaseModel):
@@ -48,7 +49,7 @@ class AdiabaticTemperature(BaseModel):
         >>> adiabatic = AdiabaticTemperature(mix=mix, time_elapsed=24.0)
         >>>
         >>> # Get temperature rise
-        >>> temp = adiabatic.find_modelled_temperature_over_time()
+        >>> temp = adiabatic.modelled_temperature_over_time()
         >>> print(f"Temperature at 24h: {temp:.1f}°C")
     """
 
@@ -80,10 +81,8 @@ class AdiabaticTemperature(BaseModel):
         description="Whether to adjust calculations for placing temperature",
     )
 
-    # Constants
-    VALID_MIN_TIME: float = 0.0
+    model_config = ConfigDict(validate_assignment=True)
 
-    model_config = {"arbitrary_types_allowed": True}
 
     @computed_field
     @property
@@ -91,13 +90,15 @@ class AdiabaticTemperature(BaseModel):
         """Coefficient b for heat generation model."""
         coefficient_b = 0.011724
 
-        if self.is_adjusted_for_placing_temp:
-            adjuster = (0.1387 * exp(0.0999 * self.mix.concrete_placing_temp) /
-                       (0.1387 * exp(0.0999 * self.test_mix_temp)))
-        else:
-            adjuster = 1.0
+        if not self.is_adjusted_for_placing_temp:
+            return coefficient_b
+        
+        t_placing = self.mix.concrete_placing_temp
+        t_test = self.test_mix_temp
+        adjuster = exp(0.0999 * (t_placing - t_test))
 
         return coefficient_b * adjuster
+
 
     @computed_field
     @property
@@ -107,13 +108,14 @@ class AdiabaticTemperature(BaseModel):
         cem_1_factor = 1.6
 
         # Binder modification factor
-        if binder.substitute_type == "pfa":
-            binder_mod_factor = -0.001 * binder.substitute_percent
-        elif binder.substitute_type == "ggbs":
-            percent = binder.substitute_percent
-            binder_mod_factor = -0.0072 * percent - 0.00003 * percent**2
-        else:
-            binder_mod_factor = 0.0
+        match binder.substitute_type:
+            case BinderSubstituteType.PFA:
+                binder_mod_factor = -0.001 * binder.substitute_percent
+            case BinderSubstituteType.GGBS:
+                percent = binder.substitute_percent
+                binder_mod_factor = -0.0072 * percent - 0.00003 * percent**2
+            case None | _:  # No substitute binder, so mix is 100% CEM 1
+                binder_mod_factor = 0.0
 
         coefficient_c = cem_1_factor + binder_mod_factor
 
@@ -124,6 +126,7 @@ class AdiabaticTemperature(BaseModel):
 
         return coefficient_c
 
+
     @computed_field
     @property
     def coefficient_d(self) -> float:
@@ -132,13 +135,14 @@ class AdiabaticTemperature(BaseModel):
         cem_1_factor = 6.2
 
         # Binder modification factor
-        if binder.substitute_type == "pfa":
-            binder_mod_factor = 0.2131 * binder.substitute_percent
-        elif binder.substitute_type == "ggbs":
-            percent = binder.substitute_percent
-            binder_mod_factor = 0.0848 * percent - 0.0004 * percent**2
-        else:
-            binder_mod_factor = 0.0
+        match binder.substitute_type:
+            case BinderSubstituteType.PFA:
+                binder_mod_factor = 0.2131 * binder.substitute_percent
+            case BinderSubstituteType.GGBS:
+                percent = binder.substitute_percent
+                binder_mod_factor = 0.0848 * percent - 0.0004 * percent**2
+            case None | _:  # No substitute binder, so mix is 100% CEM 1
+                binder_mod_factor = 0.0
 
         coefficient_d = cem_1_factor + binder_mod_factor
 
@@ -148,10 +152,10 @@ class AdiabaticTemperature(BaseModel):
             test_temp = self.test_mix_temp
             adjuster = ((0.0022 * placing_temp**2 - 0.1503 * placing_temp + 3.1483) /
                        (0.0022 * test_temp**2 - 0.1503 * test_temp + 3.1483))
-        else:
-            adjuster = 1.0
+            coefficient_d *= adjuster
 
-        return coefficient_d * adjuster
+        return coefficient_d
+
 
     @computed_field
     @property
@@ -161,20 +165,22 @@ class AdiabaticTemperature(BaseModel):
         cem_1_factor = 3.5
 
         # Binder modification factor
-        if binder.substitute_type == "pfa":
-            binder_mod_factor = 0.0236
-        elif binder.substitute_type == "ggbs":
-            binder_mod_factor = 0.0125
-        else:
-            binder_mod_factor = 0.0
+        match binder.substitute_type:
+            case BinderSubstituteType.PFA:
+                binder_mod_factor = 0.0236
+            case BinderSubstituteType.GGBS:
+                binder_mod_factor = 0.0125
+            case None | _:  # No substitute binder, so mix is 100% CEM 1
+                binder_mod_factor = 0.0
 
-        activation_time = cem_1_factor + binder_mod_factor * binder.substitute_percent
+        activation_time = cem_1_factor + (binder_mod_factor * binder.substitute_percent)
 
         # Adjust for placing temperature using Rastrup function
         if self.is_adjusted_for_placing_temp:
-            activation_time = self.find_elapsed_time_adjusted_by_rastrup_function(activation_time)
+            activation_time = self.elapsed_time_adjusted_by_rastrup_function(activation_time)
 
         return activation_time
+
 
     @computed_field
     @property
@@ -182,10 +188,10 @@ class AdiabaticTemperature(BaseModel):
         """Calibration factor for GGBS mixes (1.0 for other mixes)."""
         binder = self.mix.binder
 
-        if binder.substitute_type == "ggbs":
-            return 1.0 - (0.15 / 75) * binder.substitute_percent
-        else:
+        if binder.substitute_type != BinderSubstituteType.GGBS:
             return 1.0
+        return 1.0 - (0.15 / 75) * binder.substitute_percent
+
 
     @computed_field
     @property
@@ -198,24 +204,25 @@ class AdiabaticTemperature(BaseModel):
         binder = self.mix.binder
         cem_1_factor1 = 352.0
         cem_1_factor2 = 338.4
+        ratio = (cem_1_factor1 - cem_1_factor2) / cem_1_factor2
 
-        if binder.substitute_type == "pfa":
-            percent = binder.substitute_percent
-            q_41 = cem_1_factor2 - 2.99 * percent
-            adjuster = (1.0 + (cem_1_factor1 - cem_1_factor2) / cem_1_factor2 -
-                       0.027 * percent / 100)
+        match binder.substitute_type:
+            case BinderSubstituteType.PFA:
+                percent = binder.substitute_percent
+                q_41 = cem_1_factor2 - 2.99 * percent
+                adjuster = 1.0 + ratio - (0.027 * percent / 100.0)
 
-        elif binder.substitute_type == "ggbs":
-            percent = binder.substitute_percent
-            q_41 = cem_1_factor2 - 60 * (percent / (100 - percent))**0.6
-            adjuster = (1.0 + (cem_1_factor1 - cem_1_factor2) / cem_1_factor2 *
-                       (100 - percent) / 100)
-
-        else:  # Pure cement
-            q_41 = cem_1_factor1
-            adjuster = 1.0
+            case BinderSubstituteType.GGBS:
+                percent = binder.substitute_percent
+                q_41 = cem_1_factor2 - 60.0 * (percent / (100.0 - percent))**0.6
+                adjuster = 1.0 + ratio * (100.0 - percent) / 100.0
+            
+            case None | _:  # No substitute binder, so mix is 100% CEM 1
+                q_41 = cem_1_factor1
+                adjuster = 1.0
 
         return q_41 * adjuster
+
 
     @computed_field
     @property
@@ -229,20 +236,25 @@ class AdiabaticTemperature(BaseModel):
         q_41 = self.ultimate_heat_generation_q_41
         cem_1_factor = 0.925
 
-        if binder.substitute_type == "pfa":
-            percent = binder.substitute_percent
-            binder_mod_factor = (cem_1_factor - 0.0034 * percent +
-                                0.00002 * percent**2)
+        match binder.substitute_type:
+            case BinderSubstituteType.PFA:
+                percent = binder.substitute_percent
+                binder_mod_factor = (cem_1_factor - 0.0034 * percent +
+                                    0.00002 * percent**2)
 
-        elif binder.substitute_type == "ggbs":
-            percent = binder.substitute_percent
-            binder_mod_factor = (cem_1_factor - 0.0047 * percent +
-                                0.00003 * percent**2)
-
-        else:  # Pure cement
-            binder_mod_factor = cem_1_factor
+            case BinderSubstituteType.GGBS:
+                percent = binder.substitute_percent
+                binder_mod_factor = (cem_1_factor - 0.0047 * percent +
+                                    0.00003 * percent**2)
+                
+            case None:  # No substitute binder, so mix is 100% CEM 1
+                binder_mod_factor = cem_1_factor
+            
+            case _:
+                binder_mod_factor = cem_1_factor
 
         return q_41 / binder_mod_factor
+
 
     @computed_field
     @property
@@ -252,13 +264,15 @@ class AdiabaticTemperature(BaseModel):
         t_ult = ((q_ult * self.mix.cement_content) /
                 (self.mix.specific_heat * self.mix.concrete_mass_density))
 
-        if self.is_adjusted_for_placing_temp:
-            adjuster = 0.2 * (self.mix.concrete_placing_temp - self.test_mix_temp)
-            t_ult -= adjuster
+        if not self.is_adjusted_for_placing_temp:
+            return t_ult
+        adjuster = 0.2 * (self.mix.concrete_placing_temp - self.test_mix_temp)
+        t_ult -= adjuster
 
         return t_ult
 
-    def find_elapsed_time_adjusted_by_rastrup_function(self, time_elapsed: float) -> float:
+
+    def elapsed_time_adjusted_by_rastrup_function(self, time_elapsed: float) -> float:
         """
         Adjust elapsed time for temperature differential using Rastrup function.
 
@@ -275,76 +289,100 @@ class AdiabaticTemperature(BaseModel):
                                      self.rastrup_coefficient)
         return time_elapsed * rastrup_time_adjuster
 
-    def find_total_heat_generated_q_over_time(self) -> float:
-        """
-        Calculate total heat generated at current time_elapsed.
 
-        Units: kJ/kg
-
-        Reference: CIRIA C766 A2.2.1
+    def find_total_heat_generated_q_at_time(self, time_elapsed: float) -> float:
         """
-        time_elapsed = self.time_elapsed
+        Calculate total heat generated at current time_elapsed (hours). Units: kJ/kg
+        Reference: CIRIA C766 A2.2.1 (A2.1)
+
+        Args:
+            time_elapsed: Time elapsed since start in hours
+        
+        Returns:
+            Q: Total heat output after time (t) has elapsed
+        """
+        if time_elapsed < 0.0:
+            raise ValueError("time_elapsed must be >= 0")
+    
         activation_time_t2 = self.activation_time_t2
 
         # Second phase adjuster (activation time delay)
         if time_elapsed <= activation_time_t2:
             q_2_time_delay_adjuster = 0.0
         else:
-            q_2_time_delay_adjuster = ((time_elapsed - activation_time_t2) /
-                                      (time_elapsed - activation_time_t2 + self.coefficient_d))
+            q_2_time_delay_adjuster = ((time_elapsed - activation_time_t2)
+                                      / (time_elapsed - activation_time_t2 + self.coefficient_d))
 
         # First phase adjuster
         q_1_adjuster = 1.0 - exp(-self.coefficient_b * time_elapsed**self.coefficient_c)
 
         # Total heat generated
-        total_heat = (self.ggbs_calibration_factor *
-                     self.mix.mix_multiplier *
-                     0.5 *
-                     self.ultimate_heat_generation_q_ult *
-                     (q_1_adjuster + q_2_time_delay_adjuster))
+        return (
+            self.ggbs_calibration_factor
+            * self.mix.mix_multiplier
+            * 0.5
+            * self.ultimate_heat_generation_q_ult
+            * (q_1_adjuster + q_2_time_delay_adjuster)
+        )
 
-        return total_heat
 
-    def find_modelled_temperature_over_time(self, is_temp_rise_only: bool = False) -> float:
+    def find_modelled_temperature_at_time(
+            self, time_elapsed: float,
+            is_temp_rise_only: bool = False
+        ) -> float:
         """
-        Calculate modelled temperature at current time_elapsed.
+        Calculate modelled temperature at current time_elapsed (hours).
 
         Args:
+            time_elapsed: Time elapsed since start in hours
             is_temp_rise_only: If True, returns only temperature rise (excludes placing temp)
 
         Returns:
             Temperature in °C
         """
-        time_elapsed = self.time_elapsed
+        if time_elapsed < 0.0:
+            raise ValueError("time_elapsed must be >= 0")
+
         activation_time_t2 = self.activation_time_t2
 
         # Second phase adjuster
         if time_elapsed <= activation_time_t2:
             t_2_time_delay_adjuster = 0.0
         else:
-            t_2_time_delay_adjuster = ((time_elapsed - activation_time_t2) /
-                                      (time_elapsed - activation_time_t2 + self.coefficient_d))
+            t_2_time_delay_adjuster = ((time_elapsed - activation_time_t2)
+                                    / (time_elapsed - activation_time_t2 + self.coefficient_d))
 
         # First phase adjuster
         t_1_adjuster = 1.0 - exp(-self.coefficient_b * time_elapsed**self.coefficient_c)
 
         # Temperature rise
-        temperature_multiplier = (self.ggbs_calibration_factor *
-                                 self.mix.mix_multiplier *
-                                 0.5 *
-                                 self.ultimate_temperature_t_ult)
+        temperature_multiplier = (
+            self.ggbs_calibration_factor
+            * self.mix.mix_multiplier
+            * 0.5
+            * self.ultimate_temperature_t_ult
+        )
         adiabatic_temp_rise = temperature_multiplier * (t_1_adjuster + t_2_time_delay_adjuster)
 
         # Add placing temperature if requested
-        if is_temp_rise_only:
-            return adiabatic_temp_rise
-        else:
-            return adiabatic_temp_rise + self.mix.concrete_placing_temp
+        return adiabatic_temp_rise if is_temp_rise_only else adiabatic_temp_rise + self.mix.concrete_placing_temp
+    
 
-    def make_time_temps_dict(self,
-                            number_of_time_intervals: int = 100,
-                            is_temp_rise_only: bool = False
-                            ) -> Dict[str, List[float]]:
+    def get_total_heat_generated_q_over_time(self) -> float:
+        """Total heat generated at self.time_elapsed (kJ/kg)."""
+        return self.find_total_heat_generated_q_at_time(self.time_elapsed)
+
+
+    def get_modelled_temperature_over_time(self, is_temp_rise_only: bool = False) -> float:
+        """Temperature at self.time_elapsed (°C)."""
+        return self.find_modelled_temperature_at_time(self.time_elapsed, is_temp_rise_only)
+
+
+    def make_time_temps_dict(
+            self,
+            number_of_time_intervals: int = 100,
+            is_temp_rise_only: bool = False
+        ) -> Dict[str, List[float]]:
         """
         Generate time-temperature data over the analysis period.
 
@@ -355,23 +393,26 @@ class AdiabaticTemperature(BaseModel):
         Returns:
             Dictionary with 'time' and 'adiabatic_temps' lists
         """
-        original_time = self.time_elapsed
-        time_interval = original_time / number_of_time_intervals
-        end_time = original_time + time_interval
+        if number_of_time_intervals <= 0:
+            raise ValueError("number_of_time_intervals must be > 0")
 
-        time_temps_dict = {"time": [], "adiabatic_temps": []}
+        t_end = float(self.time_elapsed)
 
-        for time in np.arange(0, end_time, time_interval):
-            # Create new instance with updated time (Pydantic immutability workaround)
-            temp_instance = self.model_copy(update={"time_elapsed": float(time)})
-            temp = temp_instance.find_modelled_temperature_over_time(is_temp_rise_only)
+        # Use linspace to avoid float step quirks + guarantee inclusion of endpoints
+        times = np.linspace(0.0, t_end, number_of_time_intervals + 1)
 
-            time_temps_dict["time"].append(float(time))
-            time_temps_dict["adiabatic_temps"].append(temp)
+        temps = [
+            float(self.find_modelled_temperature_at_time(float(t), is_temp_rise_only))
+            for t in times
+        ]
 
-        return time_temps_dict
+        return {"time": [float(t) for t in times], "adiabatic_temps": temps}
 
-    def make_time_heat_dict(self, number_of_time_intervals: int = 100) -> Dict[str, List[float]]:
+
+    def make_time_heat_dict(
+            self,
+            number_of_time_intervals: int = 100
+        ) -> Dict[str, List[float]]:
         """
         Generate time-heat generation data over the analysis period.
 
@@ -381,24 +422,38 @@ class AdiabaticTemperature(BaseModel):
         Returns:
             Dictionary with 'time' and 'heat' lists
         """
-        original_time = self.time_elapsed
-        time_interval = original_time / number_of_time_intervals
-        end_time = original_time + time_interval
+        if number_of_time_intervals <= 0:
+            raise ValueError("number_of_time_intervals must be > 0")
 
-        time_heat_dict = {"time": [], "heat": []}
+        t_end = float(self.time_elapsed)
+        times = np.linspace(0.0, t_end, number_of_time_intervals + 1)
 
-        for time in np.arange(0, end_time, time_interval):
-            # Create new instance with updated time
-            temp_instance = self.model_copy(update={"time_elapsed": float(time)})
-            heat = temp_instance.find_total_heat_generated_q_over_time()
+        heats = [float(self.find_total_heat_generated_q_at_time(float(t))) for t in times]
 
-            time_heat_dict["time"].append(float(time))
-            time_heat_dict["heat"].append(heat)
-
-        return time_heat_dict
+        return {"time": [float(t) for t in times], "heat": heats}
+    
 
     @staticmethod
-    def find_sadgrove_maturity_coefficient(avg_concrete_temp_during_time_interval: float) -> float:
+    def _is_valid_concrete_temp(
+            avg_concrete_temp_during_time_interval: float,
+            temp_limit: float = 5.0) -> bool:
+        '''
+        Checks if avg_concrete_temp_during_time_interval is valid.
+        
+        Args:
+            avg_concrete_temp_during_time_interval: Average concrete temperature in °C
+            temp_limit: The lower limit allowable for the concrete temperature  in °C
+
+        Returns:
+            True, if valid, False if not valid.
+        '''
+        return avg_concrete_temp_during_time_interval >= temp_limit
+
+
+    def sadgrove_maturity_coefficient(
+            self,
+            avg_concrete_temp_during_time_interval: float
+        ) -> float:
         """
         Weaver and Sadgrove maturity coefficient.
 
@@ -408,12 +463,19 @@ class AdiabaticTemperature(BaseModel):
         Returns:
             Maturity coefficient (dimensionless)
         """
+        if not self._is_valid_concrete_temp(avg_concrete_temp_during_time_interval):
+            raise ValueError("Invalid concrete temperature: "
+                             f"{avg_concrete_temp_during_time_interval} °C")
+        
         concrete_temp = avg_concrete_temp_during_time_interval
         return ((concrete_temp + 16) / 36) ** 2
 
-    def find_arrhenius_maturity_coefficient(self,
-                                           avg_concrete_temp_during_time_interval: float,
-                                           activation_energy: float) -> float:
+
+    def arrhenius_maturity_coefficient(
+            self,
+            avg_concrete_temp_during_time_interval: float,
+            activation_energy: float
+        ) -> float:
         """
         Freiesleben Hansen and Pedersen (Arrhenius) maturity coefficient.
 
@@ -424,18 +486,24 @@ class AdiabaticTemperature(BaseModel):
         Returns:
             Maturity coefficient (dimensionless)
         """
+        if not self._is_valid_concrete_temp(avg_concrete_temp_during_time_interval):
+            raise ValueError("Invalid concrete temperature: "
+                             f"{avg_concrete_temp_during_time_interval} °C")
+
         mod_absolute_zero = 273.15
         universal_gas_constant = 8.31446261815324  # J/mol/K
 
         concrete_temp_kelvin = avg_concrete_temp_during_time_interval + mod_absolute_zero
         test_mix_temp_kelvin = self.test_mix_temp + mod_absolute_zero
 
-        return exp((-activation_energy / universal_gas_constant) *
-                  ((1 / concrete_temp_kelvin) - (1 / test_mix_temp_kelvin)))
+        return exp((-activation_energy / universal_gas_constant)
+                   * ((1 / concrete_temp_kelvin) - (1 / test_mix_temp_kelvin)))
 
-    def find_saul_maturity_coefficient(self,
-                                      avg_concrete_temp_during_time_interval: float
-                                      ) -> float:
+
+    def saul_maturity_coefficient(
+            self,
+            avg_concrete_temp_during_time_interval: float
+        ) -> float:
         """
         Nurse-Saul maturity coefficient (linear relationship).
 
@@ -445,38 +513,48 @@ class AdiabaticTemperature(BaseModel):
         Returns:
             Maturity coefficient (dimensionless)
         """
+        if not self._is_valid_concrete_temp(avg_concrete_temp_during_time_interval):
+            raise ValueError("Invalid concrete temperature: "
+                             f"{avg_concrete_temp_during_time_interval} °C")
+        
         datum_temperature = -11.0  # Temperature at which no strength development occurs
+
         return ((self.test_mix_temp - datum_temperature) /
                (avg_concrete_temp_during_time_interval - datum_temperature))
 
-    def find_sadgrove_maturity(self, number_of_time_intervals: int = 50) -> float:
+
+    def sadgrove_maturity(self, number_of_time_intervals: int = 50) -> float:
         """Calculate Sadgrove maturity over time_elapsed period."""
         return self._calculate_maturity(
-            self.find_sadgrove_maturity_coefficient,
+            self.sadgrove_maturity_coefficient,
             number_of_time_intervals
         )
 
-    def find_arrhenius_maturity(self,
+
+    def arrhenius_maturity(self,
                                activation_energy: float,
                                number_of_time_intervals: int = 50
                                ) -> float:
         """Calculate Arrhenius maturity over time_elapsed period."""
         return self._calculate_maturity(
-            lambda avg_temp: self.find_arrhenius_maturity_coefficient(avg_temp, activation_energy),
+            lambda avg_temp: self.arrhenius_maturity_coefficient(avg_temp, activation_energy),
             number_of_time_intervals
         )
 
-    def find_saul_maturity(self, number_of_time_intervals: int = 50) -> float:
+
+    def saul_maturity(self, number_of_time_intervals: int = 50) -> float:
         """Calculate Saul maturity over time_elapsed period."""
         return self._calculate_maturity(
-            self.find_saul_maturity_coefficient,
+            self.saul_maturity_coefficient,
             number_of_time_intervals
         )
 
-    def _calculate_maturity(self,
-                           maturity_coefficient_function: Callable[[float], float],
-                           number_of_time_intervals: int
-                           ) -> float:
+
+    def _calculate_maturity(
+            self,
+            maturity_coefficient_function: Callable[[float], float],
+            number_of_time_intervals: int
+        ) -> float:
         """
         Generic maturity calculation.
 
@@ -506,11 +584,14 @@ class AdiabaticTemperature(BaseModel):
 
         return total_maturity
 
+
     @staticmethod
-    def find_strength_maturity_relationship(ultimate_compressive_strength: float,
-                                           characteristic_time_constant: float,
-                                           shape_parameter: float,
-                                           test_age: float) -> float:
+    def strength_maturity_relationship(
+            ultimate_compressive_strength: float,
+            characteristic_time_constant: float,
+            shape_parameter: float,
+            test_age: float
+        ) -> float:
         """
         Three Parameter Equation (Freiesleben Hansen and Pedersen).
 
@@ -524,11 +605,12 @@ class AdiabaticTemperature(BaseModel):
 
         Returns:
             Compressive strength in MPa
-        """
-        return (ultimate_compressive_strength *
-               exp(-characteristic_time_constant / test_age) ** shape_parameter)
+        """    
+        return (ultimate_compressive_strength * 
+                exp(-(characteristic_time_constant / test_age) ** shape_parameter))
+
 
     def __str__(self) -> str:
         """User-friendly representation."""
         return (f"AdiabaticTemperature(time={self.time_elapsed:.1f}h, "
-               f"temp={self.find_modelled_temperature_over_time():.1f}°C)")
+                f"temp={self.get_modelled_temperature_over_time():.1f}°C)")

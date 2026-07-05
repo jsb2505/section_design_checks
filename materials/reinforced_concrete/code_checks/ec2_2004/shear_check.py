@@ -32,6 +32,7 @@ from materials.reinforced_concrete.code_checks.ec2_2004.shear_utils import (
     sigma_cp_from_N_and_area,
     cap_sigma_cp_upper,
     clamp_cot_theta,
+    find_minimum_ratio_of_shear_reinforcement
 )
 from materials.reinforced_concrete.analysis.interaction_diagram import (
     MNInteractionDiagram,
@@ -944,15 +945,6 @@ class ShearCheck(BaseCodeCheck):
             f_yk = self.shear_reinforcement.f_yk
             link_angle_deg = self.shear_reinforcement.angle
 
-        rho_w_min = self._find_minimum_ratio_of_shear_reinforcement(self.concrete.f_ck, f_yk)
+        rho_w_min = find_minimum_ratio_of_shear_reinforcement(self.concrete.f_ck, f_yk)
         reinforcement_angle_rads = radians(link_angle_deg)
         return rho_w_min * self.breadth * sin(reinforcement_angle_rads)
-
-
-    @staticmethod
-    def _find_minimum_ratio_of_shear_reinforcement(f_ck: float, f_yk: float) -> float:
-        '''Minimum ratio of shear reinforcement, ρ_w_min.
-
-        Ref: EC2 §9.2.2(5) (9.5N)
-        '''
-        return 0.08 * sqrt(f_ck) / f_yk

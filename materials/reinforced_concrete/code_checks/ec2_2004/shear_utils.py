@@ -442,28 +442,43 @@ def find_v_min(f_ck: float, k_factor: float) -> float:
 
 def sigma_cp_from_N_and_area(N_Ed: float, A_mm2: float) -> float:
     """
-        Compressive stress in the concrete from axial load or prestressing
+    Compressive stress in the concrete from axial load or prestressing
 
-        Args:
-            N_Ed: Design axial force in kN (positive is compression)
-            A_mm2: Cross-sectional area of section in mm²
+    Args:
+        N_Ed: Design axial force in kN (positive is compression)
+        A_mm2: Cross-sectional area of section in mm²
 
-        Returns:
-            sigma_cp in MPa
+    Returns:
+        sigma_cp in MPa
     """
     return from_kn(N_Ed, ForceUnit.N) / A_mm2
 
 
 def cap_sigma_cp_upper(sigma_cp: float, f_cd: float) -> float:
     """
-        Capped compressive stress in the concrete from axial load or prestressing.
-        Only caps positive compressive stresses.
+    Capped compressive stress in the concrete from axial load or prestressing.
+    Only caps positive compressive stresses.
 
-        Args:
-            sigma_cp: uncapped compressive stress in MPa
-            f_cd: Design cylinder strength of concrete in MPa
+    Args:
+        sigma_cp: uncapped compressive stress in MPa
+        f_cd: Design cylinder strength of concrete in MPa
 
-        Returns:
-            sigma_cp_capped in MPa
+    Returns:
+        sigma_cp_capped in MPa
     """
     return min(sigma_cp, 0.2 * f_cd)
+
+
+def find_minimum_ratio_of_shear_reinforcement(f_ck: float, f_yk: float) -> float:
+    '''
+    Calculates the minimum ratio of shear reinforcement.
+    Ref: EC2 §9.2.2(5) (9.5N)
+
+    Args:
+        f_ck: Characteristic cylinder strength of concrete
+        f_yk: Characteristic yield strength of rebar
+
+    Returns:
+        ρ_w_min: the minimum ratio of shear reinforcement (dimensionless, empirical formula)
+    '''
+    return 0.08 * sqrt(f_ck) / f_yk

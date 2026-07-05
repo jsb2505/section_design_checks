@@ -1,4 +1,4 @@
-"""Thermal analysis module for early-age concrete behavior.
+"""Thermal analysis module for early-age concrete behaviour.
 
 This module provides models for:
 - Binder composition (cement with ggbs/pfa substitutes)
@@ -7,12 +7,13 @@ This module provides models for:
 - In-situ temperature predictions
 """
 
-from .binder import Binder
+from .binder import Binder, BinderSubstituteType
 from .concrete_mix import ConcreteMix
 from .adiabatic_temperature import AdiabaticTemperature
 
 __all__ = [
     "Binder",
+    "BinderSubstituteType",
     "ConcreteMix",
     "AdiabaticTemperature",
 ]
