@@ -16,10 +16,15 @@ Usage::
     concrete = ConcreteMaterial(grade="C30/37")  # alpha_cc defaults to 1.0
 """
 
+from __future__ import annotations
+
 from enum import StrEnum
-from typing import Any, Optional
+from typing import Any, Callable, Optional, Union
 
 from materials.reinforced_concrete.ndp.ndp import EN1992_1_1_2004
+
+# Type alias for NDP values (can be constants or callables)
+NDPValue = Union[float, int, Callable[..., float]]
 
 
 class EurocodeVersion(StrEnum):
@@ -87,7 +92,7 @@ class NDPRegistry:
         # Validate the combination exists
         self._get_country_data()
 
-    def get(self, param: str) -> float:
+    def get(self, param: str) -> NDPValue:
         """
         Look up a single NDP value from the active code + country.
 
@@ -95,7 +100,7 @@ class NDPRegistry:
             param: Parameter key (e.g. ``"gamma_c"``, ``"alpha_cc"``)
 
         Returns:
-            The NDP value as a float.
+            The NDP value (can be a constant float or a callable).
 
         Raises:
             KeyError: If the parameter is not found.
@@ -107,7 +112,7 @@ class NDPRegistry:
                 f"{self._code} / {self._country}. "
                 f"Available: {sorted(country_data.keys())}"
             )
-        return float(country_data[param]["value"])
+        return country_data[param]["value"]
 
     def get_info(self, param: str) -> dict[str, Any]:
         """
@@ -140,9 +145,46 @@ class NDPRegistry:
 # Module-level convenience functions
 # ---------------------------------------------------------------------------
 
-def get_ndp(param: str) -> float:
-    """Look up an NDP value from the active code + country context."""
+def get_ndp(param: str) -> NDPValue:
+    """
+    Look up raw NDP value from the active code + country context.
+
+    Returns either a constant (float/int) or a callable (lambda function).
+    For uniform interface, prefer using get_ndp_callable() instead.
+    """
     return NDPRegistry.instance().get(param)
+
+
+def get_ndp_callable(param: str) -> Callable[..., float]:
+    """
+    Get NDP as a callable, wrapping constants if needed.
+
+    This provides a uniform interface where both constant and formula-based
+    NDPs can be called the same way.
+
+    Args:
+        param: Parameter key (e.g. "nu_shear", "alpha_cw")
+
+    Returns:
+        A callable that computes the NDP value. For constants, returns a
+        function that ignores arguments and returns the constant.
+
+    Example:
+        nu_func = get_ndp_callable("nu_shear")
+        nu = nu_func(f_ck=35)  # works for both constants and formulas
+    """
+    value = get_ndp(param)
+
+    if callable(value):
+        return value
+
+    # Wrap constant in a named function for better tracebacks
+    const = float(value)
+
+    def _const_fn(*_args: Any, **_kwargs: Any) -> float:
+        return const
+
+    return _const_fn
 
 
 def get_ndp_info(param: str) -> dict[str, Any]:
@@ -169,6 +211,7 @@ __all__ = [
     "CountryCode",
     "NDPRegistry",
     "get_ndp",
+    "get_ndp_callable",
     "get_ndp_info",
     "set_ndp_context",
     "get_ndp_context",
