@@ -1420,7 +1420,8 @@ class ShearCheck(BaseCodeCheck):
             eps_top, eps_bottom = diagram.find_strains_for_MN(My_Ed, N_Ed, **_mz_kw)
             try:
                 strain_state_local = diagram.find_strain_state_for_MN(My_Ed, N_Ed, **_mz_kw)
-            except Exception:
+            except ValueError:
+                # best-effort full strain state; narrowed so real bugs surface
                 pass
         else:
             eps_top, eps_bottom = None, None

@@ -534,7 +534,10 @@ class BendingCheck(BaseCodeCheck):
 
             try:
                 eps_top, eps_bottom = diagram.find_strains_for_MN(M_design, N_Ed, **_mz_kw)
-            except Exception:
+            except ValueError:
+                # Solver non-convergence (load outside capacity) -> strains unknown.
+                # Narrowed to ValueError so a genuine bug surfaces rather than being
+                # silently masked as a None strain state.
                 eps_top, eps_bottom = None, None
 
             # Obtain full strain state for biaxial-aware downstream calls
@@ -542,7 +545,7 @@ class BendingCheck(BaseCodeCheck):
             if eps_top is not None and eps_bottom is not None:
                 try:
                     strain_state_local = diagram.find_strain_state_for_MN(M_design, N_Ed, **_mz_kw)
-                except Exception:
+                except ValueError:
                     pass
 
             if eps_top is not None and eps_bottom is not None:
