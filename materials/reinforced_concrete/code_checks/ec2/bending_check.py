@@ -114,6 +114,7 @@ class BendingCheck(BaseCodeCheck):
     # ===========================
 
     _diagram: MNInteractionDiagram = PrivateAttr()
+    _diagram_no_comp_steel: Optional[MNInteractionDiagram] = PrivateAttr(default=None)
 
     def model_post_init(self, __context):
         """
@@ -124,7 +125,7 @@ class BendingCheck(BaseCodeCheck):
         """
         super().model_post_init(__context)
 
-        # Create and cache the diagram for reuse
+        # Create and cache the diagram for reuse (with compression steel)
         self._diagram = create_interaction_diagram(
             section=self.section,
             concrete=self.concrete,
@@ -133,11 +134,33 @@ class BendingCheck(BaseCodeCheck):
             n_fibres_width=self.n_fibres_width,
             n_fibres_height=self.n_fibres_height,
             use_accidental=self.use_accidental,
+            ignore_compression_steel=False,
         )
+        # Diagram without compression steel is created lazily on first use
+        self._diagram_no_comp_steel = None
 
         # cached properties to save time later
         self._A_transformed = self.section.get_transformed_area(self.concrete.E_cm)  # mm²
         self._A_gross = self.section.get_area()  # mm²
+
+    def _get_diagram(self, ignore_compression_steel: bool = False) -> MNInteractionDiagram:
+        """Get the appropriate cached diagram based on ignore_compression_steel flag."""
+        if not ignore_compression_steel:
+            return self._diagram
+
+        # Lazily create the diagram without compression steel
+        if self._diagram_no_comp_steel is None:
+            self._diagram_no_comp_steel = create_interaction_diagram(
+                section=self.section,
+                concrete=self.concrete,
+                concrete_model_type=self.concrete_model_type,
+                steel_model_type=self.steel_model_type,
+                n_fibres_width=self.n_fibres_width,
+                n_fibres_height=self.n_fibres_height,
+                use_accidental=self.use_accidental,
+                ignore_compression_steel=True,
+            )
+        return self._diagram_no_comp_steel
 
 
     # ===============================================
@@ -159,6 +182,7 @@ class BendingCheck(BaseCodeCheck):
         M_cap: Optional[float] = None,
         shear_reinforcement: Optional[ShearRebar] = None,
         warning_threshold: float = 0.95,
+        ignore_compression_steel: bool = False,
         **kwargs,
     ) -> CheckResult:
         """
@@ -193,6 +217,8 @@ class BendingCheck(BaseCodeCheck):
                                 If provided, calculates cot(θ) from V_Ed.
                                 If not provided, uses a_l = d (no shear reinforcement)
             warning_threshold: Utilization threshold for warnings (default 0.95)
+            ignore_compression_steel: If True, steel in compression contributes zero force.
+                                     This is a conservative option used by some commercial software.
 
         Returns:
             CheckResult with pass/fail status and utilization
@@ -210,6 +236,7 @@ class BendingCheck(BaseCodeCheck):
             M_cap=M_cap,
             shear_reinforcement=shear_reinforcement,
             warning_threshold=warning_threshold,
+            ignore_compression_steel=ignore_compression_steel,
         )
 
 
@@ -222,6 +249,7 @@ class BendingCheck(BaseCodeCheck):
         M_cap: Optional[float],
         shear_reinforcement: Optional[ShearRebar],
         warning_threshold: float,
+        ignore_compression_steel: bool = False,
     ) -> CheckResult:
         apply_tension_shift = M_cap is not None
 
@@ -241,7 +269,8 @@ class BendingCheck(BaseCodeCheck):
         M_design = shift.M_design
 
         # --- Step 2: capacity check against diagram ---
-        cap = self._diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_design, return_details=False)
+        diagram = self._get_diagram(ignore_compression_steel)
+        cap = diagram.get_capacity_vector(N_Ed=N_Ed, M_Ed=M_design, return_details=False)
         N_Rd, M_Rd, is_safe, utilization = cap.N_Rd, cap.M_Rd, cap.is_safe, cap.utilization
 
         demand_components = {"N": float(N_Ed), "M": float(M_Ed_original)}
@@ -270,6 +299,7 @@ class BendingCheck(BaseCodeCheck):
                 "section_name": self.section.section_name or "unnamed",
                 "concrete_grade": self.concrete.grade,
                 "reinforcement_ratio": self.section.reinforcement_ratio,
+                "ignore_compression_steel": ignore_compression_steel,
             }
             return self._create_result(
                 check_name="Bending check (EC2 §6.1)",
@@ -309,6 +339,7 @@ class BendingCheck(BaseCodeCheck):
             "section_name": self.section.section_name or "unnamed",
             "concrete_grade": self.concrete.grade,
             "reinforcement_ratio": self.section.reinforcement_ratio,
+            "ignore_compression_steel": ignore_compression_steel,
         }
 
         return self._create_result(

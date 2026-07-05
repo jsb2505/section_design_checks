@@ -105,23 +105,32 @@ class ReinforcingSteel(BaseMaterial):
         """Accidental design yield strength: f_yd = f_yk / γ_s,accidental."""
         return self.f_yk / self.gamma_s_accidental
 
-    def get_elastic_modulus(self) -> float:
-        """
-        Return elastic modulus (implements BaseMaterial abstract method).
-
-        Returns:
-            E_s in MPa
-        """
-        return self.E_s
-
     @property
     def f_t(self) -> float:
         """
-        Characteristic tensile strength (§C.1).
+        Characteristic tensile strength f_tk (§C.1).
 
         Uses minimum ratio × f_yk.
         """
         return self.grade.ft_ratio_min * self.f_yk
+
+    @property
+    def f_td(self) -> float:
+        """
+        Design tensile strength f_td = f_t / γ_s.
+
+        Used for inclined branch of stress-strain curve at ULS.
+        """
+        return self.f_t / self.gamma_s
+
+    @property
+    def f_td_accidental(self) -> float:
+        """
+        Accidental design tensile strength f_td,acc = f_t / γ_s,acc.
+
+        Used for inclined branch of stress-strain curve at accidental ULS.
+        """
+        return self.f_t / self.gamma_s_accidental
 
     @property
     def epsilon_yk(self) -> float:
@@ -157,6 +166,15 @@ class ReinforcingSteel(BaseMaterial):
     def ductility_class(self) -> Literal["A", "B", "C"]:
         """Ductility class based on grade."""
         return self.grade.ductility_class
+    
+    def get_elastic_modulus(self) -> float:
+        """
+        Return elastic modulus (implements BaseMaterial abstract method).
+
+        Returns:
+            E_s in MPa
+        """
+        return self.E_s
 
     @classmethod
     def f_yk_for(cls, grade: ReinforcingSteelGrade | str | None = None) -> float:

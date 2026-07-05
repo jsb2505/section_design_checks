@@ -87,6 +87,15 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         """Yield strain corresponding to f_y."""
         return self.f_y / self.steel.E_s
 
+    @property
+    def f_t(self) -> float:
+        """Tensile strength for inclined branch (design, characteristic, or accidental)."""
+        if self.use_characteristic:
+            return self.steel.f_t
+        if self.use_accidental:
+            return self.steel.f_td_accidental
+        return self.steel.f_td
+
 
     @model_validator(mode="after")
     def validate_strain_limits(self) -> "SteelStressStrainEC2":
@@ -136,7 +145,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         # Inclined branch: strain hardening up to epsilon_ud, then clip at epsilon_ud
         clipped = min(abs_strain, self.steel.epsilon_ud)
         strain_ratio = (clipped - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
-        stress = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
+        stress = self.f_y + (self.f_t - self.f_y) * strain_ratio
         return sign * stress
 
 
@@ -182,13 +191,13 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
         if np.iscomplexobj(strains):
             abs_strains_complex = np.abs(strains[plastic])
             strain_ratio = (abs_strains_complex - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
-            stress_mag = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
+            stress_mag = self.f_y + (self.f_t - self.f_y) * strain_ratio
             stresses[plastic] = signs[plastic] * stress_mag
         else:
             # Real case: clip at ultimate strain
             abs_strains_clipped = np.minimum(abs_strains_real[plastic], self.steel.epsilon_ud)
             strain_ratio = (abs_strains_clipped - self.epsilon_y) / (self.steel.epsilon_ud - self.epsilon_y)
-            stress_mag = self.f_y + (self.steel.f_t - self.f_y) * strain_ratio
+            stress_mag = self.f_y + (self.f_t - self.f_y) * strain_ratio
             stresses[plastic] = signs[plastic] * stress_mag
 
         return stresses
@@ -247,7 +256,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
             return 0.0  # Post-ultimate: clipped at eps_ud (flat)
 
         # Hardening slope: (f_t - f_y) / (eps_ud - eps_y)
-        E_hardening = (self.steel.f_t - self.f_y) / (self.steel.epsilon_ud - self.epsilon_y)
+        E_hardening = (self.f_t - self.f_y) / (self.steel.epsilon_ud - self.epsilon_y)
         return float(E_hardening)  # Typically ~1000-2000 MPa
 
 
@@ -283,7 +292,7 @@ class SteelStressStrainEC2(BaseConstitutiveModel):
             # Only apply hardening slope where |ε| < ε_ud
             hardening = plastic & (abs_strains < self.steel.epsilon_ud)
             if np.any(hardening):
-                E_hardening = (self.steel.f_t - self.f_y) / (self.steel.epsilon_ud - self.epsilon_y)
+                E_hardening = (self.f_t - self.f_y) / (self.steel.epsilon_ud - self.epsilon_y)
                 E_t[hardening] = E_hardening
             # Beyond ε_ud: E_t = 0 (clipped, already initialized to 0)
 

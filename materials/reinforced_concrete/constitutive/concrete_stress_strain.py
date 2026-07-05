@@ -157,15 +157,26 @@ class ConcreteStressStrainSchematic(BaseConstitutiveModel):
 
 
     def get_stress_array(self, strains: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        """Vectorized stress calculation."""
+        """
+        Vectorized stress calculation for ULS (cracked concrete assumption).
+
+        Sign convention: compression positive.
+
+        ULS assumption (cracked section):
+            - Tensile concrete (strain ≤ 0) contributes zero stress
+            - Only compressive concrete (strain > 0) carries stress
+            - This is standard for Ultimate Limit State design per EC2 §6.1
+        """
         strains = np.asarray(strains, dtype=float)
         stresses = np.zeros_like(strains)
 
-        # No tension
+        # ULS cracked section: concrete in tension (strain ≤ 0) has zero stress.
+        # Only fibres with positive strain (compression) contribute.
         comp = strains > 0.0
         if not np.any(comp):
             return stresses
 
+        # Clip strains exceeding ultimate strain (with small tolerance)
         eps_cu = float(self.concrete.epsilon_cu1)
         strains_clipped, killed = _apply_ultimate_tolerance_clip(
             strains=strains,
@@ -173,22 +184,27 @@ class ConcreteStressStrainSchematic(BaseConstitutiveModel):
             tol=float(self.ultimate_strain_tol),
         )
 
+        # Valid fibres: in compression AND not killed by strain limit
         valid = comp & (~killed)
         if not np.any(valid):
             return stresses
 
+        # Sargin formula: σ = f_cm * (k·η - η²) / (1 + (k-2)·η)
+        # where η = ε / ε_c1 (normalised strain)
         eps1 = abs(self.concrete.epsilon_c1)
         eta = strains_clipped[valid] / eps1
 
-        numerator = self.k * eta - eta * eta
+        numerator = self.k * eta - eta**2
         denominator = 1.0 + (self.k - 2.0) * eta
 
+        # Avoid division by zero (denominator ≈ 0 is rare but possible)
         mask = np.abs(denominator) >= 1e-12
         if np.any(mask):
             valid_idx = np.flatnonzero(valid)
             write_idx = valid_idx[mask]
             stresses[write_idx] = self.concrete.f_cm * (numerator[mask] / denominator[mask])
 
+        # Final clamp: ensure no tensile stress (numerical safety)
         return np.maximum(0.0, stresses)
 
 

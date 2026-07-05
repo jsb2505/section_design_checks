@@ -175,12 +175,14 @@ class MNInteractionDiagram:
         confined_concrete: bool = False,
         confinement_rho_s: Optional[float] = None,
         confinement_f_yh: Optional[float] = None,
+        ignore_compression_steel: bool = False,
     ):
         self.section = section
         self.concrete = concrete
 
         self.tension_stiffening = tension_stiffening
         self.confined_concrete = confined_concrete
+        self.ignore_compression_steel = ignore_compression_steel
         self.confinement_rho_s = confinement_rho_s
 
         # IMPORTANT: treat confinement_f_yh as CHARACTERISTIC if provided.
@@ -504,6 +506,9 @@ class MNInteractionDiagram:
                 m = steel_indices == gi
                 if np.any(m):
                     steel_stresses[m] = sm.get_stress_array(steel_strains[m])
+            # Zero out compression steel if flag is set (positive strain = compression)
+            if self.ignore_compression_steel:
+                steel_stresses[steel_strains > 0] = 0.0
             stresses[steel_mask] = steel_stresses
 
         N, M = self.calculate_section_forces(stresses)
@@ -611,6 +616,9 @@ class MNInteractionDiagram:
                 m = steel_indices == gi
                 if np.any(m):
                     steel_stresses[m] = sm.get_stress_array(steel_strains[m])
+            # Zero out compression steel if flag is set (positive strain = compression)
+            if self.ignore_compression_steel:
+                steel_stresses[steel_strains > 0] = 0.0
             stresses[steel_mask] = steel_stresses
 
         # Forces per fibre (compression positive): Force = stress × area
@@ -1807,7 +1815,7 @@ class MNInteractionDiagram:
             hovertemplate="M: %{x:.3g} kN·m<br>N: %{y:.3g} kN<extra></extra>",
         ))
 
-        # 3. Restore the Origin Marker
+        # 3. Add Origin Marker
         fig.add_trace(go.Scatter(
             x=[0.0], y=[0.0],
             mode="markers",
@@ -1912,6 +1920,410 @@ class MNInteractionDiagram:
 
         return fig
 
+    def plot_stress_strain(
+        self,
+        M_Ed: float,
+        N_Ed: float,
+        *,
+        show: bool = True,
+        title: Optional[str] = None,
+        width: int = 1200,
+        height: int = 600,
+    ) -> Any:
+        """
+        Visualize stress and strain distribution for a given load case.
+
+        Solves for the strain state (ε_top, ε_bottom) that produces the target (M_Ed, N_Ed),
+        then displays:
+        - Left: Section cross-section with stress colour map
+        - Centre: Strain profile (linear distribution across depth)
+        - Right: Stress profile (showing concrete stress block and steel stresses)
+
+        Also shows:
+        - Neutral axis position
+        - Resultant force annotations
+
+        Args:
+            M_Ed: Design moment (kN·m)
+            N_Ed: Design axial force (kN, compression positive)
+            show: If True, display the figure immediately
+            title: Optional plot title
+            width: Figure width in pixels
+            height: Figure height in pixels
+
+        Returns:
+            Plotly Figure object
+
+        Raises:
+            ValueError: If the load point is outside the M-N diagram envelope
+                       (no valid strain state exists)
+
+        Example:
+            >>> diagram = create_interaction_diagram(section, concrete)
+            >>> fig = diagram.plot_stress_strain(M_Ed=150, N_Ed=500, show=True)
+        """
+        try:
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+        except ImportError as e:
+            raise ImportError(
+                "Plotly is required for plotting. Install with: pip install plotly"
+            ) from e
+
+        # 1. Solve for strain state
+        try:
+            eps_top, eps_bottom = self.find_strains_for_MN(M_target=M_Ed, N_target=N_Ed)
+        except ValueError as e:
+            raise ValueError(
+                f"Cannot find strain state for M_Ed={M_Ed:.1f} kN·m, N_Ed={N_Ed:.1f} kN. "
+                f"Load point may be outside the M-N diagram envelope. Original error: {e}"
+            ) from e
+
+        # 2. Get fibre-level data
+        forces, y_coords, areas = self.get_fibre_forces_from_end_strains(eps_top, eps_bottom)
+
+        # Compute strains at all fibres
+        strains = self._strain_field_from_end_strains(eps_top=eps_top, eps_bottom=eps_bottom)
+
+        # Compute stresses (force / area)
+        stresses = np.divide(forces, areas, out=np.zeros_like(forces), where=areas > 0)
+
+        # Get material types
+        material_type = self._fibre_mat
+        x_coords = self._fibre_x
+
+        # Separate concrete and steel
+        conc_mask = material_type == "concrete"
+        steel_mask = material_type == "steel"
+
+        # 3. Calculate key values
+        y_top = self.section_top
+        y_bottom = self.section_bottom
+        h = self.section_height
+
+        # Neutral axis: where strain = 0
+        # Linear interpolation: strain = eps_bottom + (eps_top - eps_bottom) * (y - y_bottom) / h
+        # Set to 0 and solve for y:
+        if abs(eps_top - eps_bottom) > 1e-12:
+            y_na = y_bottom - eps_bottom * h / (eps_top - eps_bottom)
+            # Clamp to section bounds for display (NA may be outside section)
+            na_in_section = y_bottom <= y_na <= y_top
+        else:
+            y_na = None
+            na_in_section = False
+
+        # Resultant forces
+        # TODO all steel forces are summed here and not separated by tension/compression
+        # Need 3 sets of forces, Fc_comp, Fs_comp, Fs_tens.
+        # These should sum to zero.
+        # Change legend to report these 3 values.
+        F_concrete = np.sum(forces[conc_mask])  # Total concrete force (kN)
+        F_steel = np.sum(forces[steel_mask])  # Total steel force (kN)
+
+        # Centroids of tension and compression forces
+        comp_mask = forces > 0
+        tens_mask = forces < 0
+
+        if np.any(comp_mask) and np.sum(forces[comp_mask]) > 1e-6:
+            y_C = np.sum(forces[comp_mask] * y_coords[comp_mask]) / np.sum(forces[comp_mask])
+        else:
+            y_C = None
+
+        if np.any(tens_mask) and abs(np.sum(forces[tens_mask])) > 1e-6:
+            y_T = np.sum(forces[tens_mask] * y_coords[tens_mask]) / np.sum(forces[tens_mask])
+        else:
+            y_T = None
+
+        # Lever arm
+        if y_C is not None and y_T is not None:
+            z = abs(y_C - y_T)
+        else:
+            z = None
+
+        # 4. Create subplots
+        fig = make_subplots(
+            rows=1, cols=3,
+            column_widths=[0.4, 0.3, 0.3],
+            subplot_titles=("Section (Stress)", "Strain Profile", "Stress Profile"),
+            horizontal_spacing=0.08,
+        )
+
+        # ===========================
+        # Left: Section with stress colour map
+        # ===========================
+        # Get section outline
+        outline_coords = list(self.section.outline.exterior.coords)
+        outline_x = [c[0] for c in outline_coords]
+        outline_y = [c[1] for c in outline_coords]
+
+        # Section outline
+        fig.add_trace(
+            go.Scatter(
+                x=outline_x, y=outline_y,
+                mode="lines",
+                line=dict(color="black", width=2),
+                name="Section outline",
+                showlegend=False,
+            ),
+            row=1, col=1,
+        )
+
+        # Concrete fibres as coloured markers
+        if np.any(conc_mask):
+            conc_stresses = stresses[conc_mask]
+            conc_x = x_coords[conc_mask]
+            conc_y = y_coords[conc_mask]
+
+            # Colour scale: blue (tension/zero) to red (compression)
+            fig.add_trace(
+                go.Scatter(
+                    x=conc_x, y=conc_y,
+                    mode="markers",
+                    marker=dict(
+                        size=6,
+                        color=conc_stresses,
+                        colorscale="RdBu_r",  # Red = compression, Blue = tension
+                        cmin=-max(abs(conc_stresses.min()), abs(conc_stresses.max())) if len(conc_stresses) > 0 else -1,
+                        cmax=max(abs(conc_stresses.min()), abs(conc_stresses.max())) if len(conc_stresses) > 0 else 1,
+                        colorbar=dict(
+                            title="σ (MPa)",
+                            x=0.32,
+                            len=0.8,
+                        ),
+                    ),
+                    hovertemplate=(
+                        "x: %{x:.1f} mm<br>"
+                        "y: %{y:.1f} mm<br>"
+                        "σ: %{marker.color:.2f} MPa<br>"
+                        "<extra>Concrete</extra>"
+                    ),
+                    name="Concrete",
+                    showlegend=False,
+                ),
+                row=1, col=1,
+            )
+
+        # Steel data (extracted once, used in both section and stress profile plots)
+        steel_x = x_coords[steel_mask]
+        steel_y = y_coords[steel_mask]
+        steel_stresses_arr = stresses[steel_mask]
+        steel_forces_arr = forces[steel_mask]
+        steel_strains_arr = strains[steel_mask]
+
+        # Steel rebars as circles
+        if np.any(steel_mask):
+            for i in range(len(steel_x)):
+                stress_val = float(steel_stresses_arr[i])
+                force_val = float(steel_forces_arr[i])
+                strain_val = float(steel_strains_arr[i])
+                x_val = float(steel_x[i])
+                y_val = float(steel_y[i])
+
+                # Colour: green for tension (negative stress), orange for compression
+                color = "green" if stress_val < 0 else "darkorange"
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=[x_val], y=[y_val],
+                        mode="markers",
+                        marker=dict(
+                            size=12,
+                            color=color,
+                            line=dict(color="black", width=1),
+                        ),
+                        hovertemplate=(
+                            f"x: {x_val:.1f} mm<br>"
+                            f"y: {y_val:.1f} mm<br>"
+                            f"σ: {stress_val:.1f} MPa<br>"
+                            f"ε: {strain_val * 1000:.3f} ‰<br>"
+                            f"F: {force_val:.1f} kN<br>"
+                            "<extra>Steel</extra>"
+                        ),
+                        name="Steel" if i == 0 else None,
+                        showlegend=(i == 0),
+                    ),
+                    row=1, col=1,
+                )
+
+        # Neutral axis line on section
+        if y_na is not None and na_in_section:
+            x_min, _, x_max, _ = self.section.get_bounding_box()
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_min - 10, x_max + 10], y=[y_na, y_na],
+                    mode="lines",
+                    line=dict(color="purple", width=2, dash="dash"),
+                    name="Neutral Axis",
+                    showlegend=True,
+                ),
+                row=1, col=1,
+            )
+
+        # ===========================
+        # Centre: Strain profile
+        # ===========================
+        # Linear strain distribution
+        y_profile = np.array([y_bottom, y_top])
+        strain_profile = np.array([eps_bottom, eps_top]) * 1000  # Convert to ‰
+
+        fig.add_trace(
+            go.Scatter(
+                x=strain_profile, y=y_profile,
+                mode="lines+markers",
+                line=dict(color="blue", width=3),
+                marker=dict(size=8),
+                name="Strain",
+                hovertemplate="ε: %{x:.3f} ‰<br>y: %{y:.1f} mm<extra></extra>",
+            ),
+            row=1, col=2,
+        )
+
+        # Zero strain line
+        fig.add_trace(
+            go.Scatter(
+                x=[0, 0], y=[y_bottom - 20, y_top + 20],
+                mode="lines",
+                line=dict(color="gray", width=1, dash="dot"),
+                showlegend=False,
+            ),
+            row=1, col=2,
+        )
+
+        # NA marker on strain plot
+        if y_na is not None and na_in_section:
+            fig.add_trace(
+                go.Scatter(
+                    x=[0], y=[y_na],
+                    mode="markers",
+                    marker=dict(size=10, color="purple", symbol="diamond"),
+                    name="NA",
+                    showlegend=False,
+                    hovertemplate=f"Neutral Axis<br>y: {y_na:.1f} mm<extra></extra>",
+                ),
+                row=1, col=2,
+            )
+
+        # ===========================
+        # Right: Stress profile
+        # ===========================
+        # For concrete: plot stress vs y for concrete fibres (sorted by y)
+        if np.any(conc_mask):
+            conc_y_sorted_idx = np.argsort(y_coords[conc_mask])
+            conc_y_sorted = y_coords[conc_mask][conc_y_sorted_idx]
+            conc_stress_sorted = stresses[conc_mask][conc_y_sorted_idx]
+
+            fig.add_trace(
+                go.Scatter(
+                    x=conc_stress_sorted, y=conc_y_sorted,
+                    mode="lines",
+                    line=dict(color="gray", width=2),
+                    fill="tozerox",
+                    fillcolor="rgba(128, 128, 128, 0.3)",
+                    name="Concrete σ",
+                    hovertemplate="σ: %{x:.2f} MPa<br>y: %{y:.1f} mm<extra>Concrete</extra>",
+                ),
+                row=1, col=3,
+            )
+
+        # Steel stresses as horizontal bars
+        if np.any(steel_mask):
+            for i in range(len(steel_x)):
+                stress_val = float(steel_stresses_arr[i])
+                y_val = float(steel_y[i])
+                color = "green" if stress_val < 0 else "darkorange"
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=[0, stress_val], y=[y_val, y_val],
+                        mode="lines+markers",
+                        line=dict(color=color, width=4),
+                        marker=dict(size=8, color=color),
+                        showlegend=False,
+                        hovertemplate=f"σ: {stress_val:.1f} MPa<br>y: {y_val:.1f} mm<extra>Steel</extra>",
+                    ),
+                    row=1, col=3,
+                )
+
+        # Zero stress line
+        fig.add_trace(
+            go.Scatter(
+                x=[0, 0], y=[y_bottom - 20, y_top + 20],
+                mode="lines",
+                line=dict(color="gray", width=1, dash="dot"),
+                showlegend=False,
+            ),
+            row=1, col=3,
+        )
+
+        # NA marker on stress plot
+        if y_na is not None and na_in_section:
+            fig.add_trace(
+                go.Scatter(
+                    x=[0], y=[y_na],
+                    mode="markers",
+                    marker=dict(size=10, color="purple", symbol="diamond"),
+                    showlegend=False,
+                    hovertemplate=f"Neutral Axis<br>y: {y_na:.1f} mm<extra></extra>",
+                ),
+                row=1, col=3,
+            )
+
+        # ===========================
+        # Layout and annotations
+        # ===========================
+        # Build title with key info
+        if title is None:
+            title = f"Stress-Strain Distribution: M_Ed = {M_Ed:.1f} kN·m, N_Ed = {N_Ed:.1f} kN"
+
+        # Add annotation with key values
+        annotation_text = (
+            f"<b>Load Case:</b> M = {M_Ed:.1f} kN·m, N = {N_Ed:.1f} kN<br>"
+            f"<b>Strains:</b> ε_top = {eps_top*1000:.3f}‰, ε_bot = {eps_bottom*1000:.3f}‰<br>"
+        )
+        if y_na is not None:
+            annotation_text += f"<b>Neutral Axis:</b> y = {y_na:.1f} mm"
+            if not na_in_section:
+                annotation_text += " (outside section)"
+            annotation_text += "<br>"
+        if z is not None:
+            annotation_text += f"<b>Lever Arm:</b> z = {z:.1f} mm<br>"
+        annotation_text += (
+            f"<b>Resultants:</b> F_conc = {F_concrete/1000:.1f} kN, F_steel = {F_steel/1000:.1f} kN"
+        )
+
+        fig.add_annotation(
+            xref="paper", yref="paper",
+            x=0.5, y=-0.12,
+            text=annotation_text,
+            showarrow=False,
+            font=dict(size=11),
+            align="center",
+        )
+
+        fig.update_layout(
+            title=dict(text=title, x=0.5),
+            width=width,
+            height=height,
+            showlegend=True,
+            legend=dict(x=1.02, y=1),
+            margin=dict(b=120),
+        )
+
+        # Axis labels
+        fig.update_xaxes(title_text="x (mm)", row=1, col=1)
+        fig.update_yaxes(title_text="y (mm)", row=1, col=1, scaleanchor="x", scaleratio=1)
+
+        fig.update_xaxes(title_text="Strain (‰)", row=1, col=2)
+        fig.update_yaxes(title_text="y (mm)", row=1, col=2)
+
+        fig.update_xaxes(title_text="Stress (MPa)", row=1, col=3)
+        fig.update_yaxes(title_text="y (mm)", row=1, col=3)
+
+        if show:
+            fig.show()
+
+        return fig
+
     def __repr__(self) -> str:
         return (
             f"MNInteractionDiagram("
@@ -1946,6 +2358,8 @@ def create_interaction_diagram(
         confined_concrete: Enables a Mander-style confined concrete response is applied in compression
         confinement_rho_s: Must be provided when confined_concrete=True
         confinement_f_yh: Characteristic transverse steel yield strength for confinement
+        ignore_compression_steel: If True, steel in compression (positive strain) contributes
+            zero force.
         **kwargs: Additional arguments passed to MNInteractionDiagram
 
     Returns:

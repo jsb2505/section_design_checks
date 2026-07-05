@@ -197,6 +197,11 @@ class ConcreteMaterial(BaseMaterial):
         return self.alpha_ct * self.f_ctk_005 / self.gamma_c
 
     @property
+    def f_ctd_accidental(self) -> float:
+        """Accidental design tensile strength: f_ctd,acc = α_ct · f_ctk,0.05 / γ_c,acc (MPa)."""
+        return self.alpha_ct * self.f_ctk_005 / self.gamma_c_accidental
+
+    @property
     def E_cm(self) -> float:
         """
         Secant modulus of elasticity (§Table 3.1), MPa.
